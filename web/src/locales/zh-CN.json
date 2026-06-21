@@ -1172,6 +1172,7 @@
       "sector-overviewDesc": "行业全景报告：市场规模、竞争格局、公司概览、估值背景",
       "competitive-analysisDesc": "竞争格局分析：市场定位、评分卡、护城河评估、份额趋势",
       "initiating-coverageDesc": "全面研究启动：公司研究、财务模型、估值、图表、30-50 页报告",
+      "chart-annotationDesc": "标注价格图表：价格线、趋势线、区间和事件标记，实时显示在 MarketView 或作为可点击的预览卡片",
       "report-issueDesc": "报告问题并提出改进建议以提升 Agent 能力"
     },
     "compactedNotification": "上下文已压缩 · {{from}} 条消息 → 摘要",
@@ -1182,6 +1183,7 @@
     "offloadedNotification": "上下文已转存 · {{args}} 个工具参数, {{reads}} 个读取",
     "compactionError": "上下文压缩失败",
     "compactBusy": "当前轮次还在流式输出中，请等结束后再压缩。",
+    "offloadBusy": "当前轮次还在流式输出中，请等结束后再转存。",
     "modelSelector": {
       "manageModels": "管理模型",
       "moreModels": "更多模型",
@@ -1253,6 +1255,26 @@
     "a11y": {
       "toolCallCompleted": "已完成",
       "toolCallFailed": "已失败"
+    },
+    "chartAnnotationCard": {
+      "openAnnotatedChart": "打开标注图表",
+      "openInMarketView": "在行情中心打开",
+      "loadingChart": "正在加载图表…",
+      "previewUnavailable": "预览不可用",
+      "close": "关闭",
+      "cardAria_one": "{{symbol}} {{timeframe}}，{{count}} 个标注。打开标注图表。",
+      "cardAria_other": "{{symbol}} {{timeframe}}，{{count}} 个标注。打开标注图表。",
+      "dialogTitle_one": "{{symbol}} {{timeframe}} · {{count}} 个标注",
+      "dialogTitle_other": "{{symbol}} {{timeframe}} · {{count}} 个标注",
+      "chipJumpTitle": "将图表切换到 {{symbol}} · {{timeframe}} 以显示这些标注",
+      "chipShowTitle": "在图表上显示这些标注",
+      "chipShownTitle": "已显示在图表上",
+      "chipViewCount_one": "在图表上查看 {{count}} 个标注",
+      "chipViewCount_other": "在图表上查看 {{count}} 个标注",
+      "chipShowCount_one": "在图表上显示 {{count}} 个标注",
+      "chipShowCount_other": "在图表上显示 {{count}} 个标注",
+      "chipShownCount_one": "图表上有 {{count}} 个标注",
+      "chipShownCount_other": "图表上有 {{count}} 个标注"
     }
   },
   "context": {
@@ -1744,6 +1766,8 @@
       "automations": "自动化",
       "createAutomation": "创建自动化",
       "manageAutomation": "管理自动化",
+      "annotateChart": "标注图表",
+      "manageAnnotations": "管理标注",
       "skill": "技能",
       "memory": "记忆",
       "workspaceMemory": "工作区记忆",
@@ -1824,6 +1848,8 @@
       "creatingAutomation": "创建自动化...",
       "actionAutomation": "{{action}} 自动化...",
       "managingAutomation": "管理自动化...",
+      "annotatingChart": "正在标注图表...",
+      "updatingAnnotations": "正在更新标注...",
       "processing": "处理中..."
     },
     "preparing": {
@@ -2069,7 +2095,14 @@
       "ptcDisabledReason": "在 /chat 中创建工作区以使用 PTC 模式",
       "noWorkspacePrompt": "未选择工作区。请在输入框中选择一个。",
       "startConversation": "在下方输入消息开始对话",
-      "defaultPlaceholder": "你想了解什么？"
+      "defaultPlaceholder": "你想了解什么？",
+      "returnToChat": "返回对话",
+      "openInChat": "在对话中打开"
+    },
+    "chart": {
+      "clearAnnotations": "清除",
+      "clearAnnotationsTitle": "从图表中清除标注（已保留在对话中，点击该结果可恢复）",
+      "newsEventAria": "新闻事件：{{title}}"
     }
   },
   "onboarding": {

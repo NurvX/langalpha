@@ -55,6 +55,11 @@ import {
   handleHistorySteeringDelivered,
   isSubagentHistoryEvent,
 } from './utils/historyEventHandlers';
+// Chart-annotation live bridge: writes agent-drawn annotations into the
+// shared MarketView store so the desktop MarketView chat panel (which uses
+// this engine for both flash and PTC) renders them live. Harmless on the
+// standalone /chat page — the store simply has no chart consumer there.
+import { applyAnnotationArtifact } from '@/pages/MarketView/stores/chartAnnotationStore';
 
 // --- Internal types for useChatMessages ---
 
@@ -1079,6 +1084,14 @@ export function useChatMessages(
 
         // Handle artifact events (e.g., todo_update)
         // In history replay, artifacts DO have turn_index, so we can use it directly
+        //
+        // NOTE: `chart_annotation` artifacts are intentionally NOT replayed here
+        // (only the live stream applies them to the annotation store). On reload,
+        // MarketView's `useChartAnnotationSync` REST fetch is the authoritative
+        // source that repopulates the store from Postgres, and the inline card
+        // renders from the replayed `tool_call_result.artifact`. If a live chart
+        // surface is ever added to the standalone chat page, add a
+        // `chart_annotation` branch here so reloads stay consistent.
         if (eventType === 'artifact') {
           const artifactType = event.artifact_type;
           if (artifactType === 'todo_update') {
@@ -3374,6 +3387,8 @@ export function useChatMessages(
             setMessages: setMessagesForHandlers,
             eventId: event._eventId as number,
           });
+        } else if (artifactType === 'chart_annotation') {
+          applyAnnotationArtifact(artifactType, (event.payload || {}) as Record<string, unknown>);
         } else if (artifactType === 'file_operation' && onFileArtifact) {
           onFileArtifact(event);
         } else if (artifactType === 'preview_url' && onPreviewUrl) {

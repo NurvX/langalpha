@@ -29,6 +29,7 @@ import {
 } from './charts/InlineArtifactCards';
 import { InlineAutomationCard } from './charts/InlineAutomationCards';
 import { InlinePreviewCard } from './charts/InlinePreviewCard';
+import { InlineChartAnnotationCard } from './charts/InlineChartAnnotationCard';
 import { useTranslation } from 'react-i18next';
 import './ActivityBlock.css';
 
@@ -66,6 +67,7 @@ const INLINE_ARTIFACT_MAP: Record<string, React.ComponentType<{ artifact: Record
   automations: InlineAutomationCard,
   preview_url: InlinePreviewCard,
   web_search: InlineWebSearchCard,
+  chart_annotation: InlineChartAnnotationCard,
 };
 
 /** Spring config matching radix-accordion feel */
@@ -102,6 +104,9 @@ interface ActivityItem {
   isFailed?: boolean;
   _recentlyCompleted?: boolean;
   _liveState?: LiveState;
+  /** Intermediate chart-annotation draw — render as an ordinary row, never a
+   *  card (the latest draw per chart owns the card; set in MessageList). */
+  _annotationStep?: boolean;
   content?: string;
   reasoningTitle?: string;
   [key: string]: unknown;
@@ -154,7 +159,8 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
         if (
           item.type === 'tool_call' &&
           INLINE_ARTIFACT_TOOLS.has(item.toolName || '') &&
-          item.toolCallResult?.artifact
+          item.toolCallResult?.artifact &&
+          !item._annotationStep
         ) {
           inlineCharts.push(item);
         } else {

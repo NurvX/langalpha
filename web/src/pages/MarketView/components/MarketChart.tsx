@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useImperativeHandle, forwardRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createChart, ColorType, CrosshairMode, PriceScaleMode, LineType, LineStyle } from 'lightweight-charts';
 import type { IChartApi, LogicalRange, MouseEventParams } from 'lightweight-charts';
 import html2canvas from 'html2canvas';
@@ -33,7 +34,10 @@ import TradingViewWidget from './TradingViewWidget';
 import { TradingViewAttribution } from '@/pages/Dashboard/widgets/framework/TradingViewAttribution';
 import { useChartAnnotations } from '../hooks/useChartAnnotations';
 import { useChartOverlays } from '../hooks/useChartOverlays';
-import { SlidersHorizontal, Settings2, Maximize2, Minimize2, ChevronDown, Plus, Minus, RotateCcw, Menu } from 'lucide-react';
+import { useAgentAnnotations } from '../hooks/useAgentAnnotations';
+import { AgentEventOverlay } from './AgentEventOverlay';
+import { chartAnnotationStore, makeChartId, normalizeTimeframe, useAnnotationsForView, useDisplayCleared } from '../stores/chartAnnotationStore';
+import { SlidersHorizontal, Settings2, Maximize2, Minimize2, ChevronDown, Plus, Minus, RotateCcw, Menu, X } from 'lucide-react';
 
 import { loadPref, savePref } from '../utils/prefs';
 import type { SnapshotData } from '@/types/market';
@@ -75,6 +79,8 @@ interface OverlayVisibility {
 interface MarketChartProps {
   symbol: string;
   interval?: string;
+  /** Active workspace — scopes which agent-drawn chart instance is shown. */
+  workspaceId?: string | null;
   onIntervalChange?: (interval: string) => void;
   onCapture?: () => void;
   onStockMeta?: (meta: unknown) => void;
@@ -100,6 +106,7 @@ export interface MarketChartHandle {
 const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>(({
   symbol,
   interval = '1day',
+  workspaceId,
   onIntervalChange,
   onCapture: _onCapture,
   onStockMeta,
@@ -114,6 +121,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   marketStatus,
   snapshot,
 }, ref) => {
+  const { t } = useTranslation();
   const { theme } = useTheme();
   const ct = getChartTheme(theme as 'dark' | 'light');
   const providers = Array.isArray(marketStatus?.providers) ? marketStatus.providers as string[] : [];
@@ -253,8 +261,32 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   const priceTargetsForAnnotations = overlayVisibility.priceTargets ? (overlayData?.priceTargets as any) : null;
   useChartAnnotations(candlestickSeriesRef, stockMeta, quoteData, priceTargetsForAnnotations, annotationsVisible, symbol);
 
-  // --- Series markers via hook ---
-  useChartOverlays(candlestickSeriesRef, chartDataForHooks as any, earningsData as any, overlayData as any, overlayVisibility as any, symbol);
+  // --- Agent-sourced annotations: price_line, trendline, marker (derived) ---
+  // Subscribe to the store directly too: `hasAgentAnnotations` drives the
+  // first-class Clear button, and `agentAnnotationsCleared` suppresses the
+  // drawing (data stays in the store) until the user re-opens the artifact.
+  //
+  // The agent can only draw on VALID_TIMEFRAMES, so it stores under the
+  // normalized timeframe (e.g. '1s' -> '1day'). Look annotations up under the
+  // same normalized key, or they are invisible on non-agent-writable intervals.
+  const annotationInterval = normalizeTimeframe(interval);
+  const agentAnnotations = useAnnotationsForView(workspaceId ?? null, symbol, annotationInterval);
+  const hasAgentAnnotations = agentAnnotations.length > 0;
+  const agentAnnotationsCleared = useDisplayCleared(workspaceId ?? null, symbol, annotationInterval);
+  const agentMarkers = useAgentAnnotations(
+    chartRef,
+    candlestickSeriesRef,
+    symbol,
+    chartMode,
+    chartDataForHooks as any,
+    workspaceId ?? null,
+    annotationInterval,
+    !agentAnnotationsCleared,
+    theme,
+  );
+
+  // --- Series markers via hook (earnings + grades + agent markers) ---
+  useChartOverlays(candlestickSeriesRef, chartDataForHooks as any, earningsData as any, overlayData as any, overlayVisibility as any, symbol, agentMarkers);
 
   // --- Live tick updates from WS (1s and 1min intervals, custom/Light mode only) ---
   useEffect(() => {
@@ -1540,6 +1572,11 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     setAnnotationsVisible((prev) => !prev);
   }, []);
 
+  const handleClearAgentAnnotations = useCallback(() => {
+    if (!workspaceId || !symbol) return;
+    chartAnnotationStore.clearDisplay(workspaceId, makeChartId(symbol, annotationInterval));
+  }, [workspaceId, symbol, annotationInterval]);
+
   const handleToggleOverlay = useCallback((key: string) => {
     setOverlayVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
   }, []);
@@ -1761,6 +1798,20 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
         <div className="chart-tools-right">
           {!isTV && (
             <>
+              {/* Clear annotations — first-class, shown only while agent
+                  annotations are drawn. Clears them from the chart (data stays
+                  in the store; re-open the chat artifact to restore). */}
+              {hasAgentAnnotations && !agentAnnotationsCleared && (
+                <button
+                  type="button"
+                  className="chart-tool-btn chart-clear-annotations-btn"
+                  onClick={handleClearAgentAnnotations}
+                  title={t('marketView.chart.clearAnnotationsTitle')}
+                >
+                  <X size={14} />
+                  {t('marketView.chart.clearAnnotations')}
+                </button>
+              )}
               {/* Tools dropdown — wide only */}
               <div className="toolbar-dropdown toolbar--wide-only" ref={toolsDropdownRef}>
                 <button
@@ -1868,6 +1919,18 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
                 containerWidth={chartContainerRef.current?.clientWidth}
                 containerHeight={chartContainerRef.current?.clientHeight}
               />
+              {chartMode === 'custom' && (
+                <AgentEventOverlay
+                  chartRef={chartRef}
+                  seriesRef={candlestickSeriesRef}
+                  chartData={chartDataForHooks as any}
+                  theme={theme as 'light' | 'dark'}
+                  visible={!agentAnnotationsCleared}
+                  workspaceId={workspaceId ?? null}
+                  symbol={symbol}
+                  timeframe={annotationInterval}
+                />
+              )}
               {scrollLoading && (
                 <div className="chart-scroll-loading">
                   <div className="chart-scroll-loading-spinner" />
