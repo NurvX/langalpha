@@ -16,6 +16,7 @@ export interface PortfolioRow {
   symbol: string;
   quantity?: number | null;
   average_cost?: number | null;
+  currency: string;
   notes?: string;
   price: number;
   marketValue?: number | null;
@@ -74,7 +75,7 @@ export function usePortfolioData() {
   const { data = { rows: [], hasRealHoldings: false }, isLoading: loading, refetch: fetchPortfolio } = useQuery<PortfolioQueryData>({
     queryKey: ['portfolioData'],
     queryFn: async (): Promise<PortfolioQueryData> => {
-      const { holdings } = await getPortfolio() as { holdings?: Array<{ user_portfolio_id: string; symbol: string; quantity?: number; average_cost?: number | null; notes?: string; [key: string]: unknown }> };
+      const { holdings } = await getPortfolio() as { holdings?: Array<{ user_portfolio_id: string; symbol: string; quantity?: number; average_cost?: number | null; currency?: string | null; notes?: string; [key: string]: unknown }> };
       const symbols = holdings?.length
         ? holdings.map((h) => String(h.symbol || '').trim().toUpperCase())
         : [];
@@ -96,12 +97,13 @@ export function usePortfolioData() {
             symbol: sym,
             quantity: q,
             average_cost: ac,
+            currency: h.currency ?? 'USD',
             notes: h.notes ?? '',
             price,
             marketValue,
+            quoteAvailable,
             unrealizedPlPercent: plPct,
             isPositive: quoteAvailable && plPct != null ? plPct >= 0 : true,
-            quoteAvailable,
             previousClose: p.previousClose ?? null,
             earlyTradingChangePercent: p.earlyTradingChangePercent ?? null,
             lateTradingChangePercent: p.lateTradingChangePercent ?? null,
