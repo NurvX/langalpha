@@ -307,15 +307,15 @@
         }
       },
       {
-        "id": "gemini-3-flash-preview",
-        "name": "Gemini 3 Flash Preview",
+        "id": "gemini-3.7-flash",
+        "name": "Gemini 3.7 Flash",
         "is_reasoning": true,
-        "description": "Google's fast and cost-efficient model with thinking capabilities",
+        "description": "Google's most capable Flash model for agentic workflows and multimodal reasoning",
         "pricing": {
-          "input": 0.5,
-          "cached_input": 0.05,
-          "output": 3.0,
-          "storage": 1.0,
+          "input": 0.75,
+          "cached_input": 0.075,
+          "output": 3.75,
+          "cache_storage": 0.5,
           "unit": "per_1m_tokens"
         }
       },
