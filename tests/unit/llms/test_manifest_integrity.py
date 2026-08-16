@@ -5,10 +5,22 @@ variants + flattening) didn't break any model-to-provider resolution.
 No mocking -- these hit the actual manifest files on disk.
 """
 
+from datetime import date
+
 import pytest
 
 from src.llms.llm import ModelConfig
 from src.llms.pricing_utils import find_model_pricing
+
+
+def _scheduled_repricings(manifest: dict) -> list[tuple[str, str, dict]]:
+    """Every ``(provider, model_id, scheduled_pricing)`` in providers.json."""
+    return [
+        (provider, entry.get("id", "<no id>"), entry["scheduled_pricing"])
+        for provider, entries in manifest.get("models", {}).items()
+        for entry in entries
+        if entry.get("scheduled_pricing")
+    ]
 
 
 class TestManifestIntegrity:
@@ -97,3 +109,72 @@ class TestManifestIntegrity:
                 assert "text" in modalities, (
                     f"{model_name}: input_modalities missing 'text': {modalities}"
                 )
+
+
+class TestScheduledRepricing:
+    """Vendors announce price changes ahead of the date they take effect.
+
+    ``scheduled_pricing`` parks the announced rates on the entry; these tests
+    are the alarm that goes off on the day, so the manifest can't keep billing
+    yesterday's numbers unnoticed.
+    """
+
+    @pytest.fixture
+    def manifest(self):
+        return ModelConfig().manifest
+
+    def test_scheduled_repricing_is_well_formed(self, manifest):
+        """A malformed block would silently disarm the alarm below."""
+        failures: list[str] = []
+
+        for provider, model_id, sched in _scheduled_repricings(manifest):
+            where = f"{provider}/{model_id}"
+            effective_from = sched.get("effective_from")
+
+            if not effective_from:
+                failures.append(f"{where}: scheduled_pricing has no effective_from")
+                continue
+            try:
+                date.fromisoformat(effective_from)
+            except ValueError:
+                failures.append(
+                    f"{where}: effective_from {effective_from!r} is not ISO YYYY-MM-DD"
+                )
+
+            if not any(k in sched for k in ("input", "output", "input_tiers")):
+                failures.append(f"{where}: scheduled_pricing carries no rates")
+
+        assert not failures, "Malformed scheduled_pricing:\n" + "\n".join(
+            f"  - {f}" for f in failures
+        )
+
+    def test_no_scheduled_repricing_has_come_due(self, manifest):
+        """Fails from the day an announced price change takes effect.
+
+        Evaluated against the CI run's own date, so the build goes red on the
+        day rather than whenever someone next reads the manifest.
+        """
+        today = date.today()
+        overdue: list[str] = []
+
+        for provider, model_id, sched in _scheduled_repricings(manifest):
+            effective_from = sched.get("effective_from")
+            if not effective_from:
+                continue  # shape is the other test's job
+            try:
+                effective = date.fromisoformat(effective_from)
+            except ValueError:
+                continue
+            if effective <= today:
+                overdue.append(
+                    f"{provider}/{model_id}: new rates took effect {effective} "
+                    f"({(today - effective).days} day(s) ago)"
+                )
+
+        assert not overdue, (
+            f"{len(overdue)} announced price change(s) are now live but the "
+            "manifest still bills the old rates:\n"
+            + "\n".join(f"  - {o}" for o in overdue)
+            + "\n\nFor each: move the scheduled_pricing rates into pricing, "
+            "then delete the scheduled_pricing block."
+        )

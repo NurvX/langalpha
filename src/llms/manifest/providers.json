@@ -317,6 +317,14 @@
           "output": 3.75,
           "cache_storage": 0.5,
           "unit": "per_1m_tokens"
+        },
+        "scheduled_pricing": {
+          "effective_from": "2027-01-01",
+          "input": 1.5,
+          "cached_input": 0.15,
+          "output": 7.5,
+          "cache_storage": 1.0,
+          "unit": "per_1m_tokens"
         }
       },
       {
