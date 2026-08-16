@@ -914,6 +914,7 @@
             }
           ],
           "output_pricing_mode": "input_dependent",
+          "input_pricing_mode": "input_dependent",
           "unit": "per_1m_tokens"
         }
       }
@@ -1011,6 +1012,7 @@
             }
           ],
           "output_pricing_mode": "input_dependent",
+          "input_pricing_mode": "input_dependent",
           "unit": "per_1m_tokens"
         }
       }
