@@ -946,7 +946,7 @@ def get_input_modalities(
 # a single global cap can't be right: the same document is fine on Sonnet 5 and
 # rejected on Sonnet 4.6. OpenAI documents a size limit but no page limit, hence
 # None — "not bounded by pages" rather than "unknown".
-_ANTHROPIC_SDK_PROVIDERS = frozenset({"anthropic", "claude-oauth", "doubao-anthropic"})
+_ANTHROPIC_SDK_PROVIDERS = frozenset({"anthropic", "claude-oauth"})
 _GEMINI_MAX_PDF_PAGES = 1000
 _ANTHROPIC_MAX_PDF_PAGES_1M = 600
 _ANTHROPIC_MAX_PDF_PAGES = 100
