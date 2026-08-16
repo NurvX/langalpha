@@ -13,13 +13,14 @@ from src.llms.llm import ModelConfig
 from src.llms.pricing_utils import find_model_pricing
 
 
-def _scheduled_repricings(manifest: dict) -> list[tuple[str, str, dict]]:
-    """Every ``(provider, model_id, scheduled_pricing)`` in providers.json."""
+def _scheduled_repricings(manifest: dict) -> list[tuple[str, str, object]]:
+    # Keyed on presence, not truthiness: an empty or null block is malformed,
+    # and dropping it here would quietly disarm the due-date alarm below.
     return [
         (provider, entry.get("id", "<no id>"), entry["scheduled_pricing"])
         for provider, entries in manifest.get("models", {}).items()
         for entry in entries
-        if entry.get("scheduled_pricing")
+        if "scheduled_pricing" in entry
     ]
 
 
@@ -129,14 +130,17 @@ class TestScheduledRepricing:
 
         for provider, model_id, sched in _scheduled_repricings(manifest):
             where = f"{provider}/{model_id}"
-            effective_from = sched.get("effective_from")
 
-            if not effective_from:
-                failures.append(f"{where}: scheduled_pricing has no effective_from")
+            if not isinstance(sched, dict) or not sched:
+                failures.append(
+                    f"{where}: scheduled_pricing is {sched!r}, want a non-empty object"
+                )
                 continue
+
+            effective_from = sched.get("effective_from")
             try:
                 date.fromisoformat(effective_from)
-            except ValueError:
+            except (TypeError, ValueError):
                 failures.append(
                     f"{where}: effective_from {effective_from!r} is not ISO YYYY-MM-DD"
                 )
@@ -158,13 +162,12 @@ class TestScheduledRepricing:
         overdue: list[str] = []
 
         for provider, model_id, sched in _scheduled_repricings(manifest):
-            effective_from = sched.get("effective_from")
-            if not effective_from:
+            if not isinstance(sched, dict):
                 continue  # shape is the other test's job
             try:
-                effective = date.fromisoformat(effective_from)
-            except ValueError:
-                continue
+                effective = date.fromisoformat(sched.get("effective_from"))
+            except (TypeError, ValueError):
+                continue  # shape is the other test's job
             if effective <= today:
                 overdue.append(
                     f"{provider}/{model_id}: new rates took effect {effective} "
