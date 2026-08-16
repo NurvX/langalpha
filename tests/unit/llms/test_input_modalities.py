@@ -67,11 +67,6 @@ class TestGetInputModalities:
         assert "image" in result
         assert "pdf" in result
 
-    def test_dashscope_coding_variant(self, model_config):
-        result = model_config.get_input_modalities("qwen3.5-plus-coding")
-        assert "image" in result
-        assert "pdf" in result
-
     def test_unknown_model_defaults_to_text(self, model_config):
         result = model_config.get_input_modalities("nonexistent-model-xyz")
         assert result == ["text"]

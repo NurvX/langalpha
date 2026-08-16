@@ -67,11 +67,6 @@ STOP_TOKENS = {"preview", "experimental", "exp"}
 # Hand-grounded from the cited sources; applied to every visible variant of the
 # base, and only for the fields present (so AA-derived fields survive otherwise).
 MANUAL = {
-    # Qwen commercial SKUs <- their OSS siblings on AA (per request).
-    "qwen3.5-plus":  {"speed": 2, "intelligence": 3,
-                      "ref": "AA Qwen3.5 397B-A17B (Reasoning): II 45, 51.8 tok/s"},
-    "qwen3.6-flash": {"speed": 5, "intelligence": 3,
-                      "ref": "AA Qwen3.6 35B-A3B (Reasoning): II 43.5, 172 tok/s"},
     # GLM turbo throughput <- OpenRouter/Fireworks (~48-70 tok/s). 'turbo' is
     # cheap/agentic, not high-throughput. Intelligence stays AA-derived.
     "glm-5-turbo":  {"speed": 2, "ref": "OpenRouter ~48 / Fireworks 70 tok/s -> band 2"},
