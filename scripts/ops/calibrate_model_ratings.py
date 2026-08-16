@@ -71,26 +71,6 @@ MANUAL = {
     # cheap/agentic, not high-throughput. Intelligence stays AA-derived.
     "glm-5-turbo":  {"speed": 2, "ref": "OpenRouter ~48 / Fireworks 70 tok/s -> band 2"},
     "glm-5v-turbo": {"speed": 2, "ref": "GLM-turbo family throughput ~48-70 tok/s"},
-    # Doubao Seed 2.0 <- LMArena + ByteDance Seed2.0 Model Card (Feb 2026); no
-    # AA index yet, no public tok/s, speed left as hand estimate (Pro slow ->
-    # Mini fast).
-    "doubao-seed-2.0-pro":  {"intelligence": 4,
-                             "ref": "LMArena Elo ~1466 (~21st), ~40 below the frontier cluster "
-                                    "(GPT-5.5/Opus-4.7/Gemini-3.1-Pro ~1505). ByteDance's model card "
-                                    "benches only vs the Feb-2026 frontier (GPT-5.2/Opus-4.5/"
-                                    "Gemini-3-Pro) and concedes coding + long-tail gaps: GPQA 88.9 "
-                                    "vs 92.4, SimpleQA 36 vs 72, SWE-Verified 76.5 vs Opus-4.5 80.9"},
-    "doubao-seed-2.0-lite": {"intelligence": 3,
-                             "ref": "ByteDance benches Lite vs GPT-5-mini/Gemini-3-Flash (efficient "
-                                    "tier, not flagships): MMLU-Pro 87.7, AIME25 93.0, GPQA 85.1, "
-                                    "SWE-Verified 73.5; strong for its class, no independent data"},
-    "doubao-seed-2.0-code": {"intelligence": 4,
-                             "ref": "self-report SWE-Verified 76.5 / LiveCodeBench-v6 87.8, Pro-equal "
-                                    "coding but below Opus-4.5 (80.9). NB: AA's 'Doubao Seed Code' "
-                                    "II-34/#10 entry is the older Nov-2025 model, not Seed-2.0-Code"},
-    "doubao-seed-2.0-mini": {"intelligence": 3,
-                             "ref": "smallest Seed 2.0 SKU: self-report AIME25 87.0, GPQA 79.0, "
-                                    "SWE-Verified 67.9, benched vs GPT-5-mini/Gemini-3-Flash"},
 }
 
 
