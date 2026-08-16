@@ -73,33 +73,32 @@ class TestManifestIntegrity:
             + "\n".join(f"  - {f}" for f in failures)
         )
 
-    def test_dashscope_coding_resolves_pricing_via_parent(self, model_config):
-        """dashscope-coding must either have a model with working pricing
-        fallback through its parent (dashscope), or at minimum the parent
-        resolution itself must work.
+    def test_coding_variant_resolves_pricing_via_parent(self, model_config):
+        """z-ai-coding carries no pricing list, so it must either price a model
+        through its parent (z-ai) or, while it ships no models, keep the parent
+        resolution itself working.
         """
-        # Find any model that uses the dashscope-coding provider
-        dc_model = None
+        variant, parent_name = "z-ai-coding", "z-ai"
+
+        coding_model = None
         for model_name, model_def in model_config.llm_config.items():
-            if model_def.get("provider") == "dashscope-coding":
-                dc_model = (model_name, model_def)
+            if model_def.get("provider") == variant:
+                coding_model = (model_name, model_def)
                 break
 
-        if dc_model is not None:
-            model_name, model_def = dc_model
+        if coding_model is not None:
+            model_name, model_def = coding_model
             model_id = model_def.get("model_id", model_name)
-            pricing = find_model_pricing(model_id, provider="dashscope-coding")
+            pricing = find_model_pricing(model_id, provider=variant)
             assert pricing is not None, (
-                f"find_model_pricing('{model_id}', provider='dashscope-coding') "
-                "returned None -- parent fallback to dashscope is broken"
+                f"find_model_pricing('{model_id}', provider='{variant}') "
+                f"returned None -- parent fallback to {parent_name} is broken"
             )
         else:
-            # No dashscope-coding model in the manifest right now, but the
-            # parent resolution plumbing must still work.
-            parent = model_config.get_parent_provider("dashscope-coding")
-            assert parent == "dashscope", (
-                f"Expected parent provider of 'dashscope-coding' to be "
-                f"'dashscope', got '{parent}'"
+            parent = model_config.get_parent_provider(variant)
+            assert parent == parent_name, (
+                f"Expected parent provider of '{variant}' to be "
+                f"'{parent_name}', got '{parent}'"
             )
 
     def test_every_model_with_input_modalities_has_text(self, model_config):

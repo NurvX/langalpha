@@ -200,9 +200,9 @@ async def _resolve_custom_model_byok(
         # Rewrite ``provider`` to the candidate that actually held the key.
         # ``create_llm_from_custom`` reads SDK / default_headers /
         # use_response_api from the provider field, so if a custom model
-        # tagged ``dashscope`` resolves via its ``dashscope-coding``
+        # tagged ``z-ai`` resolves via its ``z-ai-coding``
         # sibling, we need the SDK to match the coding-plan endpoint —
-        # otherwise we'd build a Qwen client pointed at an
+        # otherwise we'd build a GLM client pointed at an
         # Anthropic-shaped URL and fail every request.
         if holding != provider:
             custom_config = {**custom_config, "provider": holding}
@@ -318,8 +318,8 @@ async def resolve_byok_llm_client(
         return None
     # base_url precedence: a user custom base_url on the holding slug wins;
     # otherwise the MODEL'S OWN provider endpoint (NOT the parent's, NOT the
-    # candidate's). This is the coding-variant fix: a dashscope-coding model
-    # (anthropic SDK) whose key lives under parent `dashscope` (openai SDK)
+    # candidate's). This is the coding-variant fix: a z-ai-coding model
+    # (anthropic SDK) whose key lives under parent `z-ai` (glm SDK)
     # must still build against the anthropic coding endpoint.
     base_url = byok_config.get("base_url") or mc.get_provider_info(provider).get("base_url")
     logger.debug(

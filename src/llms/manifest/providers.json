@@ -1105,13 +1105,6 @@
           },
           "region": "intl",
           "display_name": "DashScope (Intl)"
-        },
-        "dashscope-coding": {
-          "sdk": "anthropic",
-          "base_url": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
-          "env_key": "DASHSCOPE_API_KEY_CODING",
-          "access_type": "coding_plan",
-          "display_name": "DashScope (Coding)"
         }
       }
     },
@@ -1125,10 +1118,6 @@
           "sdk": "openai",
           "base_url": "https://ark.cn-beijing.volces.com/api/v3",
           "use_response_api": true
-        },
-        "doubao-anthropic": {
-          "sdk": "anthropic",
-          "base_url": "https://ark.cn-beijing.volces.com/api/compatible"
         },
         "doubao-coding": {
           "sdk": "anthropic",
