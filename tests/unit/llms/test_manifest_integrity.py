@@ -13,6 +13,25 @@ from src.llms.llm import ModelConfig
 from src.llms.pricing_utils import find_model_pricing
 
 
+_SCHEDULE_KEYS = {"peak_utc", "off_peak", "schedule_anchor"}
+
+
+def _peak_hour_cards(manifest: dict) -> list[tuple[str, str, dict]]:
+    """Every pricing block whose rate depends on the hour the call ran.
+
+    Selected on any scheduling key, not on ``peak_utc`` alone: a card carrying the
+    discount without the window is exactly the authoring slip these checks exist
+    to catch, and keying on the window would let it skip every one of them.
+    """
+    return [
+        (provider, entry.get("id", "<no id>"), entry["pricing"])
+        for provider, entries in manifest.get("models", {}).items()
+        for entry in entries
+        if isinstance(entry.get("pricing"), dict)
+        and _SCHEDULE_KEYS & set(entry["pricing"])
+    ]
+
+
 def _scheduled_repricings(manifest: dict) -> list[tuple[str, str, object]]:
     # Keyed on presence, not truthiness: an empty or null block is malformed,
     # and dropping it here would quietly disarm the due-date alarm below.
@@ -179,4 +198,161 @@ class TestScheduledRepricing:
             + "\n".join(f"  - {o}" for o in overdue)
             + "\n\nFor each: move the scheduled_pricing rates into pricing, "
             "then delete the scheduled_pricing block."
+        )
+
+
+class TestTimeOfDayPricing:
+    """Cards priced by the hour, checked for shape rather than for rates.
+
+    The engine reads ``peak_utc`` to decide which card is in force and falls back
+    to the top level when ``off_peak`` omits a key. Both are silent failures: a
+    malformed window bills the wrong rate and a missing override bills the peak
+    one, and each looks identical to a correct turn in every log we keep.
+    """
+
+    @pytest.fixture
+    def manifest(self):
+        return ModelConfig().manifest
+
+    def test_peak_windows_are_well_formed(self, manifest):
+        failures: list[str] = []
+
+        for provider, model_id, pricing in _peak_hour_cards(manifest):
+            where = f"{provider}/{model_id}"
+            windows = pricing.get("peak_utc")
+
+            if not isinstance(windows, list) or not windows:
+                failures.append(f"{where}: peak_utc is {windows!r}, want a non-empty list")
+                continue
+
+            for window in windows:
+                if not (isinstance(window, list) and len(window) == 2):
+                    failures.append(f"{where}: window {window!r} is not a [start, end] pair")
+                    continue
+                start, end = window
+                # ``type is int`` rather than isinstance, matching the engine: bool
+                # subclasses int, so a JSON ``true``/``false`` bound would pass here
+                # and install an unintended window at runtime.
+                if not all(type(h) is int for h in window):
+                    failures.append(f"{where}: window {window!r} has non-integer hours")
+                elif not 0 <= start < end <= 24:
+                    failures.append(f"{where}: window {window!r} is not 0 <= start < end <= 24")
+
+        assert not failures, "Malformed peak_utc:\n" + "\n".join(f"  - {f}" for f in failures)
+
+    def test_peak_windows_do_not_overlap(self, manifest):
+        """Overlapping blocks make the schedule ambiguous to read, even though
+        the engine's any() would happen to resolve them to peak."""
+        failures: list[str] = []
+
+        for provider, model_id, pricing in _peak_hour_cards(manifest):
+            # Not indexed: the selector deliberately matches a card carrying only
+            # off_peak or schedule_anchor, and a KeyError here would replace the
+            # sibling test's named failure with a traceback that says nothing.
+            windows = sorted(
+                w
+                for w in (pricing.get("peak_utc") or [])
+                if isinstance(w, list) and len(w) == 2
+            )
+            for earlier, later in zip(windows, windows[1:]):
+                if later[0] < earlier[1]:
+                    failures.append(
+                        f"{provider}/{model_id}: {earlier} overlaps {later}"
+                    )
+
+        assert not failures, "Overlapping peak_utc:\n" + "\n".join(
+            f"  - {f}" for f in failures
+        )
+
+    def test_off_peak_only_overrides_rates_the_peak_card_already_names(self, manifest):
+        """A key present only in off_peak has nothing to fall back to, so the
+        peak window would bill it at zero."""
+        failures: list[str] = []
+
+        for provider, model_id, pricing in _peak_hour_cards(manifest):
+            off_peak = pricing.get("off_peak")
+            if not isinstance(off_peak, dict) or not off_peak:
+                failures.append(
+                    f"{provider}/{model_id}: off_peak is {off_peak!r}, want a non-empty object"
+                )
+                continue
+
+            orphans = sorted(set(off_peak) - set(pricing))
+            if orphans:
+                failures.append(
+                    f"{provider}/{model_id}: off_peak names {orphans} absent from the peak card"
+                )
+
+        assert not failures, "Malformed off_peak:\n" + "\n".join(
+            f"  - {f}" for f in failures
+        )
+
+    def test_off_peak_is_not_the_more_expensive_card(self, manifest):
+        """Catches a swapped paste, which the shape checks above cannot see.
+
+        Relational, so a repricing never churns it.
+        """
+        failures: list[str] = []
+
+        for provider, model_id, pricing in _peak_hour_cards(manifest):
+            off_peak = pricing.get("off_peak")
+            if not isinstance(off_peak, dict):
+                continue
+            for rate, off in off_peak.items():
+                peak = pricing.get(rate)
+                if isinstance(off, (int, float)) and isinstance(peak, (int, float)):
+                    if off > peak:
+                        failures.append(
+                            f"{provider}/{model_id}: off_peak {rate} {off} exceeds peak {peak}"
+                        )
+
+        assert not failures, "Inverted off_peak rates:\n" + "\n".join(
+            f"  - {f}" for f in failures
+        )
+
+    def test_every_off_peak_override_is_a_rate_the_engine_would_read(self, manifest):
+        """An override the engine never consults is worse than a missing one.
+
+        ``get_input_cost``/``get_output_cost`` resolve matrix before tiers before
+        flat rates, so a flat override on a card priced either of the other two
+        ways is dead: the call bills the peak rate while the stored snapshot
+        records ``window: off_peak``, corroborating a discount nobody got.
+        """
+        failures: list[str] = []
+
+        for provider, model_id, pricing in _peak_hour_cards(manifest):
+            off_peak = pricing.get("off_peak")
+            if not isinstance(off_peak, dict):
+                continue
+
+            shadowed: set[str] = set()
+            if pricing.get("pricing_mode") == "2d_matrix" and "matrix" in pricing:
+                shadowed |= {"input", "output", "cached_input"}
+            if "input_tiers" in pricing:
+                shadowed |= {"input", "cached_input"}
+            if "output_tiers" in pricing:
+                shadowed.add("output")
+
+            unreachable = sorted(shadowed & set(off_peak))
+            if unreachable:
+                failures.append(
+                    f"{provider}/{model_id}: off_peak overrides {unreachable}, "
+                    "which this card's pricing mode never reads"
+                )
+
+        assert not failures, "Unreachable off_peak overrides:\n" + "\n".join(
+            f"  - {f}" for f in failures
+        )
+
+    def test_the_schedule_anchor_is_one_the_engine_knows(self, manifest):
+        """An unrecognized value silently falls back to completion."""
+        failures = [
+            f"{provider}/{model_id}: schedule_anchor {pricing['schedule_anchor']!r}"
+            for provider, model_id, pricing in _peak_hour_cards(manifest)
+            if "schedule_anchor" in pricing
+            and pricing["schedule_anchor"] not in ("completion", "request")
+        ]
+
+        assert not failures, "Unknown schedule_anchor:\n" + "\n".join(
+            f"  - {f}" for f in failures
         )
