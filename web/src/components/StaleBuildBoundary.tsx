@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { isStaleBuildError, reportStaleBuild } from '@/lib/staleBuild';
 
 /**
@@ -33,12 +34,13 @@ function StaleBuildFallback({ variant }: { variant: 'app' | 'pane' }) {
     <div
       ref={ref}
       tabIndex={-1}
-      className={`flex flex-col items-center justify-center gap-4 px-6 text-center outline-none ${
+      className={cn(
+        'flex flex-col items-center justify-center gap-4 px-6 text-center outline-none',
         // Not h-screen: 100vh sits behind mobile Safari's toolbar, which is
         // where the Reload button would land — and it is the only way out of
         // this screen. App.css makes the same swap for .app-layout.
-        variant === 'app' ? 'h-[100dvh]' : 'h-full'
-      }`}
+        variant === 'app' ? 'h-[100dvh]' : 'h-full',
+      )}
       style={{ color: 'var(--color-text-secondary)' }}
     >
       {/* This is the blocking case, not the ambient one: the user asked for a

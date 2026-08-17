@@ -73,9 +73,24 @@ const CHUNK_ERROR_PATTERNS = [
   'unable to preload css for',
 ];
 
+/**
+ * How long the ambient toast waits for a boundary to claim the same failure.
+ *
+ * index.html dispatches its event synchronously inside Vite's preloadError
+ * handler — before Vite rethrows — so for a lazy chunk the toast is always
+ * scheduled before React can catch the error and mount the card. Raising it
+ * immediately means one event produces two notices and `silent` arrives too
+ * late to stop it. Waiting is only correct because the toast is ambient by
+ * definition: nothing is waiting on it, and not every dead chunk reaches a
+ * boundary (Main.tsx prefetches one and swallows the rejection), so it still
+ * has to fire on its own when no card claims it.
+ */
+const BOUNDARY_CLAIM_MS = 250;
+
 let notified = false;
 let warned = false;
 let lastChecked = 0;
+let pendingToast: ReturnType<typeof setTimeout> | null = null;
 
 export function markBooted(): void {
   window.__LA_BOOTED__ = true;
@@ -154,6 +169,13 @@ export function isStaleBuildError(error: unknown): boolean {
  * streaming for minutes, so the choice is the user's.
  */
 export function reportStaleBuild(reason: string, options?: { silent?: boolean }): void {
+  // Ahead of the latch on purpose. The boundary renders a full-pane card with
+  // this same copy, and it has to be able to claim the failure even though
+  // something else always reports it first — see BOUNDARY_CLAIM_MS.
+  if (options?.silent && pendingToast !== null) {
+    clearTimeout(pendingToast);
+    pendingToast = null;
+  }
   if (notified) return;
   notified = true;
   // Logged even though this is the expected path. Without it a genuine
@@ -161,26 +183,31 @@ export function reportStaleBuild(reason: string, options?: { silent?: boolean })
   // investigated.
   console.error(`[staleBuild] running a build the server no longer serves (${reason})`);
 
-  // The boundary renders a full-pane card with this same copy, so raising the
-  // toast as well shows the user two identical notices for one event. It still
-  // takes the latch above, so a later signal cannot stack a toast on the card.
   if (options?.silent) return;
 
-  toast({
-    title: i18n.t('common.staleBuild.title'),
-    description: i18n.t('common.staleBuild.description'),
-    // Overrides the Toaster's 3s default (spread onto the Radix Toast). A
-    // notice that disappears before the user looks up is not a notice.
-    duration: Infinity,
-    action: (
-      <ToastAction
-        altText={i18n.t('common.staleBuild.reload')}
-        onClick={() => window.location.reload()}
-      >
-        {i18n.t('common.staleBuild.reload')}
-      </ToastAction>
-    ),
-  });
+  pendingToast = setTimeout(() => {
+    pendingToast = null;
+    toast({
+      title: i18n.t('common.staleBuild.title'),
+      description: i18n.t('common.staleBuild.description'),
+      // Overrides the Toaster's 3s default (spread onto the Radix Toast). A
+      // notice that disappears before the user looks up is not a notice.
+      duration: Infinity,
+      // And exempt from the toast cap, which keeps only the newest few. This
+      // one is the oldest by construction, so it was always first out — three
+      // later notices of any kind took the app's only Reload control with
+      // them, and the latch above guarantees nothing raises it a second time.
+      pinned: true,
+      action: (
+        <ToastAction
+          altText={i18n.t('common.staleBuild.reload')}
+          onClick={() => window.location.reload()}
+        >
+          {i18n.t('common.staleBuild.reload')}
+        </ToastAction>
+      ),
+    });
+  }, BOUNDARY_CLAIM_MS);
 }
 
 /**
@@ -196,24 +223,35 @@ export async function checkForNewBuild(): Promise<void> {
   if (now - lastChecked < POLL_THROTTLE_MS) return;
   lastChecked = now;
 
+  let res: Response;
   try {
-    const res = await fetch(VERSION_URL, { cache: 'no-store' });
-    if (!res.ok) return;
-    // A miss that fell through to the SPA shell answers 200 text/html, and the
-    // shell's own <script src> contains the entry name — so a body match would
-    // pass on it. Require real JSON, and drop the body rather than buffering a
-    // shell we are about to discard.
-    if (!(res.headers.get('content-type') ?? '').includes('application/json')) {
-      void res.body?.cancel();
-      return warnUnrecognized('not JSON');
-    }
-    const data: unknown = await res.json();
-    const build = (data as { build?: unknown } | null)?.build;
-    if (typeof build !== 'string' || !build) return warnUnrecognized('no build id');
-    if (build !== mine) reportStaleBuild('version');
+    res = await fetch(VERSION_URL, { cache: 'no-store' });
   } catch {
-    // Offline or blocked. Not evidence of anything.
+    // Offline or blocked. Not evidence of anything. Scoped to the fetch alone:
+    // wrapped around the parse as well, an answered-but-unreadable manifest
+    // would land here and look like a tab with no network, which is the one
+    // case that has to reach warnUnrecognized instead.
+    return;
   }
+  if (!res.ok) return;
+  // A miss that fell through to the SPA shell answers 200 text/html, and the
+  // shell's own <script src> contains the entry name — so a body match would
+  // pass on it. Require real JSON, and drop the body rather than buffering a
+  // shell we are about to discard.
+  if (!(res.headers.get('content-type') ?? '').includes('application/json')) {
+    void res.body?.cancel();
+    return warnUnrecognized('not JSON');
+  }
+
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    return warnUnrecognized('unparseable body');
+  }
+  const build = (data as { build?: unknown } | null)?.build;
+  if (typeof build !== 'string' || !build) return warnUnrecognized('no build id');
+  if (build !== mine) reportStaleBuild('version');
 }
 
 /**
@@ -268,5 +306,7 @@ export function __resetStaleBuildForTests(): void {
   notified = false;
   warned = false;
   lastChecked = 0;
+  if (pendingToast !== null) clearTimeout(pendingToast);
+  pendingToast = null;
   delete window.__LA_STALE_BUILD__;
 }

@@ -40,11 +40,17 @@
         // message about a dead build asset" identically, so the matching below
         // mirrors mentionsBuildAsset() there line for line.
         var KEY = '__la_asset_recovery__';
-        var RETRY_WINDOW_MS = 60000;
         // Two documents that both failed to boot are enough evidence that
         // reloading is not the answer. Past that the loop is just sustained
         // pressure on an origin that is already broken, so stop and say so.
         var MAX_ATTEMPTS = 2;
+        // One document gets one decision. A deploy kills every asset at once,
+        // so several errors arrive here per document, and the bound has to
+        // ignore the extras. A timestamp window used to do that job, but it
+        // could not tell them apart from the reloaded document failing again —
+        // and the reload lands inside any window worth setting, so it ate the
+        // second attempt and the dead end behind it.
+        var acted = false;
 
         // Where the build writes its content-hashed output. Recovery depends on
         // the server answering a missing file under here with a 404: fall back
@@ -71,19 +77,17 @@
           }
         }
 
-        // Sanity-checked on read: a NaN, negative or future timestamp would
-        // make the window test true forever and silently switch recovery off
-        // for the whole session, so anything that fails the check resets to
-        // "no attempt yet" rather than "attempted just now".
-        function readState(now) {
+        // Anything that is not a plain positive count reads as "no attempt
+        // yet". Storage this code does not own is not worth trusting, and the
+        // two ways it can be wrong fail in opposite directions: a bogus low
+        // value costs one extra reload, a bogus high one would switch recovery
+        // off for the session.
+        function attemptsSoFar() {
           try {
             var raw = JSON.parse(sessionStorage.getItem(KEY) || '{}');
-            return {
-              t: typeof raw.t === 'number' && raw.t > 0 && raw.t <= now ? raw.t : 0,
-              n: typeof raw.n === 'number' && raw.n > 0 ? raw.n : 0
-            };
+            return typeof raw.n === 'number' && raw.n > 0 ? raw.n : 0;
           } catch (e) {
-            return { t: 0, n: 0 };
+            return 0;
           }
         }
 
@@ -127,26 +131,21 @@
             } catch (e) {}
             return;
           }
-          var now = Date.now();
-          // No session storage means no way to bound the retries, and an
-          // unbounded reload loop hammering the origin is worse than the blank
-          // page it is trying to fix. Do nothing instead.
-          var state;
+          if (acted) return;
+          acted = true;
+          var attempts = attemptsSoFar();
+          if (attempts >= MAX_ATTEMPTS) return showDeadEnd();
           try {
-            state = readState(now);
+            sessionStorage.setItem(KEY, JSON.stringify({ n: attempts + 1 }));
           } catch (e) {
-            return;
-          }
-          if (state.n >= MAX_ATTEMPTS) return showDeadEnd();
-          if (now - state.t < RETRY_WINDOW_MS) return;
-          try {
-            sessionStorage.setItem(KEY, JSON.stringify({ t: now, n: state.n + 1 }));
-          } catch (e) {
+            // No session storage means no way to count the attempts, and an
+            // unbounded reload loop hammering the origin is worse than the
+            // blank page it is trying to fix. Do nothing instead.
             return;
           }
           // Only works because the document itself is deliberately not
           // long-cached, so this refetches it and gets the new asset names with
-          // it. Jittered because the 60s bound is per tab: a bad deploy would
+          // it. Jittered because the bound is per tab: a bad deploy would
           // otherwise have every open tab reload in the same second.
           setTimeout(function () {
             location.reload();
@@ -157,15 +156,26 @@
         window.addEventListener('error', function (e) {
           var el = e && e.target;
           if (!el || el === window) return;
-          // Scripts only. /assets/ also holds CSS, fonts and images, and a
-          // stylesheet or <img> that blips would otherwise be read as a dead
-          // build and reload the page under a user whose build is current.
-          // Nothing is lost by narrowing: a dead module script is the only
-          // failure that reaches here at all. A lazy chunk rejects its import
-          // instead (the app classifies that by message), and a dead
-          // stylesheet fires no error event.
-          if (el.tagName !== 'SCRIPT') return;
-          if (isBuildAsset(el.src)) recover('resource');
+          // Scripts, and the preload links Vite appends for a lazy chunk.
+          // /assets/ also holds CSS, fonts and images, and a stylesheet or
+          // <img> that blips would otherwise be read as a dead build and
+          // reload the page under a user whose build is current — so the link
+          // branch is narrowed by as="script", which Vite sets on every
+          // non-CSS dep (including the older rel="preload" fallback) and on
+          // nothing else.
+          //
+          // That branch is the whole Safari story. Safari's import error names
+          // no URL, so neither the message classifier below nor the one in
+          // staleBuild.tsx can match it, and the flag those fall back to had
+          // nothing setting it: the chunk never becomes a <script>, only a
+          // <link>. Without this the boundary rethrows a dead Safari chunk and
+          // the pane goes blank — the failure this file exists to remove.
+          var as = el.as || (el.getAttribute ? el.getAttribute('as') : null);
+          var url;
+          if (el.tagName === 'SCRIPT') url = el.src;
+          else if (el.tagName === 'LINK' && as === 'script') url = el.href;
+          else return;
+          if (isBuildAsset(url)) recover('resource');
         }, true);
 
         // Vite fires this when a lazy route's preload 404s. Gated the same way

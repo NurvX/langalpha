@@ -41,6 +41,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -184,7 +185,10 @@ describe('the pre-boot half and this one stay in step', () => {
 });
 
 describe('reporting is once per session', () => {
-  beforeEach(() => setEntryScript('index-CURRENT.js'));
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setEntryScript('index-CURRENT.js');
+  });
 
   it('surfaces once no matter how many signals arrive', async () => {
     // Four callers converge on this latch (boundary catch, the index.html
@@ -202,6 +206,7 @@ describe('reporting is once per session', () => {
       }),
     );
     await checkForNewBuild();
+    vi.runAllTimers();
 
     expect(toast).toHaveBeenCalledTimes(1);
     expect(console.error).toHaveBeenCalledTimes(1);
@@ -209,13 +214,43 @@ describe('reporting is once per session', () => {
 
   it('takes the latch but skips the toast when the caller renders its own card', () => {
     reportStaleBuild('chunk', { silent: true });
+    vi.runAllTimers();
     expect(toast).not.toHaveBeenCalled();
     // Still logged: a real /assets/* 404 regression must not vanish behind a
     // friendly card.
     expect(console.error).toHaveBeenCalledTimes(1);
 
     reportStaleBuild('version');
+    vi.runAllTimers();
     expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('lets a boundary claim a failure something else already reported', () => {
+    // The ordering is not a race we can win by reordering callers: index.html
+    // dispatches its event synchronously inside vite:preloadError, before Vite
+    // rethrows, so the ambient toast is always in flight before React can
+    // mount the card. Cancelling it is the only way one event makes one
+    // notice, and this is what makes the boundary's `silent` mean anything.
+    reportStaleBuild('preload');
+    reportStaleBuild('chunk', { silent: true });
+    vi.runAllTimers();
+
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('still raises the toast when no boundary claims the failure', () => {
+    // The other half of the deferral. Main.tsx prefetches a route chunk and
+    // swallows the rejection, so plenty of dead chunks never reach a boundary
+    // at all — waiting must not turn into never telling the user.
+    reportStaleBuild('preload');
+    expect(toast).not.toHaveBeenCalled();
+
+    vi.runAllTimers();
+    expect(toast).toHaveBeenCalledTimes(1);
+    // Ordinary notices evict the oldest toast, and this one is the oldest by
+    // the time any arrive — without the exemption the only Reload control in
+    // the app disappears and the latch above stops it coming back.
+    expect(vi.mocked(toast).mock.calls[0][0]).toMatchObject({ pinned: true });
   });
 });
 
@@ -257,10 +292,40 @@ describe('checkForNewBuild rate and reporting', () => {
     expect(console.warn).toHaveBeenCalledTimes(1);
     expect(console.error).not.toHaveBeenCalled();
   });
+
+  it('warns when the manifest is JSON that does not parse', async () => {
+    // A truncated or half-written manifest answers with the right header and
+    // an unreadable body. Left inside the network catch it read as "offline"
+    // and the version layer went quiet with nothing said about it.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => {
+          throw new SyntaxError('Unexpected end of JSON input');
+        },
+      }),
+    );
+    await checkForNewBuild();
+    expect(console.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays quiet when the request never lands', async () => {
+    // The genuinely ambiguous case, and the reason the warn is scoped rather
+    // than applied to every failure: an offline tab is not evidence of a deploy.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+    await checkForNewBuild();
+    expect(console.warn).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+  });
 });
 
 describe('watchStaleBuild wiring', () => {
-  beforeEach(() => setEntryScript('index-CURRENT.js'));
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setEntryScript('index-CURRENT.js');
+  });
 
   it('replays a flag index.html set before React mounted', () => {
     // The likeliest real timeline: an asset dies during boot, React mounts a
@@ -268,6 +333,7 @@ describe('watchStaleBuild wiring', () => {
     // This replay is the entire reason the flag is a sticky global.
     window.__LA_STALE_BUILD__ = 'resource';
     const stop = watchStaleBuild();
+    vi.runAllTimers();
     expect(toast).toHaveBeenCalledTimes(1);
     stop();
   });
@@ -275,12 +341,14 @@ describe('watchStaleBuild wiring', () => {
   it('reports an event dispatched after mount, and stops after cleanup', () => {
     const stop = watchStaleBuild();
     window.dispatchEvent(new CustomEvent(STALE_BUILD_EVENT, { detail: 'preload' }));
+    vi.runAllTimers();
     expect(toast).toHaveBeenCalledTimes(1);
 
     stop();
     __resetStaleBuildForTests();
     vi.mocked(toast).mockClear();
     window.dispatchEvent(new CustomEvent(STALE_BUILD_EVENT, { detail: 'preload' }));
+    vi.runAllTimers();
     expect(toast).not.toHaveBeenCalled();
   });
 });
@@ -296,7 +364,7 @@ describe('markBooted', () => {
   });
 
   it('clears the pre-boot attempt counter, since booting is what proves it worked', () => {
-    sessionStorage.setItem('__la_asset_recovery__', JSON.stringify({ t: 1, n: 2 }));
+    sessionStorage.setItem('__la_asset_recovery__', JSON.stringify({ n: 2 }));
     markBooted();
     expect(sessionStorage.getItem('__la_asset_recovery__')).toBeNull();
   });
