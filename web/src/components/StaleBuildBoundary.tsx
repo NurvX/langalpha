@@ -15,21 +15,45 @@ import { isStaleBuildError, reportStaleBuild } from '@/lib/staleBuild';
 
 function StaleBuildFallback({ variant }: { variant: 'app' | 'pane' }) {
   const { t } = useTranslation();
+  const ref = React.useRef<HTMLDivElement>(null);
+
+  // An assertive live region announces its subtree but does not move the caret,
+  // and the view the user navigated to never mounted — so focus is left on a
+  // detached node and falls back to document.body. A keyboard user lands at the
+  // top of the document with no sign the pane changed. Put focus where the only
+  // working control is.
+  React.useEffect(() => {
+    ref.current?.focus();
+  }, []);
+
+  // `app` replaces the whole document, so its title is the page's only heading.
+  const Heading = variant === 'app' ? 'h1' : 'h2';
+
   return (
     <div
-      role="alert"
-      className={`flex flex-col items-center justify-center gap-3 px-6 text-center ${
-        variant === 'app' ? 'h-screen' : 'h-full'
+      ref={ref}
+      tabIndex={-1}
+      className={`flex flex-col items-center justify-center gap-4 px-6 text-center outline-none ${
+        // Not h-screen: 100vh sits behind mobile Safari's toolbar, which is
+        // where the Reload button would land — and it is the only way out of
+        // this screen. App.css makes the same swap for .app-layout.
+        variant === 'app' ? 'h-[100dvh]' : 'h-full'
       }`}
       style={{ color: 'var(--color-text-secondary)' }}
     >
-      <p className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
-        {t('common.staleBuild.title')}
-      </p>
-      <p className="text-xs">{t('common.staleBuild.description')}</p>
-      <Button size="sm" onClick={() => window.location.reload()}>
-        {t('common.staleBuild.reload')}
-      </Button>
+      {/* This is the blocking case, not the ambient one: the user asked for a
+          view and it did not open. The toast copy ("a new version is
+          available") would describe it as optional news. */}
+      <div role="alert">
+        <Heading
+          className="title-font text-base font-medium"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
+          {t('common.staleBuild.blockedTitle')}
+        </Heading>
+        <p className="mt-2 text-sm">{t('common.staleBuild.blockedDescription')}</p>
+      </div>
+      <Button onClick={() => window.location.reload()}>{t('common.staleBuild.reload')}</Button>
     </div>
   );
 }
@@ -53,10 +77,18 @@ export class StaleBuildBoundary extends React.Component<Props, State> {
   }
 
   componentDidCatch(error: unknown): void {
-    // Logged in both branches. Absorbing a chunk failure silently would hide a
-    // real /assets/* 404 regression behind a friendly reload prompt.
+    // Reached only on the stale branch. componentDidCatch runs in the commit
+    // phase, and the rethrow below happens during render, so for an ordinary
+    // error this never commits and never logs — React reports that one itself.
+    // Logging the stale branch is the part that matters: absorbing a chunk
+    // failure silently would hide a real /assets/* 404 regression behind a
+    // friendly reload prompt.
     console.error('[StaleBuildBoundary]', error);
-    if (isStaleBuildError(error)) reportStaleBuild('chunk');
+    // silent: this boundary is about to render the same message as a full-pane
+    // card, and the toast would put a byte-identical second notice beside it.
+    // The call still takes the once-only latch, so a later signal cannot stack
+    // a toast on top of the card.
+    if (isStaleBuildError(error)) reportStaleBuild('chunk', { silent: true });
   }
 
   render(): React.ReactNode {

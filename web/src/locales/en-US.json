@@ -1,8 +1,10 @@
 {
   "common": {
     "staleBuild": {
-      "title": "A new version is available",
-      "description": "This tab is running an older version of the app. Reload to pick it up.",
+      "title": "This tab is out of date with the server",
+      "description": "The server is serving a different build than this tab loaded. Reload to switch to it.",
+      "blockedTitle": "This page could not load",
+      "blockedDescription": "The app changed while this tab was open. Reload to continue.",
       "reload": "Reload"
     },
     "copy": "Copy",

@@ -1,12 +1,21 @@
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import {
   isStaleBuildError,
   checkForNewBuild,
+  reportStaleBuild,
+  watchStaleBuild,
+  markBooted,
+  STALE_BUILD_EVENT,
   __resetStaleBuildForTests,
 } from '../staleBuild';
+import { toast } from '@/components/ui/use-toast';
 import { StaleBuildBoundary } from '@/components/StaleBuildBoundary';
+
+vi.mock('@/components/ui/use-toast', () => ({ toast: vi.fn() }));
 
 // The contract these lock is the one that is easy to get wrong in both
 // directions: too loose and every crash becomes a "reload" prompt that hides a
@@ -24,7 +33,11 @@ function setEntryScript(name: string) {
 
 beforeEach(() => {
   __resetStaleBuildForTests();
+  vi.mocked(toast).mockClear();
+  sessionStorage.clear();
+  delete window.__LA_BOOTED__;
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -143,6 +156,152 @@ describe('checkForNewBuild', () => {
   });
 });
 
+describe('the pre-boot half and this one stay in step', () => {
+  // index.html is plain HTML: it never reaches tsc and no unit test can import
+  // it, so the only thing standing between the two classifiers and a silent
+  // disagreement is an assertion on the source text itself.
+  const html = readFileSync(resolve(__dirname, '../../../index.html'), 'utf8');
+  const lib = readFileSync(resolve(__dirname, '../staleBuild.tsx'), 'utf8');
+
+  it('names the same build prefix on both sides', () => {
+    const inline = html.match(/BUILD_PREFIXES\s*=\s*\[([^\]]+)\]/)?.[1];
+    const mod = lib.match(/const BUILD_PREFIX = '([^']+)'/)?.[1];
+    expect(mod).toBeTruthy();
+    expect(inline).toContain(`'${mod}'`);
+  });
+
+  it('anchors a bare path the same way on both sides', () => {
+    // The ES5 copy used to match the prefix anywhere in the string, so
+    // `dist/assets/x.css` was stale to it and not stale here. Both now require
+    // the prefix to start a path.
+    expect(html).toContain(`new RegExp('(^|[\\\\s\\'"(])' + BUILD_PREFIXES[j])`);
+    expect(lib).toContain('new RegExp(`(^|[\\\\s\'"(])${BUILD_PREFIX}`)');
+  });
+
+  it('agrees on the event name that joins them', () => {
+    expect(html).toContain(`'${STALE_BUILD_EVENT}'`);
+  });
+});
+
+describe('reporting is once per session', () => {
+  beforeEach(() => setEntryScript('index-CURRENT.js'));
+
+  it('surfaces once no matter how many signals arrive', async () => {
+    // Four callers converge on this latch (boundary catch, the index.html
+    // event, the mount-time flag replay, the version poll) and the toast is
+    // duration:Infinity — so losing the latch stacks permanent toasts the user
+    // has to dismiss one at a time.
+    reportStaleBuild('chunk');
+    reportStaleBuild('resource');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ build: 'index-NEWER.js' }),
+      }),
+    );
+    await checkForNewBuild();
+
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes the latch but skips the toast when the caller renders its own card', () => {
+    reportStaleBuild('chunk', { silent: true });
+    expect(toast).not.toHaveBeenCalled();
+    // Still logged: a real /assets/* 404 regression must not vanish behind a
+    // friendly card.
+    expect(console.error).toHaveBeenCalledTimes(1);
+
+    reportStaleBuild('version');
+    expect(toast).not.toHaveBeenCalled();
+  });
+});
+
+describe('checkForNewBuild rate and reporting', () => {
+  beforeEach(() => setEntryScript('index-CURRENT.js'));
+
+  it('fetches at most once per throttle window', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({ build: 'index-CURRENT.js' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    // Two live drivers now call this (tab resume, and every settled turn), so
+    // an alt-tabbing user on a long stream would otherwise poll continuously.
+    await checkForNewBuild();
+    await checkForNewBuild();
+    await checkForNewBuild();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    await checkForNewBuild();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('warns once when the manifest answers but cannot be read', async () => {
+    // The silent-on-ambiguity rule is right for users and wrong for operators:
+    // an unreadable manifest is indistinguishable from "up to date" forever.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'content-type': 'text/html' }),
+        json: async () => ({ build: 'index-NEWER.js' }),
+      }),
+    );
+    await checkForNewBuild();
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('watchStaleBuild wiring', () => {
+  beforeEach(() => setEntryScript('index-CURRENT.js'));
+
+  it('replays a flag index.html set before React mounted', () => {
+    // The likeliest real timeline: an asset dies during boot, React mounts a
+    // moment later, and the listener attaches too late to have seen the event.
+    // This replay is the entire reason the flag is a sticky global.
+    window.__LA_STALE_BUILD__ = 'resource';
+    const stop = watchStaleBuild();
+    expect(toast).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('reports an event dispatched after mount, and stops after cleanup', () => {
+    const stop = watchStaleBuild();
+    window.dispatchEvent(new CustomEvent(STALE_BUILD_EVENT, { detail: 'preload' }));
+    expect(toast).toHaveBeenCalledTimes(1);
+
+    stop();
+    __resetStaleBuildForTests();
+    vi.mocked(toast).mockClear();
+    window.dispatchEvent(new CustomEvent(STALE_BUILD_EVENT, { detail: 'preload' }));
+    expect(toast).not.toHaveBeenCalled();
+  });
+});
+
+describe('markBooted', () => {
+  it('flips the gate index.html reads before it will reload', () => {
+    // This flag is the switch between "reload silently" and "ask the user". A
+    // refactor that drops or defers it reintroduces a reload that discards an
+    // agent turn mid-stream.
+    expect(window.__LA_BOOTED__).toBeFalsy();
+    markBooted();
+    expect(window.__LA_BOOTED__).toBe(true);
+  });
+
+  it('clears the pre-boot attempt counter, since booting is what proves it worked', () => {
+    sessionStorage.setItem('__la_asset_recovery__', JSON.stringify({ t: 1, n: 2 }));
+    markBooted();
+    expect(sessionStorage.getItem('__la_asset_recovery__')).toBeNull();
+  });
+});
+
 describe('StaleBuildBoundary', () => {
   const Boom = ({ error }: { error: Error }) => {
     throw error;
@@ -180,5 +339,27 @@ describe('StaleBuildBoundary', () => {
     );
     expect(screen.getByTestId('outer')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('catches a rejected React.lazy from inside the Suspense it sits in', async () => {
+    // Main.tsx puts this boundary INSIDE <Suspense> rather than around it. The
+    // placement is not cosmetic: the boundary is keyed by route so navigating
+    // away from a dead chunk clears the error, and a key on the outside remounts
+    // the Suspense boundary too, which then has to show its fallback and flashes
+    // the pane spinner on every first navigation. This pins the property that
+    // made the move safe — a rejected lazy still reaches it from in there.
+    const Lazy = React.lazy(() =>
+      Promise.reject(new Error(`${CHUNK_MSG}${window.location.origin}/assets/route-9f8e7d6c.js`)),
+    );
+
+    render(
+      <React.Suspense fallback={<div data-testid="spinner" />}>
+        <StaleBuildBoundary variant="pane">
+          <Lazy />
+        </StaleBuildBoundary>
+      </React.Suspense>,
+    );
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
   });
 });

@@ -52,14 +52,64 @@ if (!assets.length) {
   process.exit(1)
 }
 
+// --- stale-build recovery contract -------------------------------------------
+//
+// One build identity is derived twice and the two derivations never meet at
+// runtime: the vite plugin picks the entry by `chunk.isEntry` and writes it to
+// version.json, while the browser re-reads it off the DOM (staleBuild.tsx
+// `currentBuild()`). Every way they can disagree is silent by construction —
+// checkForNewBuild returns quietly on a non-OK status, a non-JSON content-type
+// and a parse error, because "unknown" must never become "you are behind". So a
+// dropped plugin, a renamed assetsDir or a shell served at /version.json costs
+// the whole version layer with no console line and no red test. This is the one
+// place both halves exist at once, so it is where they get compared.
+
+const moduleScripts = [...html.matchAll(/<script[^>]+type="module"[^>]+src="([^"]+)"/g)]
+
+// currentBuild() takes querySelector's first match. More than one module script
+// and it may read something that is not the entry, and then `build !== mine` is
+// true for every visitor — a permanent, undismissable "new version" toast.
+if (moduleScripts.length !== 1) {
+  console.error(`\n✗ expected exactly 1 module <script> in ${indexPath}, found ${moduleScripts.length}`)
+  console.error('  staleBuild.tsx currentBuild() reads the first one and assumes it is')
+  console.error('  the entry. Another module script in <head> makes every user see a')
+  console.error('  permanent "new version" prompt.\n')
+  process.exit(1)
+}
+
+const entryFile = moduleScripts[0][1].split('/').pop()
+
+let version
+try {
+  version = JSON.parse(readFileSync(join(outDir, 'version.json'), 'utf8'))
+} catch {
+  console.error(`\n✗ ${outDir}/version.json missing or unparseable`)
+  console.error('  emitVersionManifest (vite.config.js) did not run. The version poll')
+  console.error('  fails closed, so stale-build detection is dead with no signal.\n')
+  process.exit(1)
+}
+
+if (version.build !== entryFile) {
+  console.error(`\n✗ version.json disagrees with ${indexPath}`)
+  console.error(`  version.json build: ${version.build}`)
+  console.error(`  index.html entry:   ${entryFile}`)
+  console.error('  The client compares these two. A mismatch prompts every user to')
+  console.error('  reload, forever, and the reload does not clear it.\n')
+  process.exit(1)
+}
+
 const stripHash = (f) => f.replace(/\.(js|css)$/, '').replace(/-[A-Za-z0-9_-]{8}$/, '')
 
 const eager = [...new Set(assets.filter((f) => f.endsWith('.js')).map(stripHash))].sort()
 const expected = [...EXPECTED].sort()
 
+// index.html counts too, and it is the one file here with no cache lifetime at
+// all: stale-build recovery depends on the document being refetched every load,
+// so every byte in it is paid on every visit, forever. Leaving it outside the
+// ceiling is how an inline script grows without anything noticing.
 const bytes = assets.reduce(
   (n, f) => n + gzipSync(readFileSync(join(outDir, 'assets', f))).length,
-  0,
+  gzipSync(html).length,
 )
 const kb = bytes / 1024
 

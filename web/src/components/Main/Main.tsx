@@ -50,29 +50,36 @@ function Main() {
   // Key by top-level path segment so /chat sub-routes share a key (no re-animation)
   const pageKey = location.pathname.split('/')[1] || 'dashboard';
 
-  // Boundary outside Suspense: Suspense resolves pending promises, not rejected
-  // ones, so a chunk a deploy deleted throws straight past it. Without a
-  // boundary here the throw reaches the root and takes the sidebar with it, and
-  // the pane's PageLoading spinner would otherwise hang forever. Keyed by route
-  // so navigating away from a broken chunk clears the error state.
+  // A chunk a deploy deleted rejects rather than stays pending, so Suspense
+  // hands the throw straight up; without a boundary it reaches the root and
+  // takes the sidebar with it, and the pane's spinner hangs forever.
+  //
+  // Inside Suspense, not around it, even though both placements catch the
+  // rejection (pinned in src/lib/__tests__/staleBuild.test.tsx). The boundary is keyed by
+  // route so navigating away from a dead chunk clears the error, and a key on
+  // the outside remounts Suspense along with it. Desktop already remounts this
+  // subtree through AnimatePresence, but mobile renders it directly, and a
+  // freshly mounted Suspense boundary has no previous content to hold — so it
+  // must show its fallback, and with v7_startTransition every first navigation
+  // to a route flashed the pane spinner where it used to switch in place.
   const routes = (
-    <StaleBuildBoundary key={pageKey} variant="pane">
     <Suspense fallback={<PageLoading variant="pane" />}>
-      <Routes location={location}>
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/chat" element={<ChatAgent />} />
-        <Route path="/chat/t/:threadId/:taskId" element={<ChatAgent />} />
-        <Route path="/chat/t/:threadId" element={<ChatAgent />} />
-        <Route path="/chat/:workspaceId" element={<ChatAgent />} />
-        <Route path="/market" element={<MarketView />} />
-        <Route path="/automations" element={<Automations />} />
-        <Route path="/connectors" element={<Connectors />} />
-        <Route path="/settings" element={<Settings />} />
-        <Route path="/news/:id" element={<NewsDetailPage />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Routes>
+      <StaleBuildBoundary key={pageKey} variant="pane">
+        <Routes location={location}>
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/chat" element={<ChatAgent />} />
+          <Route path="/chat/t/:threadId/:taskId" element={<ChatAgent />} />
+          <Route path="/chat/t/:threadId" element={<ChatAgent />} />
+          <Route path="/chat/:workspaceId" element={<ChatAgent />} />
+          <Route path="/market" element={<MarketView />} />
+          <Route path="/automations" element={<Automations />} />
+          <Route path="/connectors" element={<Connectors />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/news/:id" element={<NewsDetailPage />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </StaleBuildBoundary>
     </Suspense>
-    </StaleBuildBoundary>
   );
 
   // On mobile, skip AnimatePresence — instant page switches feel snappier
