@@ -1,5 +1,10 @@
 {
   "common": {
+    "staleBuild": {
+      "title": "有新版本可用",
+      "description": "当前标签页运行的是旧版本，重新加载即可更新。",
+      "reload": "重新加载"
+    },
     "copy": "复制",
     "submit": "提交",
     "save": "保存",

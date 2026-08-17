@@ -5,6 +5,7 @@ import PageLoading from '@/components/PageLoading/PageLoading';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useSyncUserLocale } from '@/hooks/useSyncUserLocale';
 import { ContextOverflowPill } from '@/components/ui/ContextOverflowPill';
+import { StaleBuildBoundary } from '@/components/StaleBuildBoundary';
 
 // Chunk thunks shared by the lazy components and preloadRouteChunk — import()
 // is deduped by the module system, so a preload and the lazy mount share one
@@ -34,7 +35,12 @@ const Settings = React.lazy(routeChunks.settings);
 export function preloadRouteChunk(pathname: string): void {
   const chunkFor: Record<string, () => Promise<unknown>> = routeChunks;
   const segment = pathname.split('/')[1] || 'dashboard';
-  void (chunkFor[segment] ?? routeChunks.dashboard)();
+  // Swallowed on purpose, but it must be caught: a deploy deletes the previous
+  // build's chunks, so this rejects routinely for a stale tab, and an unhandled
+  // rejection is noise that hides real ones. The failure still surfaces — Vite
+  // fires vite:preloadError (index.html reports it), and React.lazy retries the
+  // same import at mount, where StaleBuildBoundary catches it.
+  void (chunkFor[segment] ?? routeChunks.dashboard)().catch(() => {});
 }
 
 function Main() {
@@ -44,7 +50,13 @@ function Main() {
   // Key by top-level path segment so /chat sub-routes share a key (no re-animation)
   const pageKey = location.pathname.split('/')[1] || 'dashboard';
 
+  // Boundary outside Suspense: Suspense resolves pending promises, not rejected
+  // ones, so a chunk a deploy deleted throws straight past it. Without a
+  // boundary here the throw reaches the root and takes the sidebar with it, and
+  // the pane's PageLoading spinner would otherwise hang forever. Keyed by route
+  // so navigating away from a broken chunk clears the error state.
   const routes = (
+    <StaleBuildBoundary key={pageKey} variant="pane">
     <Suspense fallback={<PageLoading variant="pane" />}>
       <Routes location={location}>
         <Route path="/dashboard" element={<Dashboard />} />
@@ -60,6 +72,7 @@ function Main() {
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </Suspense>
+    </StaleBuildBoundary>
   );
 
   // On mobile, skip AnimatePresence — instant page switches feel snappier

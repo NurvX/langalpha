@@ -24,6 +24,102 @@
         if (s >= 0.9 && s <= 1.1) d.style.setProperty('--app-font-scale', String(s));
       })();
     </script>
+    <script>
+      (function () {
+        // Stale-build recovery. A deploy swaps the entire asset manifest, so a
+        // document still open from the previous build asks for
+        // /assets/<oldhash>.js and gets a 404 (the Worker makes that 404 honest
+        // instead of serving HTML, which is what used to break the MIME check).
+        // An honest 404 is still a blank page: the entry module never runs.
+        // Nothing inside the bundle can fix that — the bundle is what failed —
+        // so this has to be inline in the document, and it has to be in <head>
+        // ahead of the entry script, or the listener is registered too late to
+        // see it fail.
+        var KEY = '__la_asset_recovery__';
+        var RETRY_WINDOW_MS = 60000;
+
+        // Where the build writes its content-hashed output. Recovery depends on
+        // the server answering a missing file under here with a 404: fall back
+        // to index.html instead and the browser gets 200 text/html, refuses to
+        // run it as a module, and the reload below finds the same dead file
+        // again. ES5 on purpose: a parse error would disable recovery on
+        // exactly the old browsers most likely to be holding a stale document.
+        var BUILD_PREFIXES = ['/assets/'];
+
+        function isBuildAsset(url) {
+          if (!url) return false;
+          try {
+            var u = new URL(url, location.href);
+            if (u.origin !== location.origin) return false;
+            for (var i = 0; i < BUILD_PREFIXES.length; i++) {
+              if (u.pathname.indexOf(BUILD_PREFIXES[i]) === 0) return true;
+            }
+            return false;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        function recover(reason) {
+          // Only before the app has mounted. Once it is running, a surprise
+          // reload would throw away whatever the user was in the middle of —
+          // an agent turn streaming for minutes, a half-written message — so
+          // publish the fact and let the app offer the reload instead.
+          if (window.__LA_BOOTED__) {
+            window.__LA_STALE_BUILD__ = reason;
+            try {
+              window.dispatchEvent(new CustomEvent('la:stale-build', { detail: reason }));
+            } catch (e) {}
+            return;
+          }
+          var now = Date.now();
+          var last = 0;
+          // No session storage means no way to bound the retries, and an
+          // unbounded reload loop hammering the origin is worse than the blank
+          // page it is trying to fix. Do nothing instead.
+          try {
+            last = parseInt(sessionStorage.getItem(KEY), 10) || 0;
+          } catch (e) {
+            return;
+          }
+          if (now - last < RETRY_WINDOW_MS) return;
+          try {
+            sessionStorage.setItem(KEY, String(now));
+          } catch (e) {
+            return;
+          }
+          // Only works because the document itself is deliberately not
+          // long-cached, so this refetches it and gets the new asset names with
+          // it. Jittered because the 60s bound is per tab: a bad deploy would
+          // otherwise have every open tab reload in the same second.
+          setTimeout(function () {
+            location.reload();
+          }, Math.random() * 3000);
+        }
+
+        window.__laRecoverStaleBuild = recover;
+
+        // Capture phase: resource load errors do not bubble.
+        window.addEventListener('error', function (e) {
+          var el = e && e.target;
+          if (!el || el === window) return;
+          // Scripts only. /assets/ also holds CSS, fonts and images, and a
+          // stylesheet or <img> that blips would otherwise be read as a dead
+          // build and reload the page under a user whose build is current.
+          // Nothing is lost by narrowing: a dead module script is the only
+          // failure that reaches here at all. A lazy chunk rejects its import
+          // instead (the app classifies that by message), and a dead
+          // stylesheet fires no error event.
+          if (el.tagName !== 'SCRIPT') return;
+          if (isBuildAsset(el.src)) recover('resource');
+        }, true);
+
+        // Vite fires this when a lazy route's preload 404s.
+        window.addEventListener('vite:preloadError', function () {
+          recover('preload');
+        });
+      })();
+    </script>
     <style>
       @view-transition { navigation: auto; }
       /* color-scheme drives the browser's pre-paint clear color: without it a

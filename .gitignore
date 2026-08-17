@@ -114,3 +114,17 @@ docs/pr_context/
 
 /deploy.sh
 /deploy/lib/
+
+# Cloudflare Worker payload for `deploy.sh cf`, vendored from the private ops
+# repo alongside deploy.sh itself. Here rather than only in .git/info/exclude
+# because that file does not travel: a fresh clone would not ignore these, and
+# the first person to run the vendor script would be invited to commit them.
+#
+# wrangler.jsonc names the production host and zone. public/_headers carries no
+# hostname, but its `/assets/* immutable` rule is only safe next to a Worker that
+# answers a missing asset with a real 404 — over the SPA fallback it caches HTML
+# at an asset URL for a year. Shipping it without workers/ would hand a
+# self-hoster exactly that combination, so the set travels together or not at all.
+/web/wrangler.jsonc
+/web/workers/
+/web/public/_headers

@@ -1,5 +1,10 @@
 {
   "common": {
+    "staleBuild": {
+      "title": "A new version is available",
+      "description": "This tab is running an older version of the app. Reload to pick it up.",
+      "reload": "Reload"
+    },
     "copy": "Copy",
     "submit": "Submit",
     "save": "Save",
