@@ -25,10 +25,11 @@ from src.llms.token_counter import extract_token_usage
 
 logger = logging.getLogger(__name__)
 
-# The vendor echo is stored per call and persisted into a JSON column, so it is
-# bounded before it lands. Long enough for any real model name plus a versioned
-# snapshot suffix; short enough that a repeated echo cannot amplify the row.
-_SERVED_MODEL_MAX_LEN = 256
+# Every model field is stored per call and persisted into a JSON column, so all of
+# them are bounded before they land. Long enough for any real model name plus a
+# versioned snapshot suffix (the longest identity we ship is 30 characters); short
+# enough that a repeated echo cannot amplify the row.
+_MODEL_FIELD_MAX_LEN = 256
 
 
 def _as_text(value: Any) -> Optional[str]:
@@ -39,6 +40,18 @@ def _as_text(value: Any) -> Optional[str]:
     and raises where nothing can catch it usefully.
     """
     return value if isinstance(value, str) else None
+
+
+def _as_identity(value: Any) -> Optional[str]:
+    """Keep a stamped billing identity only if it could plausibly be one.
+
+    Bounded like the vendor echo but rejected rather than truncated: a cut manifest
+    key matches no rate card and bills zero, which is the exact failure this
+    attribution exists to fix, whereas dropping it degrades to the echo and the
+    working fallback behind it.
+    """
+    text = _as_text(value)
+    return text if text and len(text) <= _MODEL_FIELD_MAX_LEN else None
 
 
 def collapse_repeated_name(name: str) -> str:
@@ -66,7 +79,7 @@ def collapse_repeated_name(name: str) -> str:
         # the raw echo either way.
         logger.warning(
             f"Collapsed a repeated model name (x{len(name) // period}) to "
-            f"{name[:period][:_SERVED_MODEL_MAX_LEN]!r}"
+            f"{name[:period][:_MODEL_FIELD_MAX_LEN]!r}"
         )
         return name[:period]
     return name
@@ -152,17 +165,27 @@ class PerCallTokenTracker(BaseCallbackHandler):
         anchors peak hour pricing, which an unstamped client is equally subject
         to, and a streamed call can open and close in different rate windows.
         """
-        # Type-guarded like the vendor echo, and for a sharper reason: run metadata
-        # is not only ours. A consumer-supplied client, or any caller passing
-        # config={"metadata": ...}, can land a non-string here, and a non-string
-        # manifest_model becomes the billing key, poisons the record, and makes the
-        # turn's pricing pass raise on an unhashable key. Dropping it degrades to
-        # the echo, which is what an unstamped client already does.
-        captured = {
-            k: text
-            for k in self._ATTRIBUTION_KEYS
-            if metadata and (text := _as_text(metadata.get(k)))
-        }
+        # Validated like the vendor echo, and for a sharper reason: run metadata is
+        # not only ours. A consumer-supplied client, or any caller passing
+        # config={"metadata": ...}, can land anything here, and a bad manifest_model
+        # becomes the billing key — a non-string poisons the record and makes the
+        # turn's pricing pass raise on an unhashable key, an unbounded one inflates
+        # every record and the row they persist to. Logged rather than dropped
+        # quietly: the fallback is the vendor echo, which is the very attribution
+        # this stamp exists to override.
+        captured: Dict[str, str] = {}
+        for key in self._ATTRIBUTION_KEYS:
+            raw = metadata.get(key) if metadata else None
+            if raw is None:
+                continue  # an unstamped client, not a malformed stamp
+            text = _as_identity(raw)
+            if text is None:
+                logger.warning(
+                    f"Ignoring unusable {key} stamp on run {run_id}; "
+                    "billing falls back to the provider echo"
+                )
+                continue
+            captured[key] = text
         with self._lock:
             entry = self._run_attribution.setdefault(run_id, {})
             entry.update(captured)
@@ -234,12 +257,12 @@ class PerCallTokenTracker(BaseCallbackHandler):
         # strand a name the repair would otherwise have recovered.
         billing_type = attribution.get("billing_type", "platform")
         model_name = attribution.get("manifest_model") or (
-            collapse_repeated_name(served_model)[:_SERVED_MODEL_MAX_LEN]
+            collapse_repeated_name(served_model)[:_MODEL_FIELD_MAX_LEN]
             if served_model
             else None
         )
         if served_model:
-            served_model = served_model[:_SERVED_MODEL_MAX_LEN]
+            served_model = served_model[:_MODEL_FIELD_MAX_LEN]
 
         if not model_name:
             logger.warning(
@@ -279,7 +302,6 @@ class PerCallTokenTracker(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """Clean up the per-run attribution when an LLM call errors out."""
         with self._lock:
             self._run_attribution.pop(run_id, None)
 

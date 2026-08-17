@@ -230,7 +230,10 @@ class TestTimeOfDayPricing:
                     failures.append(f"{where}: window {window!r} is not a [start, end] pair")
                     continue
                 start, end = window
-                if not all(isinstance(h, int) for h in window):
+                # ``type is int`` rather than isinstance, matching the engine: bool
+                # subclasses int, so a JSON ``true``/``false`` bound would pass here
+                # and install an unintended window at runtime.
+                if not all(type(h) is int for h in window):
                     failures.append(f"{where}: window {window!r} has non-integer hours")
                 elif not 0 <= start < end <= 24:
                     failures.append(f"{where}: window {window!r} is not 0 <= start < end <= 24")

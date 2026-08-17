@@ -308,9 +308,6 @@ def find_model_pricing(model_name: str, provider: Optional[str] = None) -> Optio
             logger.debug(f"Base model '{base_model}' also not found in manifest")
 
     # STEP 4: Not found - log comprehensive error.
-    # Quoted and bounded: on an unstamped record this name is the vendor's own
-    # string, which can carry newlines and forge a log record downstream.
-    safe_name = f"{model_name[:_LOGGED_NAME_MAX_LEN]!r}"
     if provider:
         logger.warning(
             f"No pricing found for model: {safe_name} (provider: {provider!r}). "
@@ -758,7 +755,12 @@ def _usable_windows(pricing: Dict[str, Any]) -> List[Tuple[int, int]]:
         if (
             isinstance(window, (list, tuple))
             and len(window) == 2
-            and all(isinstance(bound, int) for bound in window)
+            # ``type is int`` rather than isinstance: bool subclasses int, so a JSON
+            # ``true`` would pass as hour 1 and ``false`` as hour 0. Both then satisfy
+            # the range test and silently install a window nobody wrote -- and
+            # ``[0, true]`` reads as [0,1), handing out the discount for all 23 hours
+            # outside it, which is the one outcome this validation exists to forbid.
+            and all(type(bound) is int for bound in window)
             # A window that wraps midnight is inexpressible as one pair: no hour
             # satisfies ``start <= hour < end`` when start > end, so it would read
             # as "never peak" and bill the discount 24/7. Split it into two.

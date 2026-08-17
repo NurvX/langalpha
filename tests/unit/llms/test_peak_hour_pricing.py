@@ -181,14 +181,21 @@ class TestAnUnreadableScheduleCannotDiscount:
         computed cost for every model in the turn, not just this one.
         """
         bad_windows = ([1, 4], [[1, "4"]], [[4, 1]], [["1", "4"]], [[1, 2, 3]], "1-4")
+        # bool subclasses int, so these read as hours 1 and 0 under an isinstance
+        # check and pass the range test. ``[[0, True]]`` is the one that costs money:
+        # it installs [0,1) and discounts the other 23 hours.
+        bad_bools = ([[True, 4]], [[False, 4]], [[0, True]], [[True, False]])
         # A scalar is the container case, not a window case: it raises on the ``for``
         # statement itself, ahead of every per-window rule. A string is iterable and so
         # never exercised this.
         bad_containers = (5, True, 1.5, {"start": 1})
-        for bad in bad_windows + bad_containers:
+        for bad in bad_windows + bad_bools + bad_containers:
             card, window = resolve_schedule({**CARD, "peak_utc": bad}, _at(12))
             assert window == "peak", bad
             assert card["input"] == 10.0, bad
+            # 02:00 is inside the card's real peak block, so a boolean bound that
+            # survived would show up here as an off_peak read rather than a no-op.
+            assert resolve_schedule({**CARD, "peak_utc": bad}, _at(2))[1] == "peak", bad
 
     def test_one_readable_window_survives_an_unreadable_sibling(self):
         """Dropping the whole schedule would be a second failure on top of the

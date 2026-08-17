@@ -169,6 +169,42 @@ class TestTrackerBillsOnTheManifestKey:
         # Every key that reaches pricing has to be usable as a dict key.
         assert isinstance(record["model_name"], str)
 
+    def test_an_overlong_stamp_is_rejected_rather_than_cut_to_fit(self):
+        """The stamp is bounded like the echo, but dropped instead of truncated.
+
+        Both land in a JSON column, so neither may be unbounded. Cutting a manifest
+        key to fit would leave a key matching no rate card, billing zero -- the exact
+        failure the stamp exists to prevent -- while dropping it degrades to the echo
+        and the working fallback behind it.
+        """
+        tracker = PerCallTokenTracker()
+        run_id = uuid4()
+        tracker.on_chat_model_start(
+            serialized={},
+            messages=[],
+            run_id=run_id,
+            metadata={"manifest_model": "glm-" + "5" * 9000, "pricing_provider": "z-ai"},
+        )
+        tracker.on_llm_end(_result("glm-5.2"), run_id=run_id)
+
+        record = tracker.get_per_call_records()[0]
+        assert record["model_name"] == "glm-5.2"
+        assert record["pricing_provider"] == "z-ai"
+
+    def test_a_stamp_at_the_bound_is_still_honored(self):
+        """The longest identity we ship is well under the cap, so the boundary is
+        inclusive and no real key can be near it."""
+        tracker = PerCallTokenTracker()
+        run_id = uuid4()
+        at_limit = "g" * 256
+        tracker.on_chat_model_start(
+            serialized={}, messages=[], run_id=run_id,
+            metadata={"manifest_model": at_limit},
+        )
+        tracker.on_llm_end(_result("glm-5.2"), run_id=run_id)
+
+        assert tracker.get_per_call_records()[0]["model_name"] == at_limit
+
     def test_a_non_string_echo_does_not_cost_the_call_its_metering(self):
         """``response_metadata`` is provider-parsed JSON, not a value we chose.
 
