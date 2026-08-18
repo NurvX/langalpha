@@ -1,6 +1,6 @@
 .chat-agent-container {
   width: 100%;
-  height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -8,6 +8,3 @@
   position: relative;
 }
 
-@media (max-width: 767px) {
-  .chat-agent-container { height: 100%; }
-}

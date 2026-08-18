@@ -525,6 +525,13 @@ export const attemptReconnectAfterDisconnect = async (
   // Long, because the cost of waiting is a spinner while the cost of giving up
   // is a truncated answer for a turn that is still running server-side.
   const OFFLINE_CEILING_MS = 5 * 60 * 1000;
+  // The offline wait is sliced rather than taken in one go so a stop landing
+  // mid-wait is noticed within a slice instead of at link-return. It cannot be
+  // aborted instead: the prior stream's finally already nulled
+  // mainStreamAbortRef, and parking our own controller there would read as a
+  // live stream to the tab-resume handler, which would abort us expecting a
+  // stream teardown to re-kick the reconnect.
+  const OFFLINE_SLICE_MS = 5 * 1000;
 
   rt.setIsReconnecting(true);
 
@@ -534,6 +541,61 @@ export const attemptReconnectAfterDisconnect = async (
   // retry loop stays pinned to the run we started reconnecting, matching the
   // prior closure-captured semantics.
   const tid = rt.threadIdRef.current;
+  // The turn this retry belongs to. Every other candidate is reused by the next
+  // turn — see the token's declaration in useChatMessages.
+  const originSessionEpoch = rt.sessionEpochRef.current;
+
+  // Three ways this reconnect stops being wanted, checked across every await.
+  //
+  // A user stop stays reachable for the whole function: the send path returns
+  // before its own cleanup on a disconnect, so isLoading stays true and the
+  // composer still offers Stop. And reconnectToStream clears wasStoppedRef on
+  // entry, so without this we would resume streaming under a bubble already
+  // stamped "Stopped".
+  //
+  // Navigation is the other, and it is invisible to every existing cancel: the
+  // thread-load effect supersedes a cross-thread stream by aborting
+  // mainStreamAbortRef, which is null for this entire wait (the disconnected
+  // send nulled it and skipped the rest of its cleanup). Ungated, a link that
+  // returns after the user opened another thread attaches THIS run's id and
+  // cursor to THAT thread — reconnectToStream targets the live threadIdRef,
+  // not our tid, so the status check and the stream would disagree about which
+  // thread they are for.
+  //
+  // A newer turn on this same thread is the third, and it is why the stop flag
+  // alone is not enough: a fresh send clears wasStoppedRef before opening its
+  // own stream, so a stop followed by a send inside one slice leaves this retry
+  // looking at its own thread with the flag already reset. It would then either
+  // run the give-up cleanup against the live new turn, or reconnect and
+  // overwrite that turn's mainStreamAbortRef, putting two readers on one run
+  // and leaving Stop pointing at neither.
+  //
+  // Returning rather than breaking is deliberate in all three cases: the
+  // give-up tail runs cleanupAfterStreamEnd, which a user stop already did
+  // (stopWorkflow finalized the message and tore the session down) and which
+  // would clobber whatever session has taken over since.
+  const abandoned = () => {
+    if (rt.wasStoppedRef.current) {
+      console.log('[Reconnect] Turn was stopped; abandoning reconnect');
+      rt.setIsReconnecting(false);
+      return true;
+    }
+    if (rt.sessionEpochRef.current !== originSessionEpoch) {
+      console.log('[Reconnect] A newer turn took the session; abandoning reconnect');
+      // Same spinner rule as below: the turn that superseded us owns its own.
+      if (rt.isReconnectingOwnerRef.current === null) rt.setIsReconnecting(false);
+      return true;
+    }
+    if (rt.threadIdRef.current !== tid) {
+      console.log('[Reconnect] Thread changed under the reconnect; abandoning', tid);
+      // Clear the spinner only if nobody newer owns it — the thread we moved to
+      // may already be reconnecting on its own, and hiding its pill would read
+      // as a turn that finished.
+      if (rt.isReconnectingOwnerRef.current === null) rt.setIsReconnecting(false);
+      return true;
+    }
+    return false;
+  };
 
   // Wall-clock bound on waiting for a link, so a flapping connection cannot
   // keep the loop alive indefinitely.
@@ -542,6 +604,7 @@ export const attemptReconnectAfterDisconnect = async (
 
   while (attempt < MAX_RETRIES) {
     if (!tid || tid === '__default__') break;
+    if (abandoned()) return;
 
     // An offline machine cannot be retried into working. Spending the budget
     // against it is why this used to give up ~15s in, long before anyone has
@@ -551,15 +614,21 @@ export const attemptReconnectAfterDisconnect = async (
     // present but unhappy, which is a different problem.
     if (!isOnline()) {
       const remaining = offlineDeadline - Date.now();
-      if (remaining <= 0 || !(await waitForOnline(remaining))) {
+      if (remaining <= 0) {
         console.warn('[Reconnect] Still offline after the ceiling; giving up');
         break;
       }
+      await waitForOnline(Math.min(remaining, OFFLINE_SLICE_MS));
       continue;
     }
 
     if (attempt > 0) {
       await new Promise((r) => setTimeout(r, BASE_DELAY * Math.pow(2, attempt - 1)));
+      if (abandoned()) return;
+      // The link can drop during the backoff. Charging an attempt to a request
+      // that is guaranteed to fail instantly is the exact waste this function
+      // exists to avoid, so re-gate on connectivity before spending one.
+      if (!isOnline()) continue;
     }
     attempt += 1;
 
@@ -571,7 +640,28 @@ export const attemptReconnectAfterDisconnect = async (
         break;
       }
 
+      // Five minutes offline is long enough for the run we lost to finish and a
+      // NEW one to take the thread (another tab, an automation, a queued
+      // report-back). The stream is keyed per run, and this path deliberately
+      // keeps the disconnected run's id and cursor — so resuming here would
+      // target a dead key and, with no idle watchdog armed on this path, hang
+      // holding the spinner. Break instead: the give-up tail settles this
+      // bubble and reloads, and the load path attaches to status.run_id with a
+      // reset cursor, which is the only way to pick up a run we never saw.
+      if (
+        status.run_id &&
+        rt.currentRunIdRef.current &&
+        status.run_id !== rt.currentRunIdRef.current
+      ) {
+        console.log('[Reconnect] Thread moved to run', status.run_id, '; reloading instead of resuming', rt.currentRunIdRef.current);
+        break;
+      }
+
       console.log('[Reconnect] Attempt', attempt, 'of', MAX_RETRIES);
+      // Last gate before handing the turn back to a live stream: getWorkflowStatus
+      // is a round trip, and a stop landing inside it would otherwise be undone
+      // by reconnectToStream clearing wasStoppedRef.
+      if (abandoned()) return;
       // Mid-stream disconnect resumes from the retained cursor (no resetCursor),
       // so it does NOT replay the subagent projection — wiping the cards here
       // would strand a task spawned earlier in this same (unpersisted) turn with

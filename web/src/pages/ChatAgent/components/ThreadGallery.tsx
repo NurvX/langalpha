@@ -593,7 +593,7 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
   return (
     <div
       ref={containerRef}
-      className={`${isMobile ? 'h-full' : 'h-screen'} flex overflow-hidden`}
+      className="h-full flex overflow-hidden"
       style={{
         position: 'relative',
         backgroundColor: 'var(--color-bg-page)',

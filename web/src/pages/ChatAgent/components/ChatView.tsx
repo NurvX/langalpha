@@ -1252,7 +1252,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       initial={navPanelVisibleRef.current ? false : { y: 10 }}
       animate={{ y: 0 }}
       transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-      className={`flex w-full overflow-hidden ${isMobile ? 'h-full' : 'h-screen'}`}
+      className="flex w-full overflow-hidden h-full"
       style={{
         backgroundColor: 'var(--color-bg-page)',
       }}
