@@ -7,6 +7,9 @@
       "blockedDescription": "The app changed while this tab was open. Reload to continue.",
       "reload": "Reload"
     },
+    "networkBanner": {
+      "offlineMessage": "You are offline. Data may be out of date until your connection returns."
+    },
     "copy": "Copy",
     "submit": "Submit",
     "save": "Save",
@@ -1080,9 +1083,6 @@
       "placeholderMobile": "Ask AI about market trends...",
       "placeholderDesktop": "Ask AI about market trends, specific stocks, or portfolio analysis..."
     },
-    "networkBanner": {
-      "offlineMessage": "Network offline — dashboard data may be stale until you reconnect."
-    },
     "newsFeedCard": {
       "tabMarket": "Market Pulse",
       "tabPortfolio": "Your Portfolio",
@@ -1236,6 +1236,7 @@
     "backToMain": "Back to main",
     "backToFlash": "Back to Flash",
     "reconnecting": "Reconnecting…",
+    "offlineHistoryLoad": "You are offline, so this conversation could not be refreshed. It will catch up when your connection returns.",
     "jumpToLatest": {
       "aria": "Scroll to latest message"
     },

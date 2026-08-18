@@ -16,6 +16,7 @@ import { REPORT_BACK_IDLE_MAX_REARMS } from '../../hooks/useReportBackWatch';
 import { createAssistantMessage, appendMessage, updateMessage } from '../../hooks/utils/messageHelpers';
 import { finalizeTodoListProcessesInMessages } from '../../hooks/utils/messageFinalizers';
 import { checkForNewBuild } from '@/lib/staleBuild';
+import { isOnline, waitForOnline } from '@/lib/network';
 import type { AssistantMessage } from '@/types/chat';
 import type { SSEEvent, HistoryInterruptInfo, StreamProcessorRefs } from '../types';
 import type { RecoveryRuntime } from '../runtime';
@@ -507,8 +508,12 @@ export const reconnectToStream = async (
 
 /**
  * Attempts to auto-reconnect after a mid-stream network disconnect.
- * Uses exponential backoff (1s, 2s, 4s, 8s, 16s) with up to 5 retries.
- * Falls back to cleanupAfterStreamEnd if workflow completes or retries exhaust.
+ *
+ * Two different failures, handled differently: a network that is present but
+ * unhappy gets 5 attempts on exponential backoff (1s, 2s, 4s, 8s — ~15s of
+ * delay), and a machine with no link at all is waited on rather than retried
+ * at, up to OFFLINE_CEILING_MS. Falls back to cleanupAfterStreamEnd when the
+ * workflow is no longer reconnectable or both budgets are spent.
  */
 export const attemptReconnectAfterDisconnect = async (
   rt: RecoveryRuntime,
@@ -517,22 +522,46 @@ export const attemptReconnectAfterDisconnect = async (
 ) => {
   const MAX_RETRIES = 5;
   const BASE_DELAY = 1000;
+  // Long, because the cost of waiting is a spinner while the cost of giving up
+  // is a truncated answer for a turn that is still running server-side.
+  const OFFLINE_CEILING_MS = 5 * 60 * 1000;
 
   rt.setIsReconnecting(true);
 
   // Target the latched thread, not the threadId prop: a first-turn disconnect
   // (background during a brand-new chat's first answer) still has the prop at
   // '__default__' while the real id lives in threadIdRef. Snapshot once so the
-  // ~31s retry loop stays pinned to the run we started reconnecting, matching
-  // the prior closure-captured semantics.
+  // retry loop stays pinned to the run we started reconnecting, matching the
+  // prior closure-captured semantics.
   const tid = rt.threadIdRef.current;
 
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+  // Wall-clock bound on waiting for a link, so a flapping connection cannot
+  // keep the loop alive indefinitely.
+  const offlineDeadline = Date.now() + OFFLINE_CEILING_MS;
+  let attempt = 0;
+
+  while (attempt < MAX_RETRIES) {
     if (!tid || tid === '__default__') break;
+
+    // An offline machine cannot be retried into working. Spending the budget
+    // against it is why this used to give up ~15s in, long before anyone has
+    // noticed their wifi dropped: every attempt fails instantly, so the whole
+    // allowance burns in setTimeout. Wait for the link instead, and do not
+    // charge the wait against the retries — they exist for a network that is
+    // present but unhappy, which is a different problem.
+    if (!isOnline()) {
+      const remaining = offlineDeadline - Date.now();
+      if (remaining <= 0 || !(await waitForOnline(remaining))) {
+        console.warn('[Reconnect] Still offline after the ceiling; giving up');
+        break;
+      }
+      continue;
+    }
 
     if (attempt > 0) {
       await new Promise((r) => setTimeout(r, BASE_DELAY * Math.pow(2, attempt - 1)));
     }
+    attempt += 1;
 
     try {
       const snapshotAtMs = Date.now();
@@ -542,7 +571,7 @@ export const attemptReconnectAfterDisconnect = async (
         break;
       }
 
-      console.log('[Reconnect] Attempt', attempt + 1, 'of', MAX_RETRIES);
+      console.log('[Reconnect] Attempt', attempt, 'of', MAX_RETRIES);
       // Mid-stream disconnect resumes from the retained cursor (no resetCursor),
       // so it does NOT replay the subagent projection — wiping the cards here
       // would strand a task spawned earlier in this same (unpersisted) turn with
@@ -553,11 +582,28 @@ export const attemptReconnectAfterDisconnect = async (
       rt.setIsReconnecting(false);
       return;
     } catch (err: unknown) {
-      console.warn('[Reconnect] Attempt', attempt + 1, 'failed:', (err as Error).message);
+      console.warn('[Reconnect] Attempt', attempt, 'failed:', (err as Error).message);
     }
   }
 
   rt.setIsReconnecting(false);
+
+  // Settle the bubble we gave up on. Nothing else does: cleanupAfterStreamEnd
+  // resets the *session* (isLoading, subagents, todos) but never touches the
+  // message, and the other stream-end paths each clear isStreaming themselves
+  // on their way out. Left set, the bubble keeps its loading animation forever
+  // while the composer has already flipped back to send — visibly alive, inert,
+  // and with its hover actions suppressed so it cannot even be retried.
+  // Deliberately narrow to this path rather than folded into
+  // cleanupAfterStreamEnd, which every other stream-end route also calls.
+  rt.setMessages((prev) =>
+    prev.map((m) =>
+      m.role === 'assistant' && m.id === assistantMessageId && m.isStreaming
+        ? { ...m, isStreaming: false }
+        : m,
+    ),
+  );
+
   cleanupAfterStreamEnd(rt, deps, assistantMessageId);
   // Reload conversation to show complete response after failed reconnection
   rt.setReloadTrigger((n) => n + 1);

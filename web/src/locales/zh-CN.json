@@ -7,6 +7,9 @@
       "blockedDescription": "此标签页打开期间应用版本已变更，请重新加载以继续。",
       "reload": "重新加载"
     },
+    "networkBanner": {
+      "offlineMessage": "网络已断开。恢复连接前，数据可能不是最新的。"
+    },
     "copy": "复制",
     "submit": "提交",
     "save": "保存",
@@ -1080,9 +1083,6 @@
       "placeholderMobile": "向 AI 询问市场趋势……",
       "placeholderDesktop": "向 AI 询问市场趋势、特定股票或投资组合分析……"
     },
-    "networkBanner": {
-      "offlineMessage": "网络离线 — 重新连接前，仪表板数据可能已过时。"
-    },
     "newsFeedCard": {
       "tabMarket": "市场动态",
       "tabPortfolio": "我的持仓",
@@ -1236,6 +1236,7 @@
     "backToMain": "返回主对话",
     "backToFlash": "返回 Flash",
     "reconnecting": "重新连接中…",
+    "offlineHistoryLoad": "网络已断开，无法刷新此对话。恢复连接后会自动同步。",
     "jumpToLatest": {
       "aria": "滚动到最新消息"
     },
