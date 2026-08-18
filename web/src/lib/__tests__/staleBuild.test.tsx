@@ -238,6 +238,22 @@ describe('reporting is once per session', () => {
     expect(toast).not.toHaveBeenCalled();
   });
 
+  it('dismisses a toast a boundary claims only after it was raised', () => {
+    // The deferral is not a bound on when the claim arrives. App.tsx warms the
+    // route chunk on mount while the setup gate is still resolving, so the
+    // import can reject long before Main — and the boundary in it — exists at
+    // all. By then there is no timer left to cancel, only a toast to retract.
+    const dismiss = vi.fn();
+    vi.mocked(toast).mockReturnValue({ id: '1', dismiss, update: vi.fn() });
+
+    reportStaleBuild('preload');
+    vi.runAllTimers();
+    expect(toast).toHaveBeenCalledTimes(1);
+
+    reportStaleBuild('chunk', { silent: true });
+    expect(dismiss).toHaveBeenCalledTimes(1);
+  });
+
   it('still raises the toast when no boundary claims the failure', () => {
     // The other half of the deferral. Main.tsx prefetches a route chunk and
     // swallows the rejection, so plenty of dead chunks never reach a boundary
@@ -406,6 +422,36 @@ describe('StaleBuildBoundary', () => {
       </Catcher>,
     );
     expect(screen.getByTestId('outer')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('propagates a falsy thrown value instead of re-rendering the children', async () => {
+    // `throw null` is legal, and a custom lazy loader can reject with it. Read
+    // through the thrown value's truthiness, that state looks like "nothing
+    // was thrown", so the boundary renders the children that just threw and
+    // they throw again — a loop where a rethrow was intended.
+    class Catcher extends React.Component<{ children: React.ReactNode }, { hit: boolean }> {
+      state = { hit: false };
+      static getDerivedStateFromError() {
+        return { hit: true };
+      }
+      render() {
+        return this.state.hit ? <div data-testid="outer" /> : this.props.children;
+      }
+    }
+    const Lazy = React.lazy(() => Promise.reject(null));
+
+    render(
+      <Catcher>
+        <React.Suspense fallback={<div data-testid="spinner" />}>
+          <StaleBuildBoundary variant="pane">
+            <Lazy />
+          </StaleBuildBoundary>
+        </React.Suspense>
+      </Catcher>,
+    );
+
+    expect(await screen.findByTestId('outer')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 

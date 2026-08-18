@@ -67,15 +67,19 @@ interface Props {
 }
 
 interface State {
+  /** Whether anything was thrown, which `error` alone cannot say — a rejected
+   *  loader may hand us `null` or `undefined`, and reading that as "no error"
+   *  re-renders the children that just threw, in a loop. */
+  caught: boolean;
   error: unknown;
   stale: boolean;
 }
 
 export class StaleBuildBoundary extends React.Component<Props, State> {
-  state: State = { error: null, stale: false };
+  state: State = { caught: false, error: null, stale: false };
 
   static getDerivedStateFromError(error: unknown): State {
-    return { error, stale: isStaleBuildError(error) };
+    return { caught: true, error, stale: isStaleBuildError(error) };
   }
 
   componentDidCatch(error: unknown): void {
@@ -94,9 +98,9 @@ export class StaleBuildBoundary extends React.Component<Props, State> {
   }
 
   render(): React.ReactNode {
-    const { error, stale } = this.state;
+    const { caught, error, stale } = this.state;
 
-    if (error && !stale) {
+    if (caught && !stale) {
       // React has no "decline to handle" API. Returning null here would make
       // React consider the error handled, re-render the same children, and
       // throw again in a loop. Throwing during render propagates to the next

@@ -91,6 +91,7 @@ let notified = false;
 let warned = false;
 let lastChecked = 0;
 let pendingToast: ReturnType<typeof setTimeout> | null = null;
+let activeToast: { dismiss: () => void } | null = null;
 
 export function markBooted(): void {
   window.__LA_BOOTED__ = true;
@@ -172,9 +173,19 @@ export function reportStaleBuild(reason: string, options?: { silent?: boolean })
   // Ahead of the latch on purpose. The boundary renders a full-pane card with
   // this same copy, and it has to be able to claim the failure even though
   // something else always reports it first — see BOUNDARY_CLAIM_MS.
-  if (options?.silent && pendingToast !== null) {
-    clearTimeout(pendingToast);
-    pendingToast = null;
+  //
+  // Both a pending and an already-raised toast, because the claim is not
+  // bounded by that timer. App.tsx warms the route chunk on mount while the
+  // setup gate is still resolving, so the import can reject seconds before the
+  // boundary exists to catch it; the deferral spares the common case a visible
+  // toast, and this spares the slow one a duplicate that outlives it.
+  if (options?.silent) {
+    if (pendingToast !== null) {
+      clearTimeout(pendingToast);
+      pendingToast = null;
+    }
+    activeToast?.dismiss();
+    activeToast = null;
   }
   if (notified) return;
   notified = true;
@@ -187,26 +198,27 @@ export function reportStaleBuild(reason: string, options?: { silent?: boolean })
 
   pendingToast = setTimeout(() => {
     pendingToast = null;
-    toast({
-      title: i18n.t('common.staleBuild.title'),
-      description: i18n.t('common.staleBuild.description'),
-      // Overrides the Toaster's 3s default (spread onto the Radix Toast). A
-      // notice that disappears before the user looks up is not a notice.
-      duration: Infinity,
-      // And exempt from the toast cap, which keeps only the newest few. This
-      // one is the oldest by construction, so it was always first out — three
-      // later notices of any kind took the app's only Reload control with
-      // them, and the latch above guarantees nothing raises it a second time.
-      pinned: true,
-      action: (
-        <ToastAction
-          altText={i18n.t('common.staleBuild.reload')}
-          onClick={() => window.location.reload()}
-        >
-          {i18n.t('common.staleBuild.reload')}
-        </ToastAction>
-      ),
-    });
+    activeToast =
+      toast({
+        title: i18n.t('common.staleBuild.title'),
+        description: i18n.t('common.staleBuild.description'),
+        // Overrides the Toaster's 3s default (spread onto the Radix Toast). A
+        // notice that disappears before the user looks up is not a notice.
+        duration: Infinity,
+        // And exempt from the toast cap, which keeps only the newest few. This
+        // one is the oldest by construction, so it was always first out — three
+        // later notices of any kind took the app's only Reload control with
+        // them, and the latch above guarantees nothing raises it a second time.
+        pinned: true,
+        action: (
+          <ToastAction
+            altText={i18n.t('common.staleBuild.reload')}
+            onClick={() => window.location.reload()}
+          >
+            {i18n.t('common.staleBuild.reload')}
+          </ToastAction>
+        ),
+      }) ?? null;
   }, BOUNDARY_CLAIM_MS);
 }
 
@@ -308,5 +320,6 @@ export function __resetStaleBuildForTests(): void {
   lastChecked = 0;
   if (pendingToast !== null) clearTimeout(pendingToast);
   pendingToast = null;
+  activeToast = null;
   delete window.__LA_STALE_BUILD__;
 }

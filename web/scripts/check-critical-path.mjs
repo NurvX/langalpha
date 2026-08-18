@@ -64,7 +64,17 @@ if (!assets.length) {
 // the whole version layer with no console line and no red test. This is the one
 // place both halves exist at once, so it is where they get compared.
 
-const moduleScripts = [...html.matchAll(/<script[^>]+type="module"[^>]+src="([^"]+)"/g)]
+// Attribute order carries no meaning in HTML, and requiring type before src is
+// not merely brittle here — it fails silently in the direction that matters. A
+// second entry written `<script src="…" type="module">` would go uncounted, so
+// this gate would still see exactly one and pass, while currentBuild()'s
+// `script[type="module"][src]` selector takes it as the first match and
+// compares the wrong filename for every visitor.
+const moduleScripts = [...html.matchAll(/<script\b([^>]*)>/g)]
+  .map(([, attrs]) => attrs)
+  .filter((attrs) => /\btype\s*=\s*"module"/.test(attrs))
+  .map((attrs) => /\bsrc\s*=\s*"([^"]+)"/.exec(attrs))
+  .filter(Boolean)
 
 // currentBuild() takes querySelector's first match. More than one module script
 // and it may read something that is not the entry, and then `build !== mine` is

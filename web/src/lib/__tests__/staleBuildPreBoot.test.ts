@@ -42,7 +42,11 @@ interface Harness {
   reloadsScheduled: () => number;
 }
 
-function boot({ booted = false, stamp }: { booted?: boolean; stamp?: unknown } = {}): Harness {
+function boot({
+  booted = false,
+  stamp,
+  rawStamp,
+}: { booted?: boolean; stamp?: unknown; rawStamp?: string } = {}): Harness {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
     url: `${ORIGIN}/dashboard`,
     runScripts: 'outside-only',
@@ -55,7 +59,11 @@ function boot({ booted = false, stamp }: { booted?: boolean; stamp?: unknown } =
     scheduled++;
     return 0;
   };
-  if (stamp !== undefined) win.sessionStorage.setItem(KEY, JSON.stringify(stamp));
+  // rawStamp writes the string as stored, which JSON.stringify cannot express:
+  // it turns Infinity into null, so the value that actually reaches the parser
+  // in the wild (`1e999`) is unreachable through `stamp`.
+  if (rawStamp !== undefined) win.sessionStorage.setItem(KEY, rawStamp);
+  else if (stamp !== undefined) win.sessionStorage.setItem(KEY, JSON.stringify(stamp));
   if (booted) win.__LA_BOOTED__ = true;
   (win as unknown as { eval: (s: string) => void }).eval(iife!);
   return { win, reloadsScheduled: () => scheduled };
@@ -83,11 +91,16 @@ function buildScript(win: Harness['win'], src: string): Element {
   return el;
 }
 
-/** The <link> Vite appends for a lazy chunk: rel=modulepreload, as=script. */
-function preloadLink(win: Harness['win'], href: string): Element {
+/**
+ * The two shapes Vite writes a JS preload in. `runtime` is what __vitePreload
+ * appends for a lazy chunk (verified against the shipped helper: `u ||
+ * (h.as = "script")`), and `document` is what the build bakes into index.html
+ * for the entry's vendor chunks — which carries no `as` at all.
+ */
+function preloadLink(win: Harness['win'], href: string, shape: 'runtime' | 'document'): Element {
   const el = win.document.createElement('link');
   el.setAttribute('rel', 'modulepreload');
-  el.setAttribute('as', 'script');
+  if (shape === 'runtime') el.setAttribute('as', 'script');
   el.setAttribute('href', href);
   return el;
 }
@@ -133,13 +146,21 @@ describe('it recognises a dead build asset by the element that failed', () => {
     expect(win.__LA_STALE_BUILD__).toBe('resource');
   });
 
-  it('classifies the modulepreload link Vite appends for a lazy chunk', () => {
+  it('classifies the runtime preload link Vite appends for a lazy chunk', () => {
     // Safari's whole story. Its import error names no URL, so both message
     // classifiers decline it, and the chunk never becomes a <script> — this
     // link is the only evidence that exists. Without it the boundary rethrows
     // and the pane goes blank, which is the failure the feature exists to fix.
     const { win } = boot({ booted: true });
-    fireResourceError(win, preloadLink(win, `${ORIGIN}/assets/MarketView-1111.js`));
+    fireResourceError(win, preloadLink(win, `${ORIGIN}/assets/MarketView-1111.js`, 'runtime'));
+    expect(win.__LA_STALE_BUILD__).toBe('resource');
+  });
+
+  it("classifies the document's own baked-in vendor preload, which has no as", () => {
+    // Same rel, different shape. Matching only on as="script" reads this one as
+    // somebody else's asset.
+    const { win } = boot({ booted: true });
+    fireResourceError(win, preloadLink(win, `${ORIGIN}/assets/vendor-react-1111.js`, 'document'));
     expect(win.__LA_STALE_BUILD__).toBe('resource');
   });
 
@@ -156,6 +177,13 @@ describe('it recognises a dead build asset by the element that failed', () => {
     css.setAttribute('rel', 'stylesheet');
     css.setAttribute('href', `${ORIGIN}/assets/index-1111.css`);
     fireResourceError(win, css);
+
+    // A preload that is not a script: same rel Vite falls back to, other `as`.
+    const font = win.document.createElement('link');
+    font.setAttribute('rel', 'preload');
+    font.setAttribute('as', 'font');
+    font.setAttribute('href', `${ORIGIN}/assets/Geist-1111.woff2`);
+    fireResourceError(win, font);
 
     expect(win.__LA_STALE_BUILD__).toBeUndefined();
   });
@@ -240,5 +268,45 @@ describe('before boot it reloads, but a bounded number of times', () => {
 
     expect(reloadsScheduled()).toBe(1);
     expect(JSON.parse(win.sessionStorage.getItem(KEY)!).n).toBe(1);
+  });
+
+  it.each([
+    ['an infinite count', '{"n":1e999}'],
+    ['a fractional count', '{"n":0.5}'],
+  ])('treats %s as no attempt yet', (_label, rawStamp) => {
+    // Both are numbers greater than zero, so a bare `> 0` test let them
+    // through: Infinity read as already past the cap, and a fraction counted
+    // up in steps below one, reaching the cap a document later than it should.
+    const { win, reloadsScheduled } = boot({ rawStamp });
+    firePreloadError(win, deadChunk);
+
+    expect(reloadsScheduled()).toBe(1);
+    expect(JSON.parse(win.sessionStorage.getItem(KEY)!).n).toBe(1);
+  });
+
+  it('offers the control when session storage will not hold the count', () => {
+    // Private mode or an exhausted quota. Reloading has to stay off — there is
+    // no way to bound it — but the tab is still blank, which is the thing this
+    // file exists to prevent, whatever the reason for it.
+    const { win, reloadsScheduled } = boot();
+    // Replaces the accessor, not the method: jsdom's Storage is proxy-backed,
+    // so assigning setItem on the instance does not shadow the real one and
+    // the write quietly succeeds.
+    Object.defineProperty(win, 'sessionStorage', {
+      configurable: true,
+      value: {
+        getItem: () => null,
+        removeItem: () => {},
+        setItem: () => {
+          throw new Error('QuotaExceededError');
+        },
+      },
+    });
+    firePreloadError(win, deadChunk);
+
+    expect(reloadsScheduled()).toBe(0);
+    const root = win.document.getElementById('root')!;
+    expect(root.querySelector('[role=alert]')).toBeTruthy();
+    expect(root.querySelector('button')).toBeTruthy();
   });
 });

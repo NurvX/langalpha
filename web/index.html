@@ -85,7 +85,12 @@
         function attemptsSoFar() {
           try {
             var raw = JSON.parse(sessionStorage.getItem(KEY) || '{}');
-            return typeof raw.n === 'number' && raw.n > 0 ? raw.n : 0;
+            // Finite integers only. `1e999` parses as Infinity and a fraction
+            // counts up in steps smaller than one, so neither is a plain count
+            // of documents and neither reaches the cap where it should.
+            if (typeof raw.n !== 'number' || !isFinite(raw.n)) return 0;
+            var n = Math.floor(raw.n);
+            return n > 0 ? n : 0;
           } catch (e) {
             return 0;
           }
@@ -138,10 +143,13 @@
           try {
             sessionStorage.setItem(KEY, JSON.stringify({ n: attempts + 1 }));
           } catch (e) {
-            // No session storage means no way to count the attempts, and an
-            // unbounded reload loop hammering the origin is worse than the
-            // blank page it is trying to fix. Do nothing instead.
-            return;
+            // Blocked or full session storage means no way to count the
+            // attempts, and an unbounded reload loop hammering the origin is
+            // worse than the blank page it is trying to fix. Reloading is off,
+            // but the user still gets the control — returning here is how this
+            // whole file's failure looks, and a blank page is a blank page
+            // whatever the reason for it.
+            return showDeadEnd();
           }
           // Only works because the document itself is deliberately not
           // long-cached, so this refetches it and gets the new asset names with
@@ -160,9 +168,14 @@
           // /assets/ also holds CSS, fonts and images, and a stylesheet or
           // <img> that blips would otherwise be read as a dead build and
           // reload the page under a user whose build is current — so the link
-          // branch is narrowed by as="script", which Vite sets on every
-          // non-CSS dep (including the older rel="preload" fallback) and on
-          // nothing else.
+          // branch takes only the two shapes Vite writes a JS preload in, and
+          // it writes them differently depending on where. The ones it appends
+          // at runtime carry as="script", with rel varying because it falls
+          // back to "preload" where modulepreload is unsupported. The ones it
+          // bakes into this document for the entry's own vendor chunks are
+          // rel="modulepreload" with no as at all. Neither shape admits a
+          // stylesheet, font or image: those are rel="stylesheet", or
+          // rel="preload" with some other as.
           //
           // That branch is the whole Safari story. Safari's import error names
           // no URL, so neither the message classifier below nor the one in
@@ -170,10 +183,11 @@
           // nothing setting it: the chunk never becomes a <script>, only a
           // <link>. Without this the boundary rethrows a dead Safari chunk and
           // the pane goes blank — the failure this file exists to remove.
+          var rel = el.rel || (el.getAttribute ? el.getAttribute('rel') : null);
           var as = el.as || (el.getAttribute ? el.getAttribute('as') : null);
           var url;
           if (el.tagName === 'SCRIPT') url = el.src;
-          else if (el.tagName === 'LINK' && as === 'script') url = el.href;
+          else if (el.tagName === 'LINK' && (rel === 'modulepreload' || as === 'script')) url = el.href;
           else return;
           if (isBuildAsset(url)) recover('resource');
         }, true);
