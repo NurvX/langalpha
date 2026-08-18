@@ -114,3 +114,20 @@ docs/pr_context/
 
 /deploy.sh
 /deploy/lib/
+
+# Deploy-time serving config for the hosted build, generated rather than
+# authored here. Listed in this file rather than only in .git/info/exclude
+# because that one does not travel: a fresh clone would not ignore these, and
+# the first person to generate them would be invited to commit them.
+#
+# wrangler.jsonc names a production host and zone, so it stays out of a public
+# tree on its own account. public/_headers carries no hostname, but its
+# `/assets/* immutable` rule is only safe alongside a server that answers a
+# missing asset with a real 404 — over an SPA fallback it caches HTML at an
+# asset URL for a year, and pinned vendor hashes mean the next build still
+# references that URL. Shipping _headers without the config that makes misses
+# 404 would hand a self-hoster exactly that combination, so the set travels
+# together or not at all.
+/web/wrangler.jsonc
+/web/workers/
+/web/public/_headers

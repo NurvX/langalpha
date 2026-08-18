@@ -1,5 +1,12 @@
 {
   "common": {
+    "staleBuild": {
+      "title": "This tab is out of date with the server",
+      "description": "The server is serving a different build than this tab loaded. Reload to switch to it.",
+      "blockedTitle": "This page could not load",
+      "blockedDescription": "The app changed while this tab was open. Reload to continue.",
+      "reload": "Reload"
+    },
     "copy": "Copy",
     "submit": "Submit",
     "save": "Save",

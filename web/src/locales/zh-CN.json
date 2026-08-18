@@ -1,5 +1,12 @@
 {
   "common": {
+    "staleBuild": {
+      "title": "此标签页与服务器版本不一致",
+      "description": "服务器提供的版本与此标签页加载的版本不同，重新加载即可切换。",
+      "blockedTitle": "页面加载失败",
+      "blockedDescription": "此标签页打开期间应用版本已变更，请重新加载以继续。",
+      "reload": "重新加载"
+    },
     "copy": "复制",
     "submit": "提交",
     "save": "保存",

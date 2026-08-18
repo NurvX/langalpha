@@ -15,6 +15,7 @@ import { ZERO_USAGE } from '../../utils/tokenUsage';
 import { REPORT_BACK_IDLE_MAX_REARMS } from '../../hooks/useReportBackWatch';
 import { createAssistantMessage, appendMessage, updateMessage } from '../../hooks/utils/messageHelpers';
 import { finalizeTodoListProcessesInMessages } from '../../hooks/utils/messageFinalizers';
+import { checkForNewBuild } from '@/lib/staleBuild';
 import type { AssistantMessage } from '@/types/chat';
 import type { SSEEvent, HistoryInterruptInfo, StreamProcessorRefs } from '../types';
 import type { RecoveryRuntime } from '../runtime';
@@ -575,6 +576,10 @@ export const cleanupAfterStreamEnd = (
   rt.setWorkspaceStarting(false);
   rt.setIsCompacting(false);
   deps.clearModelStatus();
+  // A settled turn is the cheapest moment to learn the edge has moved on: the
+  // user is between actions, so a reload costs them nothing. Throttled, and
+  // silent on every ambiguity.
+  void checkForNewBuild();
   rt.currentMessageRef.current = null;
   releaseStreamOwnership(rt);
 
