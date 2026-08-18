@@ -24,6 +24,8 @@ describe('NetworkBanner', () => {
       window.dispatchEvent(new Event('offline'));
     });
     expect(screen.getByRole('status')).toBeInTheDocument();
-    expect(screen.getByText(/network offline/i)).toBeInTheDocument();
+    // Match the copy, not the key: "offlineMessage" contains "offline", so a
+    // regex on that word passes even when the translation is missing entirely.
+    expect(screen.getByText(/data may be out of date/i)).toBeInTheDocument();
   });
 });
