@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <!-- This build reserves the strip macOS window buttons float over, so a
+         desktop shell may hide the titlebar and hand the top of the window to
+         it. Read by the shell after load; see watchChrome in desktop/src/main.js.
+
+         A declaration and not something the shell measures: the reservation is
+         only painted once the shell says the titlebar is gone, so measuring it
+         would only find the shell's own last answer. Here in <head> rather than
+         emitted by the bundle so it is also true on the screens a first launch
+         opens on, which are the ones with no sidebar to measure. -->
+    <meta name="langalpha-window-chrome" content="reserves" />
     <script>
       (function(){
         var d = document.documentElement;
@@ -227,6 +237,26 @@
         });
       })();
     </script>
+    <script>
+      (function () {
+        // The desktop shell's preload has already run, so the bridge is here to
+        // be read. Stamping a class rather than reaching into the bundle keeps
+        // this working when the bundle is what failed.
+        //
+        // `windowChrome` is the shell's answer for this window, and the only
+        // honest one: the frame is decided per window and per install, so macOS
+        // alone does not imply the titlebar is gone. Guessing from the platform
+        // is what reserved a strip under a titlebar that was really there. An
+        // older shell does not send it, and there the platform guess is still
+        // the best available answer.
+        var shell = window.langalphaDesktop;
+        if (!shell) return;
+        var hidden = shell.windowChrome
+          ? shell.windowChrome === 'hidden'
+          : shell.platform === 'darwin';
+        if (hidden) document.documentElement.classList.add('desktop-mac');
+      })();
+    </script>
     <style>
       @view-transition { navigation: auto; }
       /* color-scheme drives the browser's pre-paint clear color: without it a
@@ -235,6 +265,25 @@
          a visible flash of the wrong ground on every reload. */
       html { background: #191919; color-scheme: dark; }
       html[data-theme="light"] { background: #FFFFFF; color-scheme: light; }
+
+      /* macOS desktop shell: `hiddenInset` hands the whole titlebar to the page,
+         so the page owes it a corner the window buttons can float over and a
+         region the window can be dragged by. Here rather than in the bundle for
+         two reasons: it must exist on every route, including the ones with no
+         sidebar (a login screen that reserves nothing tells the shell this build
+         reserves nothing), and a window whose entry chunk never ran still has to
+         be movable. Wide enough to cover the buttons and no wider — the rest of
+         the top row holds real controls. */
+      #window-drag { display: none; position: fixed; top: 0; left: 0; width: 120px; height: 38px; z-index: 9999; -webkit-app-region: drag; }
+      html.desktop-mac #window-drag { display: block; }
+      /* ...and stands down the moment the sidebar renders its own strip. This
+         one is fixed and above everything, so while the app is up it also sits
+         on top of the main column: the collapsed sidebar is 80px and this is
+         120px, and a control in that 40px cannot take its clicks back — an
+         element's `no-drag` loses to a drag region painted over it. The handover
+         is `:has` rather than a class the app sets, because the condition IS the
+         real strip existing, and asking about it directly cannot drift. */
+      html.desktop-mac:has(.sidebar-window-drag) #window-drag { display: none; }
     </style>
     <link rel="icon" type="image/svg+xml" href="/logo-favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -252,6 +301,7 @@
         if (favicon) favicon.href = t === 'light' ? '/logo-favicon.svg' : '/logo-favicon-dark.svg';
       })();
     </script>
+    <div id="window-drag" aria-hidden="true"></div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
