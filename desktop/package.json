@@ -3,6 +3,11 @@
   "version": "0.1.1",
   "private": true,
   "description": "Desktop shell for LangAlpha",
+  "homepage": "https://langalpha.ai",
+  "author": {
+    "name": "Ginlix AI",
+    "email": "contact@ginlix.ai"
+  },
   "main": "src/index.js",
   "packageManager": "pnpm@10.18.1",
   "scripts": {
