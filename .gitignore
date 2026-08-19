@@ -131,3 +131,16 @@ docs/pr_context/
 /web/wrangler.jsonc
 /web/workers/
 /web/public/_headers
+
+# Desktop shell
+# build.json carries the packaged edition's origins. Where a build points is
+# deployment configuration, not source, so it arrives at package time the same
+# way a .env does; config/default.json (committed) is the OSS/localhost fallback.
+# node_modules/ and dist/ above already cover the rest. Packaging resources live
+# in desktop/resources/, NOT desktop/build/, because the Python `build/` rule at
+# the top of this file would silently swallow them.
+/desktop/config/build.json
+/desktop/resources/icon.png
+# Written by scripts/build.mjs to inject the update feed, and removed again after
+# the build. Tracked here only so a crashed build cannot leave a feed URL behind.
+/desktop/.electron-builder.resolved.yml
