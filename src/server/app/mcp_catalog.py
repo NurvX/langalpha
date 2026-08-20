@@ -1,4 +1,4 @@
-"""User-level MCP server API — the Connectors backing store.
+"""User-level MCP server API — the Plugins backing store.
 
 An ``enabled`` row is live config: ``resolve_mcp_config`` inherits it into
 every one of the user's workspaces. A disabled row is inert — a stored
@@ -15,6 +15,8 @@ Endpoints (user-scoped):
 - PUT    /api/v1/mcp/servers/{name}
 - PATCH  /api/v1/mcp/servers/{name}/enabled
 - DELETE /api/v1/mcp/servers/{name}
+- GET    /api/v1/mcp/builtin-servers
+- PATCH  /api/v1/mcp/builtin-servers/{name}/enabled
 """
 
 from __future__ import annotations
@@ -37,7 +39,11 @@ from src.server.database.mcp_servers import (
     delete_catalog_server,
     get_catalog_server,
     list_catalog_servers,
+    list_local_servers_for_user,
+    list_scope_markers_for_user,
+    list_user_builtin_disables,
     set_catalog_server_enabled,
+    set_user_builtin_disable,
     update_catalog_server,
 )
 from src.server.database.mcp_tool_schemas import get_user_tool_schemas
@@ -46,10 +52,13 @@ from src.server.database.user_vault_secrets import (
     get_user_secret_names,
 )
 from src.server.models.mcp_server import (
+    BuiltinServer,
+    BuiltinServerList,
     CatalogServer,
     CatalogServerList,
     EnabledInput,
     McpServerInput,
+    WorkspaceScopedServer,
     _format_validation_error,
     catalog_row_to_response,
     isolation_warnings,
@@ -147,20 +156,51 @@ async def _write_warnings(user_id: str, server: McpServerInput) -> list[str] | N
 
 @router.get("/servers")
 @handle_api_exceptions("list MCP catalog servers", logger)
-async def list_servers(user_id: CurrentUserId) -> CatalogServerList:
+async def list_servers(
+    user_id: CurrentUserId, all_scopes: bool = False
+) -> CatalogServerList:
+    """The user's catalog; ``all_scopes`` adds the scope-management inventory:
+    per-server tombstone workspaces (the "active in" deny-list) and every
+    workspace-local server across the user's workspaces."""
     rows = await list_catalog_servers(user_id)
     oauth = await _oauth_status_by_server(user_id)
     tool_counts = await _tool_counts_by_server(user_id, rows)
-    return CatalogServerList(
-        servers=[
-            catalog_row_to_response(
-                r,
-                oauth_status=oauth.get(r["name"]),
-                tool_count=tool_counts.get(r["name"]),
+    servers = [
+        catalog_row_to_response(
+            r,
+            oauth_status=oauth.get(r["name"]),
+            tool_count=tool_counts.get(r["name"]),
+        )
+        for r in rows
+    ]
+    workspace_servers: list[WorkspaceScopedServer] = []
+    if all_scopes:
+        markers = await list_scope_markers_for_user(user_id)
+        tombstoned: dict[str, list[str]] = {}
+        for m in markers:
+            if m["source"] == "user":
+                tombstoned.setdefault(m["name"], []).append(m["workspace_id"])
+        for server in servers:
+            server.disabled_workspace_ids = sorted(
+                tombstoned.get(server.name, [])
             )
-            for r in rows
-        ],
+        catalog_names = {r["name"] for r in rows}
+        for local in await list_local_servers_for_user(user_id, live_only=True):
+            config = local.get("config") or {}
+            workspace_servers.append(
+                WorkspaceScopedServer(
+                    name=local["name"],
+                    workspace_id=local["workspace_id"],
+                    transport=config.get("transport") or "stdio",
+                    enabled=bool(local["enabled"]),
+                    description=config.get("description") or "",
+                    shadows_inherited=local["name"] in catalog_names,
+                )
+            )
+    return CatalogServerList(
+        servers=servers,
         max_servers=MAX_CATALOG_SERVERS_PER_USER,
+        workspace_servers=workspace_servers,
     )
 
 
@@ -301,10 +341,10 @@ async def import_servers(
             current_count=len(existing_names),
             cap=MAX_CATALOG_SERVERS_PER_USER,
             cap_message=(
-                f"Connectors server cap "
+                f"Plugins server cap "
                 f"({MAX_CATALOG_SERVERS_PER_USER}) reached"
             ),
-            exists_message="already exists in your Connectors",
+            exists_message="already exists in your Plugins",
             existing_secret_names=set(await get_user_secret_names(user_id)),
             create_secret=create_secret,
             persist=persist,
@@ -399,3 +439,59 @@ async def delete_server(name: str, user_id: CurrentUserId) -> dict:
     # is an accepted write.
     await disconnect_server(user_id, name)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Builtins — process-global servers with a per-user account-wide toggle
+# ---------------------------------------------------------------------------
+
+
+@router.get("/builtin-servers")
+@handle_api_exceptions("list builtin MCP servers", logger)
+async def list_builtin_servers(
+    user_id: CurrentUserId, all_scopes: bool = False
+) -> BuiltinServerList:
+    """The process-global builtins with this user's account-wide enabled state.
+
+    A separate route from the catalog list on purpose: builtins are config,
+    not rows, and the catalog wire shape stays untouched. ``all_scopes`` adds
+    each builtin's per-workspace disable-markers for the "active in" checklist.
+    """
+    from src.server.app import setup
+
+    if setup.agent_config is None:
+        # Startup race: report an empty list rather than 500.
+        return BuiltinServerList(servers=[])
+    disabled = await list_user_builtin_disables(user_id)
+    marked: dict[str, list[str]] = {}
+    if all_scopes:
+        for m in await list_scope_markers_for_user(user_id):
+            if m["source"] == "builtin":
+                marked.setdefault(m["name"], []).append(m["workspace_id"])
+    return BuiltinServerList(
+        servers=[
+            BuiltinServer(
+                name=s.name,
+                description=s.description or "",
+                transport=s.transport,
+                enabled=s.name not in disabled,
+                disabled_workspace_ids=sorted(marked.get(s.name, [])),
+            )
+            for s in setup.agent_config.mcp.servers
+            if getattr(s, "enabled", True)
+        ]
+    )
+
+
+@router.patch("/builtin-servers/{name}/enabled")
+@handle_api_exceptions("toggle builtin MCP server", logger)
+async def set_builtin_enabled(
+    name: str, body: EnabledInput, user_id: CurrentUserId
+) -> dict:
+    """Account-wide toggle for a builtin — applies to every workspace of the
+    user, and no workspace marker can re-enable it. The DB layer fans the
+    ``mcp_config_version`` bump out in the same transaction."""
+    if name not in builtin_names():
+        raise HTTPException(status_code=404, detail="Unknown builtin server")
+    await set_user_builtin_disable(user_id, name, disabled=not body.enabled)
+    return {"name": name, "enabled": body.enabled}

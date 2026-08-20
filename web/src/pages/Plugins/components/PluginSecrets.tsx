@@ -9,13 +9,13 @@ import { SecretsManager } from '@/pages/ChatAgent/components/vault/SecretsManage
 import { revealUserVaultSecret } from '@/pages/ChatAgent/utils/api';
 
 /**
- * The Connectors → Secrets tab: user-level vault CRUD. These secrets back
+ * The Plugins → Secrets tab: user-level vault CRUD. These secrets back
  * `${vault:NAME}` refs on inherited (user-level) MCP servers and are merged
  * into every sandbox push — a same-named workspace secret wins, so a
  * workspace can always override a user default.
  */
 
-export function ConnectorSecrets() {
+export function PluginSecrets() {
   const { t } = useTranslation();
   const { data, isLoading, error: loadError } = useUserVaultSecrets();
   const createMutation = useCreateUserVaultSecret();
@@ -27,7 +27,7 @@ export function ConnectorSecrets() {
 
   return (
     <SecretsManager
-      title={t('connectors.secrets.title')}
+      title={t('plugins.secrets.title')}
       secrets={secrets.map((s) => ({
         id: s.user_vault_secret_id,
         name: s.name,
@@ -37,8 +37,8 @@ export function ConnectorSecrets() {
       maxSecrets={maxSecrets}
       loading={isLoading}
       loadError={loadError ? (loadError as { message?: string })?.message || t('vault.loadFailed') : null}
-      hint={t('connectors.secrets.scopeHint')}
-      emptyText={t('connectors.secrets.empty')}
+      hint={t('plugins.secrets.scopeHint')}
+      emptyText={t('plugins.secrets.empty')}
       onCreate={(body) => createMutation.mutateAsync(body)}
       onUpdate={(name, body) => updateMutation.mutateAsync({ name, body })}
       onDelete={(name) => deleteMutation.mutateAsync(name)}

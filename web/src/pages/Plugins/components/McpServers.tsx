@@ -19,7 +19,11 @@ import {
   useImportMcpCatalogServers,
   useDisconnectMcpOauth,
   useRefreshMcpOauthSchemas,
+  useSetMcpServerEnabledInWorkspace,
+  useAdoptMcpServerToWorkspace,
+  usePromoteMcpServerToTemplate,
 } from '@/hooks/useMcpServers';
+import { useWorkspaces } from '@/hooks/useWorkspaces';
 import { useUserVaultSecrets, useCreateUserVaultSecret } from '@/hooks/useUserVault';
 import { McpServerModal } from '@/pages/ChatAgent/components/mcp/McpServerModal';
 import { McpImportModal } from '@/pages/ChatAgent/components/mcp/McpImportModal';
@@ -29,6 +33,9 @@ import {
   needsOauthConnect,
 } from '@/pages/ChatAgent/components/mcp/mcpState';
 import { useMcpServerList } from '@/pages/ChatAgent/components/mcp/useMcpServerList';
+import { BuiltinMcpSection } from './BuiltinMcpSection';
+import { ScopeControl } from './ScopeControl';
+import type { ScopeWorkspace } from './ScopeControl';
 import {
   ConfirmStrip,
   EnabledToggle,
@@ -37,6 +44,7 @@ import {
   ListError,
   ListSkeleton,
   ListToolbar,
+  SectionHeader,
   ServerNameLine,
   ServerRowShell,
   TagBadge,
@@ -45,10 +53,11 @@ import {
   formatApiErrorDetail,
   startMcpOauth,
   type CatalogServer,
+  type WorkspaceScopedMcpServer,
 } from '@/pages/ChatAgent/utils/api';
 
 /**
- * The Connectors → Servers tab: the user-level MCP server list. An enabled row
+ * The Plugins → MCP tab, `Your servers` section: the user-level MCP server list. An enabled row
  * is inherited by EVERY workspace of the user; a disabled row is an inert
  * template. Remote (http) servers carry the OAuth connect lifecycle — the
  * vendor bearer never leaves the host, so "Connect" here is all a sandbox
@@ -61,7 +70,7 @@ import {
  * lives here is the OAuth lifecycle, which the workspace tab has no version of.
  */
 
-export function ConnectorServers() {
+export function McpServers() {
   const { t } = useTranslation();
   const { data: catalog, isLoading, error } = useMcpCatalog();
   const { data: vault } = useUserVaultSecrets();
@@ -73,6 +82,10 @@ export function ConnectorServers() {
   const disconnectMutation = useDisconnectMcpOauth();
   const refreshMutation = useRefreshMcpOauthSchemas();
   const createSecretMutation = useCreateUserVaultSecret();
+  const wsEnableMutation = useSetMcpServerEnabledInWorkspace();
+  const adoptMutation = useAdoptMcpServerToWorkspace();
+  const moveUpMutation = usePromoteMcpServerToTemplate();
+  const { data: wsData } = useWorkspaces({ limit: 100 });
 
   const {
     modalOpen,
@@ -100,43 +113,114 @@ export function ConnectorServers() {
     // confirms first — and stays up if the delete fails, to retry or cancel.
     confirmBeforeDelete: true,
     onSaveWarnings: (warnings) =>
-      toast({ title: t('connectors.servers.warningTitle'), description: warnings.join('\n') }),
+      toast({ title: t('plugins.servers.warningTitle'), description: warnings.join('\n') }),
     onToggleWarnings: (warnings) =>
-      toast({ title: t('connectors.servers.enabledWithWarnings'), description: warnings.join('\n') }),
+      toast({ title: t('plugins.servers.enabledWithWarnings'), description: warnings.join('\n') }),
     onToggleError: (err) =>
       toast({
         variant: 'destructive',
-        title: t('connectors.servers.toggleFailed'),
+        title: t('plugins.servers.toggleFailed'),
         description: formatApiErrorDetail(err),
       }),
     onDeleteError: (err) =>
       toast({
         variant: 'destructive',
-        title: t('connectors.servers.deleteFailed'),
+        title: t('plugins.servers.deleteFailed'),
         description: formatApiErrorDetail(err),
       }),
   });
 
   const [connectingName, setConnectingName] = useState<string | null>(null);
   const [refreshingName, setRefreshingName] = useState<string | null>(null);
+  const [movingName, setMovingName] = useState<string | null>(null);
+  const [wsTogglingKey, setWsTogglingKey] = useState<string | null>(null);
 
   const secretNames = (vault?.secrets ?? []).map((s) => s.name);
   const servers = catalog?.servers ?? [];
   const maxServers = catalog?.max_servers ?? 0;
   const atCap = maxServers > 0 && servers.length >= maxServers;
 
+  const workspaces = (
+    (wsData as { workspaces?: { workspace_id: string; name?: string }[] })
+      ?.workspaces ?? []
+  );
+  const wsOptions: ScopeWorkspace[] = workspaces.map((w) => ({
+    id: w.workspace_id,
+    name: w.name || t('plugins.scope.unknownWorkspace'),
+  }));
+  const wsNameById = new Map(wsOptions.map((w) => [w.id, w.name]));
+
+  const workspaceServers = catalog?.workspace_servers ?? [];
+  const byWorkspace = new Map<string, WorkspaceScopedMcpServer[]>();
+  for (const s of workspaceServers) {
+    byWorkspace.set(s.workspace_id, [...(byWorkspace.get(s.workspace_id) ?? []), s]);
+  }
+  const workspaceSections = [...byWorkspace.entries()].sort(([a], [b]) =>
+    (wsNameById.get(a) ?? '').localeCompare(wsNameById.get(b) ?? ''),
+  );
+
+  async function handleSetWorkspaceDisabled(
+    name: string,
+    workspaceId: string,
+    disabled: boolean,
+  ) {
+    // Keyed by row so one row's in-flight toggle doesn't lock its siblings.
+    setWsTogglingKey(`${workspaceId}:${name}`);
+    try {
+      await wsEnableMutation.mutateAsync({ workspaceId, name, enabled: !disabled });
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: t('plugins.servers.toggleFailed'),
+        description: formatApiErrorDetail(err),
+      });
+    } finally {
+      setWsTogglingKey(null);
+    }
+  }
+
+  async function handleAdopt(name: string, workspaceId: string) {
+    setMovingName(name);
+    try {
+      await adoptMutation.mutateAsync({ workspaceId, name });
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: t('plugins.scope.moveFailed'),
+        description: formatApiErrorDetail(err),
+      });
+    } finally {
+      setMovingName(null);
+    }
+  }
+
+  async function handleMoveUp(workspaceId: string, name: string) {
+    setMovingName(name);
+    try {
+      await moveUpMutation.mutateAsync({ workspaceId, name, removeSource: true });
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: t('plugins.scope.moveFailed'),
+        description: formatApiErrorDetail(err),
+      });
+    } finally {
+      setMovingName(null);
+    }
+  }
+
   async function handleConnect(name: string) {
     setConnectingName(name);
     try {
-      const { authorize_url } = await startMcpOauth(name, '/connectors');
+      const { authorize_url } = await startMcpOauth(name, '/plugins?tab=mcp');
       // Full-page navigation into the vendor's consent screen; the backend
-      // callback lands back on /connectors with ?mcp_connected / ?mcp_error.
+      // callback lands back on /plugins with ?mcp_connected / ?mcp_error.
       window.location.assign(authorize_url);
     } catch (err) {
       setConnectingName(null);
       toast({
         variant: 'destructive',
-        title: t('connectors.oauth.connectFailed'),
+        title: t('plugins.oauth.connectFailed'),
         description: formatApiErrorDetail(err),
       });
     }
@@ -146,13 +230,13 @@ export function ConnectorServers() {
     try {
       await disconnectMutation.mutateAsync(name);
       toast({
-        title: t('connectors.oauth.disconnectedTitle'),
-        description: t('connectors.oauth.disconnectedDesc', { server: name }),
+        title: t('plugins.oauth.disconnectedTitle'),
+        description: t('plugins.oauth.disconnectedDesc', { server: name }),
       });
     } catch (err) {
       toast({
         variant: 'destructive',
-        title: t('connectors.oauth.disconnectFailed'),
+        title: t('plugins.oauth.disconnectFailed'),
         description: formatApiErrorDetail(err),
       });
     }
@@ -164,8 +248,8 @@ export function ConnectorServers() {
       const result = await refreshMutation.mutateAsync(name);
       if (result.status === 'ok' && !result.error) {
         toast({
-          title: t('connectors.oauth.refreshedTitle'),
-          description: t('connectors.oauth.refreshedDesc', {
+          title: t('plugins.oauth.refreshedTitle'),
+          description: t('plugins.oauth.refreshedDesc', {
             server: name,
             count: result.tool_count,
           }),
@@ -178,8 +262,8 @@ export function ConnectorServers() {
         // stays out of the copy: it can be a raw connection error against a
         // user-chosen address, i.e. an internal-reachability oracle.
         toast({
-          title: t('connectors.oauth.refreshFailedStaleTitle'),
-          description: t('connectors.oauth.refreshFailedStaleDesc', {
+          title: t('plugins.oauth.refreshFailedStaleTitle'),
+          description: t('plugins.oauth.refreshFailedStaleDesc', {
             server: name,
             count: result.tool_count,
           }),
@@ -187,14 +271,14 @@ export function ConnectorServers() {
       } else {
         toast({
           variant: 'destructive',
-          title: t('connectors.oauth.refreshFailed'),
+          title: t('plugins.oauth.refreshFailed'),
           description: result.error || result.status,
         });
       }
     } catch (err) {
       toast({
         variant: 'destructive',
-        title: t('connectors.oauth.refreshFailed'),
+        title: t('plugins.oauth.refreshFailed'),
         description: formatApiErrorDetail(err),
       });
     } finally {
@@ -204,9 +288,11 @@ export function ConnectorServers() {
 
   return (
     <div className="flex flex-col gap-3">
+      <BuiltinMcpSection />
+
       <ListToolbar
         icon={Server}
-        title={t('mcp.list.title')}
+        title={t('plugins.mcp.yours')}
         count={servers.length}
         max={maxServers}
         atCap={atCap}
@@ -215,7 +301,7 @@ export function ConnectorServers() {
       />
 
       <p className="text-[0.6875rem]" style={{ color: 'var(--color-text-tertiary)' }}>
-        {t('connectors.servers.inheritHint')}
+        {t('plugins.servers.inheritHint')}
       </p>
 
       {error ? (
@@ -225,7 +311,7 @@ export function ConnectorServers() {
       ) : isLoading ? (
         <ListSkeleton />
       ) : servers.length === 0 ? (
-        <ListEmpty>{t('connectors.servers.empty')}</ListEmpty>
+        <ListEmpty>{t('plugins.servers.empty')}</ListEmpty>
       ) : (
         <div className="flex flex-col gap-1.5">
           <AnimatePresence initial={false}>
@@ -235,7 +321,7 @@ export function ConnectorServers() {
               return (
                 <ServerRowShell
                   key={server.name}
-                  testid={`connector-row-${server.name}`}
+                  testid={`server-row-${server.name}`}
                   main={
                     <>
                       <ServerNameLine icon={Server} name={server.name}>
@@ -258,8 +344,8 @@ export function ConnectorServers() {
                           style={{ color: server.enabled ? 'var(--color-text-secondary)' : 'var(--color-text-tertiary)' }}
                         >
                           {server.enabled
-                            ? t('connectors.servers.enabledState')
-                            : t('connectors.servers.disabledState')}
+                            ? t('plugins.servers.enabledState')
+                            : t('plugins.servers.disabledState')}
                         </span>
                       </div>
 
@@ -283,9 +369,35 @@ export function ConnectorServers() {
                           {connectingName === server.name
                             ? <Loader size={12} className="text-current" />
                             : <Link2 className="h-3 w-3" />}
-                          {status ? t('connectors.oauth.reconnect') : t('connectors.oauth.connect')}
+                          {status ? t('plugins.oauth.reconnect') : t('plugins.oauth.connect')}
                         </button>
                       )}
+
+                      <ScopeControl
+                        workspaces={wsOptions}
+                        scopeWorkspaceId={null}
+                        disabledWorkspaceIds={server.disabled_workspace_ids ?? []}
+                        checklistLocked={!server.enabled}
+                        busy={
+                          movingName === server.name ||
+                          // Names cannot contain ':', so the suffix match is
+                          // exact per row.
+                          !!wsTogglingKey?.endsWith(`:${server.name}`)
+                        }
+                        moveBlockedReason={
+                          // OAuth connections exist only at the user tier, so a
+                          // connected server cannot move into a workspace.
+                          status && status !== 'revoked'
+                            ? t('plugins.scope.moveOauthBlocked')
+                            : null
+                        }
+                        onSetWorkspaceDisabled={(wsId, disabled) =>
+                          handleSetWorkspaceDisabled(server.name, wsId, disabled)
+                        }
+                        onMove={(toWorkspaceId) => {
+                          if (toWorkspaceId) handleAdopt(server.name, toWorkspaceId);
+                        }}
+                      />
 
                       {/* Enabled toggle — fans out to every workspace */}
                       <EnabledToggle
@@ -310,13 +422,13 @@ export function ConnectorServers() {
                           {oauthEligible && status === 'connected' && (
                             <DropdownMenuItem onSelect={() => handleRefreshSchemas(server.name)}>
                               <RefreshCw className="h-3.5 w-3.5 mr-2" />
-                              {t('connectors.oauth.refreshSchemas')}
+                              {t('plugins.oauth.refreshSchemas')}
                             </DropdownMenuItem>
                           )}
                           {oauthEligible && canDisconnectOauth(status) && (
                             <DropdownMenuItem onSelect={() => handleDisconnect(server.name)}>
                               <Link2Off className="h-3.5 w-3.5 mr-2" />
-                              {t('connectors.oauth.disconnect')}
+                              {t('plugins.oauth.disconnect')}
                             </DropdownMenuItem>
                           )}
                           <DropdownMenuItem onSelect={() => requestDelete(server)} variant="destructive">
@@ -334,11 +446,80 @@ export function ConnectorServers() {
         </div>
       )}
 
+      {workspaceSections.map(([wsId, wsServers]) => (
+        <div key={wsId} className="flex flex-col gap-1.5">
+          <SectionHeader>
+            {t('plugins.scope.inWorkspace', {
+              name: wsNameById.get(wsId) ?? t('plugins.scope.unknownWorkspace'),
+            })}
+          </SectionHeader>
+          <AnimatePresence initial={false}>
+            {wsServers.map((server) => (
+              <ServerRowShell
+                key={`${wsId}:${server.name}`}
+                testid={`ws-server-row-${server.name}`}
+                main={
+                  <>
+                    <ServerNameLine icon={Server} name={server.name}>
+                      <TagBadge>{server.transport}</TagBadge>
+                      {server.shadows_inherited && (
+                        <TagBadge soft title={t('mcp.row.overridesInheritedHint')}>
+                          {t('mcp.row.overridesInherited')}
+                        </TagBadge>
+                      )}
+                    </ServerNameLine>
+                    {server.description && (
+                      <p
+                        className="text-[0.6875rem] line-clamp-2"
+                        style={{ color: 'var(--color-text-tertiary)' }}
+                      >
+                        {server.description}
+                      </p>
+                    )}
+                  </>
+                }
+                actions={
+                  <>
+                    <ScopeControl
+                      workspaces={wsOptions}
+                      scopeWorkspaceId={wsId}
+                      // No cross-workspace move endpoint for MCP servers: the
+                      // only destination is the user tier.
+                      allowWorkspaceTargets={false}
+                      busy={movingName === server.name}
+                      moveToAllBlockedReason={
+                        // The promote endpoint 409s when the name already
+                        // exists at the user tier, so don't advertise a move
+                        // that is known to fail for a shadowing row.
+                        server.shadows_inherited
+                          ? t('plugins.scope.moveShadowBlocked')
+                          : null
+                      }
+                      onMove={(toWorkspaceId) => {
+                        if (toWorkspaceId === null) handleMoveUp(wsId, server.name);
+                      }}
+                    />
+                    <EnabledToggle
+                      enabled={server.enabled}
+                      name={server.name}
+                      disabled={wsTogglingKey === `${wsId}:${server.name}`}
+                      onToggle={() =>
+                        handleSetWorkspaceDisabled(server.name, wsId, server.enabled)
+                      }
+                    />
+                  </>
+                }
+              />
+            ))}
+          </AnimatePresence>
+        </div>
+      ))}
+
       {deletingName && (
         <ConfirmStrip
-          message={t('connectors.servers.deleteConfirm', { server: deletingName })}
-          confirmLabel={deleteMutation.isPending ? t('common.loading') : t('connectors.servers.deleteConfirmYes')}
-          cancelLabel={t('connectors.servers.deleteConfirmNo')}
+          message={t('plugins.servers.deleteConfirm', { server: deletingName })}
+          confirmLabel={deleteMutation.isPending ? t('common.loading') : t('plugins.servers.deleteConfirmYes')}
+          cancelLabel={t('plugins.servers.deleteConfirmNo')}
           pending={deleteMutation.isPending}
           onConfirm={confirmDelete}
           onCancel={cancelDelete}
@@ -365,8 +546,8 @@ export function ConnectorServers() {
           onImported={(createdNames) => {
             if (createdNames.length > 0) {
               toast({
-                title: t('connectors.import.disabledNudgeTitle'),
-                description: t('connectors.import.disabledNudgeDesc'),
+                title: t('plugins.import.disabledNudgeTitle'),
+                description: t('plugins.import.disabledNudgeDesc'),
               });
             }
           }}

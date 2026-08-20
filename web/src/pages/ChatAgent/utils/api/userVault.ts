@@ -1,5 +1,5 @@
 /**
- * User-level vault secrets (Connectors backing store). Mirrors the workspace
+ * User-level vault secrets (Plugins backing store). Mirrors the workspace
  * vault API but scoped to the signed-in user: these secrets back inherited
  * (user-level) MCP servers and are merged into every sandbox push, with
  * workspace secrets winning on name collision.

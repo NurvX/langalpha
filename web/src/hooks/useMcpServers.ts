@@ -5,6 +5,7 @@ import { needsDiscoveryProbe } from '../pages/ChatAgent/components/mcp/mcpState'
 import {
   getWorkspaceMcpServers,
   addWorkspaceMcpServer,
+  adoptMcpServerToWorkspace,
   updateWorkspaceMcpServer,
   setWorkspaceMcpServerEnabled,
   deleteWorkspaceMcpServer,
@@ -12,6 +13,8 @@ import {
   importWorkspaceMcpServers,
   promoteWorkspaceMcpServerToTemplate,
   getMcpCatalog,
+  getBuiltinMcpServers,
+  setBuiltinMcpServerEnabled,
   createMcpCatalogServer,
   updateMcpCatalogServer,
   deleteMcpCatalogServer,
@@ -157,6 +160,27 @@ export function useMcpCatalog(enabled = true) {
   });
 }
 
+/** Process-global builtin servers with the user's account-wide toggles. */
+export function useBuiltinMcpServers() {
+  return useQuery({
+    queryKey: queryKeys.mcp.builtins(),
+    queryFn: getBuiltinMcpServers,
+    staleTime: 60_000,
+  });
+}
+
+export function useToggleBuiltinMcpServer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
+      setBuiltinMcpServerEnabled(name, enabled),
+    onSuccess: () => {
+      // The toggle changes every workspace's effective list, not just this page.
+      queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all });
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Per-workspace mutations
 // ---------------------------------------------------------------------------
@@ -257,14 +281,73 @@ export function useImportWorkspaceMcpServers(workspaceId: string) {
  * Promote a workspace server up into the user template catalog. Invalidates the
  * catalog so the new/updated template appears in the Templates view; the
  * workspace list is untouched (promotion doesn't change the workspace set).
+ *
+ * The workspace id rides in the vars because the all-scopes Plugins list mixes
+ * rows from many workspaces in one list; a fixed-workspace page passes the
+ * same id every call. `removeSource` turns a copy into a move.
  */
-export function usePromoteMcpServerToTemplate(workspaceId: string) {
+export function usePromoteMcpServerToTemplate() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ name, overwrite }: { name: string; overwrite?: boolean }) =>
-      promoteWorkspaceMcpServerToTemplate(workspaceId, name, overwrite ?? false),
+    mutationFn: ({
+      workspaceId,
+      name,
+      overwrite,
+      removeSource,
+    }: {
+      workspaceId: string;
+      name: string;
+      overwrite?: boolean;
+      removeSource?: boolean;
+    }) =>
+      promoteWorkspaceMcpServerToTemplate(
+        workspaceId, name, overwrite ?? false, removeSource ?? false,
+      ),
+    onSuccess: (_data, vars) => {
+      // With removeSource the workspace set changes too (the fork is gone),
+      // so the whole prefix goes; a plain copy touches only the catalog.
+      queryClient.invalidateQueries({
+        queryKey: vars.removeSource ? queryKeys.mcp.all : queryKeys.mcp.catalog(),
+      });
+    },
+  });
+}
+
+/**
+ * Move a user-level server INTO one workspace (the down direction). The
+ * catalog row disappears and every workspace's effective list changes, so the
+ * whole `mcp` prefix is invalidated.
+ */
+export function useAdoptMcpServerToWorkspace() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ workspaceId, name }: { workspaceId: string; name: string }) =>
+      adoptMcpServerToWorkspace(workspaceId, name),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.mcp.catalog() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all });
+    },
+  });
+}
+
+/** Per-workspace enable toggle with the workspace id in the vars — for the
+ * all-scopes Plugins view where one list mixes rows from many workspaces
+ * (useToggleWorkspaceMcpServer serves the single-workspace pages). Writes
+ * tombstones / builtin markers for inherited names, so the catalog and
+ * builtin views change too: whole-prefix invalidation. */
+export function useSetMcpServerEnabledInWorkspace() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      workspaceId,
+      name,
+      enabled,
+    }: {
+      workspaceId: string;
+      name: string;
+      enabled: boolean;
+    }) => setWorkspaceMcpServerEnabled(workspaceId, name, enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all });
     },
   });
 }
@@ -328,7 +411,7 @@ export function useDeleteMcpCatalogServer() {
   });
 }
 
-/** Optimistic user-level enabled toggle (Connectors). */
+/** Optimistic user-level enabled toggle (Plugins page). */
 export function useToggleMcpCatalogServer() {
   const queryClient = useQueryClient();
   const key = queryKeys.mcp.catalog();
@@ -358,7 +441,7 @@ export function useToggleMcpCatalogServer() {
 }
 
 /**
- * Bulk-import a standard `mcpServers` blob into the user catalog (Connectors).
+ * Bulk-import a standard `mcpServers` blob into the user catalog (Plugins page).
  * The backend also auto-extracts inline literal credentials into the USER
  * vault, so the vault list is invalidated too — otherwise the freshly created
  * secrets stay invisible (and the server modal's picker keeps offering to

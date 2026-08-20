@@ -653,6 +653,11 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
                 files={panelFiles}
                 dropdownDirection="down"
                 mode={isFlash ? 'fast' : 'ptc'}
+                // The turn this composer sends lands in this workspace, so the
+                // slash menu has to be scoped to it too: without this it lists
+                // the account-level skills, hiding the workspace's own and
+                // still offering ones it has disabled.
+                selectedWorkspaceId={workspaceId}
                 minRows={2}
               />
             </div>

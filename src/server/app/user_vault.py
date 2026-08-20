@@ -1,4 +1,4 @@
-"""User-level Vault Secrets API Router (Connectors backing store).
+"""User-level Vault Secrets API Router (Plugins backing store).
 
 CRUD for per-user encrypted secrets. These back inherited (source='user') MCP
 servers the same way workspace secrets back workspace-local ones: at sandbox

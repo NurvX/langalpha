@@ -105,6 +105,28 @@ async def test_list_reports_hash_gated_tool_counts(client):
 
 
 @pytest.mark.asyncio
+async def test_all_scopes_asks_for_live_workspaces_only(client):
+    """The shared query defaults to every workspace a user ever had, because
+    vault invalidation has to sweep snapshots a soft-deleted workspace left
+    behind. This view renders scopes to a person, so it wants the live ones."""
+    local = AsyncMock(return_value=[])
+    with (
+        patch(
+            "src.server.app.mcp_catalog.list_catalog_servers",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "src.server.app.mcp_catalog.list_scope_markers_for_user",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("src.server.app.mcp_catalog.list_local_servers_for_user", new=local),
+    ):
+        resp = await client.get("/api/v1/mcp/servers?all_scopes=true")
+    assert resp.status_code == 200
+    assert local.await_args.kwargs["live_only"] is True
+
+
+@pytest.mark.asyncio
 async def test_create_happy(client):
     with (
         patch(

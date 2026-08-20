@@ -3,33 +3,48 @@ import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useScrollMemory } from '@/lib/scrollMemory';
 import { toast } from '@/components/ui/use-toast';
-import { ConnectorServers } from './ConnectorServers';
-import { ConnectorSecrets } from './ConnectorSecrets';
-import './Connectors.css';
+import { McpServers } from './components/McpServers';
+import { SkillsList } from './components/SkillsList';
+import { PluginSecrets } from './components/PluginSecrets';
+import './Plugins.css';
 
 /**
- * /connectors — user-level MCP servers + user vault. An enabled server here is
- * inherited by every workspace of the user; OAuth-connected servers are bound
- * into sandboxes through the egress relay (credentials never leave the host).
+ * /plugins — user-level MCP servers, skills and the user vault. An enabled
+ * server or skill here reaches every workspace of the user; OAuth-connected
+ * servers are bound into sandboxes through the egress relay (credentials
+ * never leave the host).
  *
  * Also the landing route of the OAuth connect flow: the backend callback
  * redirects here with `?mcp_connected=<server>` or `?mcp_error=<reason>&server=`
  * — surfaced as a toast, then stripped from the URL.
  */
 
-const TABS = ['servers', 'secrets'] as const;
+const TABS = ['mcp', 'skills', 'secrets'] as const;
 type Tab = (typeof TABS)[number];
 
-function Connectors() {
+// Explicit key map (not a template literal) so the i18n parity test can see
+// every tab label.
+const TAB_LABEL_KEYS: Record<Tab, string> = {
+  mcp: 'plugins.tabs.mcp',
+  skills: 'plugins.tabs.skills',
+  secrets: 'plugins.tabs.secrets',
+};
+
+/** Old deep links: /connectors?tab=servers → the mcp tab. */
+function resolveTab(param: string | null): Tab | null {
+  if (param === 'servers') return 'mcp';
+  return TABS.includes(param as Tab) ? (param as Tab) : null;
+}
+
+function Plugins() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { t } = useTranslation();
 
-  const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState<Tab>(
-    TABS.includes(tabParam as Tab) ? (tabParam as Tab) : 'servers',
+    resolveTab(searchParams.get('tab')) ?? 'mcp',
   );
   const pageRef = useRef<HTMLDivElement>(null);
-  useScrollMemory(pageRef, 'page:connectors');
+  useScrollMemory(pageRef, 'page:plugins');
 
   const handleTabChange = (tab: Tab) => {
     setActiveTab(tab);
@@ -38,9 +53,9 @@ function Connectors() {
 
   // Sync from URL on back/forward navigation
   useEffect(() => {
-    const urlTab = searchParams.get('tab');
-    if (urlTab && TABS.includes(urlTab as Tab) && urlTab !== activeTab) {
-      setActiveTab(urlTab as Tab);
+    const urlTab = resolveTab(searchParams.get('tab'));
+    if (urlTab && urlTab !== activeTab) {
+      setActiveTab(urlTab);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -56,14 +71,14 @@ function Connectors() {
     callbackHandled.current = true;
     if (connected) {
       toast({
-        title: t('connectors.oauth.connectedTitle'),
-        description: t('connectors.oauth.connectedDesc', { server: connected }),
+        title: t('plugins.oauth.connectedTitle'),
+        description: t('plugins.oauth.connectedDesc', { server: connected }),
       });
     } else {
       const server = searchParams.get('server');
       toast({
         variant: 'destructive',
-        title: t('connectors.oauth.callbackErrorTitle'),
+        title: t('plugins.oauth.callbackErrorTitle'),
         description: server ? `${server}: ${errorReason}` : String(errorReason),
       });
     }
@@ -76,15 +91,15 @@ function Connectors() {
   }, [searchParams]);
 
   return (
-    <div ref={pageRef} className="connectors-page">
-      <div className="connectors-container">
+    <div ref={pageRef} className="plugins-page">
+      <div className="plugins-container">
         <h2 className="text-xl font-semibold mb-1" style={{ color: 'var(--color-text-primary)' }}>
-          {t('connectors.title')}
+          {t('plugins.title')}
         </h2>
         <p className="text-sm mb-6" style={{ color: 'var(--color-text-tertiary)' }}>
-          {t('connectors.description')}
+          {t('plugins.description')}
         </p>
-        <div className="flex gap-2 mb-6 border-b overflow-x-auto connectors-tab-bar" style={{ borderColor: 'var(--color-border-muted)' }}>
+        <div className="flex gap-2 mb-6 border-b overflow-x-auto plugins-tab-bar" style={{ borderColor: 'var(--color-border-muted)' }}>
           {TABS.map((tab) => (
             <button
               key={tab}
@@ -96,18 +111,19 @@ function Connectors() {
                 borderBottom: activeTab === tab ? '2px solid var(--color-accent-primary)' : '2px solid transparent',
               }}
             >
-              {t(`connectors.tabs.${tab}`)}
+              {t(TAB_LABEL_KEYS[tab])}
             </button>
           ))}
         </div>
 
-        <div className="connectors-content">
-          {activeTab === 'servers' && <ConnectorServers />}
-          {activeTab === 'secrets' && <ConnectorSecrets />}
+        <div className="plugins-content">
+          {activeTab === 'mcp' && <McpServers />}
+          {activeTab === 'skills' && <SkillsList />}
+          {activeTab === 'secrets' && <PluginSecrets />}
         </div>
       </div>
     </div>
   );
 }
 
-export default Connectors;
+export default Plugins;

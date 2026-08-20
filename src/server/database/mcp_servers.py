@@ -307,6 +307,50 @@ async def bump_user_workspaces_mcp_version(user_id: str) -> int:
             return cur.rowcount
 
 
+async def list_user_builtin_disables(user_id: str) -> set[str]:
+    """Builtin server names this user disabled account-wide."""
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT name FROM user_mcp_builtin_disables WHERE user_id = %s",
+                (user_id,),
+            )
+            return {r["name"] for r in await cur.fetchall()}
+
+
+async def set_user_builtin_disable(user_id: str, name: str, disabled: bool) -> None:
+    """Write/clear an account-wide builtin disable.
+
+    Both directions change every workspace's effective set, so the fan-out
+    bump runs in the same transaction (next-acquire convergence).
+    """
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor() as cur:
+                if disabled:
+                    await cur.execute(
+                        """
+                        INSERT INTO user_mcp_builtin_disables (user_id, name)
+                        VALUES (%s, %s)
+                        ON CONFLICT (user_id, name) DO NOTHING
+                        """,
+                        (user_id, name),
+                    )
+                else:
+                    await cur.execute(
+                        """
+                        DELETE FROM user_mcp_builtin_disables
+                        WHERE user_id = %s AND name = %s
+                        """,
+                        (user_id, name),
+                    )
+                await _bump_user_versions(cur, user_id)
+                logger.info(
+                    f"[mcp_db] set_user_builtin_disable user_id={user_id} "
+                    f"name={name} disabled={disabled}"
+                )
+
+
 # ---------------------------------------------------------------------------
 # Per-workspace rows (source of truth) — every write bumps mcp_config_version
 # ---------------------------------------------------------------------------
@@ -329,7 +373,9 @@ async def list_workspace_servers(workspace_id: str) -> list[dict[str, Any]]:
             return [_workspace_row_to_dict(r) for r in await cur.fetchall()]
 
 
-async def list_local_servers_for_user(user_id: str) -> list[dict[str, Any]]:
+async def list_local_servers_for_user(
+    user_id: str, *, live_only: bool = False
+) -> list[dict[str, Any]]:
     """Workspace-LOCAL rows (source='workspace') across ALL of a user's workspaces.
 
     For user-tier vault invalidation: the sandbox resolves one merged secret
@@ -337,21 +383,57 @@ async def list_local_servers_for_user(user_id: str) -> list[dict[str, Any]]:
     too, and nothing scoped to the catalog would ever reach that server's cached
     snapshot. Stopped workspaces and disabled rows included — a snapshot
     outlives both the sandbox that wrote it and the row being switched off.
+
+    ``live_only`` drops soft-deleted workspaces, for the callers that render
+    these rows to a user rather than sweeping their leftovers.
     """
+    status_filter = "AND w.status <> 'deleted'" if live_only else ""
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
-                """
+                f"""
                 SELECT workspace_mcp_server_id, workspace_id, name, source, enabled,
                        config, created_at, updated_at
                 FROM workspace_mcp_servers
                 WHERE source = 'workspace' AND workspace_id IN
-                    (SELECT workspace_id FROM workspaces WHERE user_id = %s)
+                    (SELECT w.workspace_id FROM workspaces w
+                      WHERE w.user_id = %s {status_filter})
                 ORDER BY name
                 """,
                 (user_id,),
             )
             return [_workspace_row_to_dict(r) for r in await cur.fetchall()]
+
+
+async def list_scope_markers_for_user(user_id: str) -> list[dict[str, Any]]:
+    """Disable-marker rows (inherited tombstones + builtin markers) across ALL
+    of a user's workspaces.
+
+    Feeds the all-scopes catalog view's per-name "active in" checklist; one
+    query instead of one per workspace. Real servers (source='workspace')
+    are excluded — those are rows, not markers. Soft-deleted workspaces are
+    excluded too: a tombstone in one is not a scope the user can still act on.
+    """
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT workspace_id, name, source FROM workspace_mcp_servers
+                WHERE source IN ('user', 'builtin') AND enabled = FALSE
+                  AND workspace_id IN
+                    (SELECT w.workspace_id FROM workspaces w
+                      WHERE w.user_id = %s AND w.status <> 'deleted')
+                """,
+                (user_id,),
+            )
+            return [
+                {
+                    "workspace_id": str(r["workspace_id"]),
+                    "name": r["name"],
+                    "source": r["source"],
+                }
+                for r in await cur.fetchall()
+            ]
 
 
 async def get_workspace_servers_and_version(

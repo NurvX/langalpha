@@ -6,7 +6,7 @@ import { renderWithProviders } from '@/test/utils';
 import type { CatalogServer, CatalogServerList } from '@/pages/ChatAgent/utils/api';
 
 /**
- * The Connectors → Servers list. Every mutation here is fire-and-report: the
+ * The Plugins → MCP tab, `Your servers` list. Every mutation here is fire-and-report: the
  * page has no inline error region for them, so a rejected promise that isn't
  * turned into a toast is a silent failure the user reads as success. These
  * tests pin one path per handler, both directions.
@@ -25,6 +25,9 @@ const mutateAsync = {
   disconnect: vi.fn(),
   refresh: vi.fn(),
   createSecret: vi.fn(),
+  wsEnable: vi.fn(),
+  adopt: vi.fn(),
+  moveUp: vi.fn(),
 };
 
 let catalogData: CatalogServerList | undefined;
@@ -41,6 +44,19 @@ vi.mock('@/hooks/useMcpServers', () => ({
   useImportMcpCatalogServers: () => ({ mutateAsync: mutateAsync.import, isPending: false }),
   useDisconnectMcpOauth: () => ({ mutateAsync: mutateAsync.disconnect, isPending: false }),
   useRefreshMcpOauthSchemas: () => ({ mutateAsync: mutateAsync.refresh, isPending: false }),
+  // The nested BuiltinMcpSection renders nothing while its list is empty —
+  // these tests exercise the user-tier list only.
+  useBuiltinMcpServers: () => ({ data: { servers: [] }, isLoading: false, error: null }),
+  useToggleBuiltinMcpServer: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useSetMcpServerEnabledInWorkspace: () => ({ mutateAsync: mutateAsync.wsEnable, isPending: false }),
+  useAdoptMcpServerToWorkspace: () => ({ mutateAsync: mutateAsync.adopt, isPending: false }),
+  usePromoteMcpServerToTemplate: () => ({ mutateAsync: mutateAsync.moveUp, isPending: false }),
+}));
+
+// No workspaces → the scope control renders as a plain badge (or the OAuth
+// explainer) and the per-workspace checklist stays out of these tests.
+vi.mock('@/hooks/useWorkspaces', () => ({
+  useWorkspaces: () => ({ data: { workspaces: [] }, isLoading: false, error: null }),
 }));
 
 vi.mock('@/hooks/useUserVault', () => ({
@@ -71,21 +87,26 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
     disabled,
   }: {
     children: React.ReactNode;
-    onSelect?: () => void;
+    onSelect?: (e?: { preventDefault: () => void }) => void;
     disabled?: boolean;
     variant?: string;
   }) => (
     <button
       role="menuitem"
       aria-disabled={disabled ? 'true' : undefined}
-      onClick={() => { if (!disabled) onSelect?.(); }}
+      onClick={() => { if (!disabled) onSelect?.({ preventDefault: () => {} }); }}
     >
       {children}
     </button>
   ),
+  DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSeparator: () => <hr />,
+  DropdownMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSubTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSubContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-import { ConnectorServers } from '../ConnectorServers';
+import { McpServers } from '../components/McpServers';
 import { toast } from '@/components/ui/use-toast';
 
 // ---------------------------------------------------------------------------
@@ -96,7 +117,7 @@ const realLocation = window.location;
 const assign = vi.fn();
 Object.defineProperty(window, 'location', {
   configurable: true,
-  value: { href: 'http://localhost/connectors', origin: 'http://localhost', assign },
+  value: { href: 'http://localhost/plugins', origin: 'http://localhost', assign },
 });
 afterAll(() => {
   Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
@@ -152,45 +173,45 @@ beforeEach(() => {
 // List rendering
 // ---------------------------------------------------------------------------
 
-describe('ConnectorServers — list rendering', () => {
+describe('McpServers — list rendering', () => {
   it('renders a row per catalog server with transport, scope and description', () => {
     catalogData = makeCatalog([
       makeCatalogServer({ name: 'alpha_server', description: 'does a thing' }),
       makeCatalogServer({ name: 'beta_server', enabled: false }),
     ]);
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
-    expect(screen.getByTestId('connector-row-alpha_server')).toBeInTheDocument();
-    expect(screen.getByTestId('connector-row-beta_server')).toBeInTheDocument();
+    expect(screen.getByTestId('server-row-alpha_server')).toBeInTheDocument();
+    expect(screen.getByTestId('server-row-beta_server')).toBeInTheDocument();
     expect(screen.getByText('does a thing')).toBeInTheDocument();
     // Inheritance scope is spelled out per row — it's the whole point of the page.
     expect(screen.getByText('On in all workspaces')).toBeInTheDocument();
-    expect(screen.getByText('Off — not inherited')).toBeInTheDocument();
+    expect(screen.getByText('Off, not inherited')).toBeInTheDocument();
   });
 
   it('shows the OAuth pill and tool count on a connected remote server', () => {
     catalogData = makeCatalog([makeOauthServer({ oauth_status: 'connected', tool_count: 4 })]);
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     expect(screen.getByTestId('oauth-status-connected')).toBeInTheDocument();
     expect(screen.getByText('4 tools')).toBeInTheDocument();
   });
 
   it('renders the empty state when the catalog has no servers', () => {
-    renderWithProviders(<ConnectorServers />);
-    expect(screen.getByText(/No connectors yet/i)).toBeInTheDocument();
+    renderWithProviders(<McpServers />);
+    expect(screen.getByText(/No servers yet/i)).toBeInTheDocument();
   });
 
   it('surfaces a catalog load failure instead of an empty list', () => {
     catalogError = new Error('catalog unreachable');
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
     expect(screen.getByText('catalog unreachable')).toBeInTheDocument();
-    expect(screen.queryByText(/No connectors yet/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No servers yet/i)).not.toBeInTheDocument();
   });
 
   it('gates Add/Import at the server cap', () => {
     catalogData = makeCatalog([makeCatalogServer({ name: 'a_server' })], 1);
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
     expect(screen.getByRole('button', { name: /add server/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /import json/i })).toBeDisabled();
   });
@@ -200,11 +221,11 @@ describe('ConnectorServers — list rendering', () => {
 // handleToggle
 // ---------------------------------------------------------------------------
 
-describe('ConnectorServers — enable toggle', () => {
+describe('McpServers — enable toggle', () => {
   it('toasts the warnings a successful enable came back with', async () => {
     catalogData = makeCatalog([makeCatalogServer({ name: 'warn_server', enabled: false })]);
     mutateAsync.toggle.mockResolvedValue({ name: 'warn_server', enabled: true, warnings: ['runs from a shared env'] });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByRole('switch'));
 
@@ -224,7 +245,7 @@ describe('ConnectorServers — enable toggle', () => {
   it('surfaces a rejected toggle rather than silently reverting', async () => {
     catalogData = makeCatalog([makeCatalogServer({ name: 'toggle_server' })]);
     mutateAsync.toggle.mockRejectedValue({ response: { data: { detail: 'server is misconfigured' } } });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByRole('switch'));
 
@@ -246,11 +267,11 @@ describe('ConnectorServers — enable toggle', () => {
 // handleDelete
 // ---------------------------------------------------------------------------
 
-describe('ConnectorServers — delete', () => {
+describe('McpServers — delete', () => {
   it('confirms first, then deletes and drops the strip', async () => {
     catalogData = makeCatalog([makeCatalogServer({ name: 'doomed_server' })]);
     mutateAsync.del.mockResolvedValue({ ok: true });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByText('Delete'));
     expect(mutateAsync.del).not.toHaveBeenCalled();
@@ -267,7 +288,7 @@ describe('ConnectorServers — delete', () => {
   it('surfaces a rejected delete and keeps the confirm strip open', async () => {
     catalogData = makeCatalog([makeCatalogServer({ name: 'doomed_server' })]);
     mutateAsync.del.mockRejectedValue({ response: { data: { detail: 'still in use' } } });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByText('Delete'));
     fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
@@ -287,7 +308,7 @@ describe('ConnectorServers — delete', () => {
 
   it('cancels without deleting', () => {
     catalogData = makeCatalog([makeCatalogServer({ name: 'doomed_server' })]);
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByText('Delete'));
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
@@ -301,16 +322,16 @@ describe('ConnectorServers — delete', () => {
 // OAuth connect / reconnect
 // ---------------------------------------------------------------------------
 
-describe('ConnectorServers — OAuth connect affordance', () => {
+describe('McpServers — OAuth connect affordance', () => {
   it('offers Connect on a never-connected remote server and navigates to the vendor', async () => {
     catalogData = makeCatalog([makeOauthServer({ oauth_status: null })]);
     mockStartMcpOauth.mockResolvedValue({ authorize_url: 'https://vendor.example.test/authorize?x=1' });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByRole('button', { name: /^connect$/i }));
 
     await waitFor(() =>
-      expect(mockStartMcpOauth).toHaveBeenCalledWith('remote_connector', '/connectors'),
+      expect(mockStartMcpOauth).toHaveBeenCalledWith('remote_connector', '/plugins?tab=mcp'),
     );
     await waitFor(() =>
       expect(assign).toHaveBeenCalledWith('https://vendor.example.test/authorize?x=1'),
@@ -319,7 +340,7 @@ describe('ConnectorServers — OAuth connect affordance', () => {
 
   it('offers Reconnect — not Connect — once a connection exists but is broken', () => {
     catalogData = makeCatalog([makeOauthServer({ oauth_status: 'revoked' })]);
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     expect(screen.getByRole('button', { name: /reconnect/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^connect$/i })).not.toBeInTheDocument();
@@ -330,7 +351,7 @@ describe('ConnectorServers — OAuth connect affordance', () => {
     'offers Reconnect for the %s state too',
     (oauth_status) => {
       catalogData = makeCatalog([makeOauthServer({ oauth_status })]);
-      renderWithProviders(<ConnectorServers />);
+      renderWithProviders(<McpServers />);
       expect(screen.getByRole('button', { name: /reconnect/i })).toBeInTheDocument();
     },
   );
@@ -340,14 +361,14 @@ describe('ConnectorServers — OAuth connect affordance', () => {
       makeOauthServer({ oauth_status: 'connected' }),
       makeCatalogServer({ name: 'local_server' }),
     ]);
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
     expect(screen.queryByRole('button', { name: /^(re)?connect$/i })).not.toBeInTheDocument();
   });
 
   it('surfaces a failed authorize-start and re-enables the button', async () => {
     catalogData = makeCatalog([makeOauthServer({ oauth_status: null })]);
     mockStartMcpOauth.mockRejectedValue({ response: { data: { detail: 'no client registered' } } });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByRole('button', { name: /^connect$/i }));
 
@@ -369,11 +390,11 @@ describe('ConnectorServers — OAuth connect affordance', () => {
 // handleDisconnect
 // ---------------------------------------------------------------------------
 
-describe('ConnectorServers — disconnect', () => {
+describe('McpServers — disconnect', () => {
   it('confirms the disconnect with a toast naming the server', async () => {
     catalogData = makeCatalog([makeOauthServer({ oauth_status: 'connected' })]);
     mutateAsync.disconnect.mockResolvedValue({ ok: true });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByText('Disconnect'));
 
@@ -391,7 +412,7 @@ describe('ConnectorServers — disconnect', () => {
   it('surfaces a rejected disconnect', async () => {
     catalogData = makeCatalog([makeOauthServer({ oauth_status: 'connected' })]);
     mutateAsync.disconnect.mockRejectedValue({ response: { data: { detail: 'token store unavailable' } } });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByText('Disconnect'));
 
@@ -408,7 +429,7 @@ describe('ConnectorServers — disconnect', () => {
 
   it('hides Disconnect on an already-revoked row', () => {
     catalogData = makeCatalog([makeOauthServer({ oauth_status: 'revoked' })]);
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
     expect(screen.queryByText('Disconnect')).not.toBeInTheDocument();
   });
 });
@@ -417,13 +438,13 @@ describe('ConnectorServers — disconnect', () => {
 // handleRefreshSchemas — the one handler with THREE outcomes
 // ---------------------------------------------------------------------------
 
-describe('ConnectorServers — refresh tool schemas', () => {
+describe('McpServers — refresh tool schemas', () => {
   it('reports the new tool count on success', async () => {
     catalogData = makeCatalog([makeOauthServer({ oauth_status: 'connected' })]);
     mutateAsync.refresh.mockResolvedValue({
       server_name: 'remote_connector', status: 'ok', error: '', tool_count: 7, discovered_at: null,
     });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByText('Refresh tools'));
 
@@ -447,7 +468,7 @@ describe('ConnectorServers — refresh tool schemas', () => {
       tool_count: 7,
       discovered_at: null,
     });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByText('Refresh tools'));
 
@@ -475,7 +496,7 @@ describe('ConnectorServers — refresh tool schemas', () => {
     mutateAsync.refresh.mockResolvedValue({
       server_name: 'remote_connector', status: 'error', error: 'upstream returned 502', tool_count: 0, discovered_at: null,
     });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByText('Refresh tools'));
 
@@ -495,7 +516,7 @@ describe('ConnectorServers — refresh tool schemas', () => {
     mutateAsync.refresh.mockResolvedValue({
       server_name: 'remote_connector', status: 'needs_reauth', error: '', tool_count: 0, discovered_at: null,
     });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByText('Refresh tools'));
 
@@ -509,7 +530,7 @@ describe('ConnectorServers — refresh tool schemas', () => {
   it('surfaces a rejected refresh', async () => {
     catalogData = makeCatalog([makeOauthServer({ oauth_status: 'connected' })]);
     mutateAsync.refresh.mockRejectedValue({ response: { data: { detail: 'rate limited' } } });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByText('Refresh tools'));
 
@@ -524,7 +545,7 @@ describe('ConnectorServers — refresh tool schemas', () => {
 
   it('hides Refresh tools unless the connection is live', () => {
     catalogData = makeCatalog([makeOauthServer({ oauth_status: 'needs_reauth' })]);
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
     expect(screen.queryByText('Refresh tools')).not.toBeInTheDocument();
   });
 });
@@ -533,12 +554,12 @@ describe('ConnectorServers — refresh tool schemas', () => {
 // handleSubmit (create / update through the shared modal)
 // ---------------------------------------------------------------------------
 
-describe('ConnectorServers — create and edit', () => {
+describe('McpServers — create and edit', () => {
   it('keeps a rejected create inline in the modal instead of dropping it', async () => {
     mutateAsync.create.mockRejectedValue({
       response: { data: { detail: [{ loc: ['body', 'url'], msg: 'field required', type: 'value_error.missing' }] } },
     });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByRole('button', { name: /add server/i }));
     fireEvent.change(screen.getByPlaceholderText('my_server'), { target: { value: 'new_server' } });
@@ -553,7 +574,7 @@ describe('ConnectorServers — create and edit', () => {
 
   it('closes the modal and toasts warnings a successful save came back with', async () => {
     mutateAsync.create.mockResolvedValue(makeCatalogServer({ name: 'new_server', warnings: ['shared-env command'] }));
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByRole('button', { name: /add server/i }));
     fireEvent.change(screen.getByPlaceholderText('my_server'), { target: { value: 'new_server' } });
@@ -568,7 +589,7 @@ describe('ConnectorServers — create and edit', () => {
   it('routes the kebab Edit through the update mutation, not create', async () => {
     catalogData = makeCatalog([makeCatalogServer({ name: 'existing_server' })]);
     mutateAsync.update.mockResolvedValue(makeCatalogServer({ name: 'existing_server' }));
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByText('Edit'));
     fireEvent.click(await screen.findByRole('button', { name: /^save$/i }));
@@ -591,7 +612,7 @@ describe('ConnectorServers — create and edit', () => {
       makeCatalogServer({ name: 'existing_server', env: stored, env_refs: ['API_TOKEN'] }),
     ]);
     mutateAsync.update.mockResolvedValue(makeCatalogServer({ name: 'existing_server' }));
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByText('Edit'));
     fireEvent.change(await screen.findByPlaceholderText('What this server does'), {
@@ -615,7 +636,7 @@ describe('ConnectorServers — create and edit', () => {
 // Import flow
 // ---------------------------------------------------------------------------
 
-describe('ConnectorServers — import', () => {
+describe('McpServers — import', () => {
   const BLOB = '{"mcpServers":{"imported_server":{"command":"npx","args":["-y","pkg"]}}}';
 
   it('reports the per-server outcome and nudges that imports land switched off', async () => {
@@ -625,7 +646,7 @@ describe('ConnectorServers — import', () => {
       secrets_created: ['PLACEHOLDER_TOKEN'],
       config_version: 2,
     });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByRole('button', { name: /import json/i }));
     fireEvent.change(screen.getByRole('textbox'), { target: { value: BLOB } });
@@ -648,7 +669,7 @@ describe('ConnectorServers — import', () => {
       secrets_created: [],
       config_version: 2,
     });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByRole('button', { name: /import json/i }));
     fireEvent.change(screen.getByRole('textbox'), { target: { value: BLOB } });
@@ -660,7 +681,7 @@ describe('ConnectorServers — import', () => {
 
   it('surfaces a rejected import inside the modal', async () => {
     mutateAsync.import.mockRejectedValue({ response: { data: { detail: 'catalog at cap' } } });
-    renderWithProviders(<ConnectorServers />);
+    renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByRole('button', { name: /import json/i }));
     fireEvent.change(screen.getByRole('textbox'), { target: { value: BLOB } });

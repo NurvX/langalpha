@@ -80,8 +80,29 @@ export const queryKeys = {
     all:       ['mcp'],
     // User-level catalog of MCP templates (not workspace-scoped).
     catalog:   () => [...queryKeys.mcp.all, 'catalog'],
+    // Process-global builtins with the user's account-wide toggles.
+    builtins:  () => [...queryKeys.mcp.all, 'builtins'],
     // Effective per-workspace server list (builtins + workspace servers).
     workspace: (wsId: string) => [...queryKeys.mcp.all, 'workspace', wsId],
+  },
+  // Skills are per-user and mutable; the mode variant is what the slash menu
+  // reads, the manage variant is the full list including disabled rows. A
+  // workspace id keys the workspace-effective view (shadowing + disables).
+  skills: {
+    all:  ['skills'],
+    // The scope slot is one of: 'user' (user view), a workspace id
+    // (workspace-effective view), or 'all-scopes' (the Plugins inventory) —
+    // allScopes and workspaceId are mutually exclusive on the wire.
+    list: (
+      mode: string | null,
+      includeDisabled = false,
+      workspaceId: string | null = null,
+      allScopes = false,
+    ) =>
+      [
+        ...queryKeys.skills.all, 'list', mode ?? 'all', includeDisabled,
+        allScopes ? 'all-scopes' : (workspaceId ?? 'user'),
+      ],
   },
   userVault: {
     all:     ['userVault'],
