@@ -21,6 +21,18 @@ logger = structlog.get_logger(__name__)
 LOCK_FILE_VERSION = 1
 LOCK_FILENAME = "skills-lock.json"
 
+# sourceType stamped on user-tier skills the server materializes and syncs.
+# ``owner`` says whose *content* a skill is (never destroy user content);
+# ``sourceType`` says who owns the *bytes*: server-managed entries have a DB
+# source of truth, so the sync may replace or prune them like platform skills.
+MANAGED_SOURCE_TYPE = "langalpha-user"
+
+
+def is_agent_installed(entry: SkillLockEntry) -> bool:
+    """Installed by the agent inside the sandbox — no server-side source of
+    truth, so the sync may never replace or remove it."""
+    return entry.get("owner") == "user" and entry.get("sourceType") != MANAGED_SOURCE_TYPE
+
 
 # --- Types ---
 
@@ -147,20 +159,21 @@ def parse_skills_lock(content: str) -> dict[str, SkillLockEntry]:
 
 
 def merge_lock_files(
-    platform_entries: dict[str, SkillLockEntry],
+    authoritative_entries: dict[str, SkillLockEntry],
     existing_lock: dict[str, SkillLockEntry] | None,
 ) -> SkillsLockFile:
-    """Merge platform entries into an existing lock file.
+    """Merge server-authoritative entries into an existing lock file.
 
     Rules:
-    - Platform entries overwrite existing platform entries.
-    - User entries (``owner: "user"``) are always preserved.
-    - Stale platform entries (present in existing lock but not in
-      ``platform_entries``) are purged.
-    - New platform entries are added.
+    - Authoritative entries (platform + server-managed user tier) overwrite
+      their existing counterparts.
+    - Agent-installed entries are always preserved.
+    - Stale authoritative entries (present in existing lock but not in
+      ``authoritative_entries``) are purged — for a managed user skill this is
+      exactly when its row was deleted or disabled in the DB.
 
     Args:
-        platform_entries: Current platform skills (authoritative).
+        authoritative_entries: Current platform + managed skills (authoritative).
         existing_lock: Previously downloaded lock entries, or None for fresh sandbox.
 
     Returns:
@@ -168,14 +181,14 @@ def merge_lock_files(
     """
     merged: dict[str, SkillLockEntry] = {}
 
-    # Preserve user-installed skills from existing lock
+    # Preserve agent-installed skills from existing lock
     if existing_lock:
         for name, entry in existing_lock.items():
-            if entry.get("owner") == "user":
+            if is_agent_installed(entry):
                 merged[name] = entry
 
-    # Add/overwrite all current platform entries
-    merged.update(platform_entries)
+    # Add/overwrite all current authoritative entries
+    merged.update(authoritative_entries)
 
     return SkillsLockFile(version=LOCK_FILE_VERSION, skills=merged)
 

@@ -54,6 +54,7 @@ from src.server.database.workspace import (
     update_workspace_status,
 )
 from src.server.services.persistence.file import FilePersistenceService
+from src.server.services.user_skills import sandbox_skill_sync_params
 from src.server.services.workspace_entitlements import WorkspaceEntitlementsMixin
 from src.server.services.workspace_status_pubsub import (
     publish_status_change,
@@ -868,12 +869,16 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
             if reusing_sandbox and user_id:
                 tokens = await self._mint_sandbox_tokens(user_id, workspace_id)
 
+            user_skill_params = await sandbox_skill_sync_params(
+                user_id, self.config.skills.sandbox_skills_base
+            )
             return await sandbox.sync_sandbox_assets(
                 skill_dirs=skill_dirs,
                 reusing_sandbox=reusing_sandbox,
                 tokens=tokens or None,
                 user_id=user_id,
                 workspace_id=workspace_id,
+                **user_skill_params,
             )
 
         tasks: list[Any] = [_timed("mint+manifest", _mint_and_sync_assets())]
