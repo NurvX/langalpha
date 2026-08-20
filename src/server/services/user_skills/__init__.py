@@ -14,6 +14,7 @@ from src.server.services.user_skills.validate import (
     ValidatedSkill,
     reserved_skill_names,
     safe_extract_archive,
+    valid_command,
     validate_skill_archive,
 )
 
@@ -29,5 +30,6 @@ __all__ = [
     "resolve_user_skill_dir",
     "safe_extract_archive",
     "sandbox_skill_sync_params",
+    "valid_command",
     "validate_skill_archive",
 ]

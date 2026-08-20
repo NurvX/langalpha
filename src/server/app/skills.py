@@ -31,11 +31,11 @@ from pydantic import BaseModel, Field
 from ptc_agent.agent.middleware.skills import (
     SKILL_REGISTRY,
     SkillMode,
+    build_effective_skill_registry,
     list_skills,
     load_skill_content,
 )
 from src.server.database.user_skills import (
-    archive_key_in_use,
     delete_user_skill,
     get_user_skill,
     list_all_user_skills,
@@ -44,6 +44,7 @@ from src.server.database.user_skills import (
     list_user_skills,
     list_workspace_skill_disables,
     move_user_skill,
+    set_user_skill_command,
     set_user_skill_enabled,
     set_workspace_skill_disable,
     upsert_user_skill,
@@ -52,18 +53,28 @@ from src.server.database.workspace import get_workspace as db_get_workspace
 from src.server.services import skill_archive_storage
 from src.server.services.features import (
     get_disabled_builtin_skills,
+    get_skill_command_overrides,
     set_builtin_skill_disabled,
 )
 from src.server.services.user_skills import (
     SkillValidationError,
+    drop_archive_if_unused,
     fetch_skill_archive,
     reserved_skill_names,
+    valid_command,
     validate_skill_archive,
+)
+from src.server.services.user_skills.commands import (
+    effective_trigger,
+    ensure_free_of_platform,
+    set_platform_alias,
+    upload_seed,
 )
 from src.server.services.user_skills.limits import (
     MAX_SKILL_ARCHIVE_BYTES,
     MAX_SKILL_INLINE_BLOB_BYTES,
 )
+from src.server.services.workspace_manager import WorkspaceManager
 from src.server.utils.api import (
     CurrentUserId,
     OptionalUserId,
@@ -85,40 +96,6 @@ _NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 def _validate_name_param(name: str) -> None:
     if len(name) > 64 or not _NAME_RE.match(name):
         raise HTTPException(status_code=404, detail="Skill not found")
-
-
-_proactive_reconcile_tasks: set[asyncio.Task] = set()
-
-
-def _schedule_workspace_reconcile(
-    workspace_id: str, user_id: str, *, source: str
-) -> None:
-    """Fire-and-forget sync of a just-mutated workspace skill into a running
-    sandbox, so the change lands before the user's next turn. Best-effort: a
-    stopped workspace — or a ready session held by another worker — picks the
-    change up at its next cold acquire or post-turn pass instead."""
-    from src.server.services.workspace_manager import WorkspaceManager
-
-    try:
-        wm = WorkspaceManager.get_instance()
-    except Exception:
-        return
-
-    async def _run() -> None:
-        try:
-            await wm.reconcile_skills_if_running(
-                workspace_id, user_id, source=source
-            )
-        except Exception as e:
-            logger.warning(
-                "[skill_sync] proactive reconcile failed for %s: %s",
-                workspace_id,
-                e,
-            )
-
-    task = asyncio.create_task(_run())
-    _proactive_reconcile_tasks.add(task)
-    task.add_done_callback(_proactive_reconcile_tasks.discard)
 
 
 class SkillInfo(BaseModel):
@@ -151,12 +128,28 @@ class SkillsResponse(BaseModel):
 
 
 class SkillEnabledInput(BaseModel):
-    enabled: bool
+    """PATCH body; both fields optional so one call can toggle, re-alias, or
+    both. ``command: null`` (sent explicitly) clears the alias back to the
+    name — ``model_fields_set`` is what tells that apart from absent."""
+
+    enabled: bool | None = None
+    command: str | None = None
 
 
 class SkillContentResponse(BaseModel):
     name: str
     content: str
+
+
+def _validated_patch_fields(body: SkillEnabledInput) -> set[str]:
+    """400 on an empty PATCH; 422 on an explicit ``enabled: null`` (only
+    ``command`` is nullable — null means "back to the name")."""
+    fields = body.model_fields_set & {"enabled", "command"}
+    if not fields:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    if "enabled" in fields and body.enabled is None:
+        raise HTTPException(status_code=422, detail="enabled must be true or false")
+    return fields
 
 
 def _user_row_to_info(
@@ -169,7 +162,7 @@ def _user_row_to_info(
         description=row["description"],
         tool_count=0,
         tools=[],
-        command=row["name"],
+        command=effective_trigger(row),
         origin="workspace" if row.get("workspace_id") else "user",
         enabled=bool(row["enabled"]),
         editable=editable,
@@ -182,8 +175,32 @@ def _user_row_to_info(
     )
 
 
-def _platform_info(entry: dict, *, enabled: bool = True) -> SkillInfo:
-    return SkillInfo(**entry, enabled=enabled)
+def _platform_info(
+    entry: dict, *, enabled: bool = True, command_override: str | None = None
+) -> SkillInfo:
+    info = SkillInfo(**entry, enabled=enabled)
+    if command_override:
+        info.command = command_override
+    return info
+
+
+def _builtin_info(
+    skill,
+    *,
+    enabled: bool,
+    overrides: dict[str, str],
+    disabled_scope: Literal["user", "workspace"] | None = None,
+) -> SkillInfo:
+    """Response for a registry-backed (platform) skill, alias applied."""
+    return SkillInfo(
+        name=skill.name,
+        description=skill.description,
+        tool_count=len(skill.get_tool_names()),
+        tools=skill.get_tool_names(),
+        command=overrides.get(skill.name) or skill.command,
+        enabled=enabled,
+        disabled_scope=disabled_scope,
+    )
 
 
 async def _require_owned_workspace(workspace_id: str, user_id: str) -> None:
@@ -201,6 +218,7 @@ async def _assemble_skills(
     disables of inherited ones."""
     platform = list_skills(mode=mode)
     disabled_builtins = await get_disabled_builtin_skills(user_id)
+    overrides = await get_skill_command_overrides(user_id)
     ws_disabled: set[str] = (
         await list_workspace_skill_disables(workspace_id) if workspace_id else set()
     )
@@ -209,10 +227,11 @@ async def _assemble_skills(
     for entry in platform:
         user_dis = entry["name"] in disabled_builtins
         ws_dis = entry["name"] in ws_disabled
+        override = overrides.get(entry["name"])
         if not (user_dis or ws_dis):
-            skills.append(_platform_info(entry))
+            skills.append(_platform_info(entry, command_override=override))
         elif include_disabled:
-            info = _platform_info(entry, enabled=False)
+            info = _platform_info(entry, enabled=False, command_override=override)
             # disabled_scope is a workspace-view annotation only: it tells
             # that surface which disables it cannot undo. The user view can
             # undo its own disables, so it stays unset there.
@@ -226,11 +245,15 @@ async def _assemble_skills(
         else await list_enabled_user_skills(user_id)
     )
     ws_rows: list[dict] = []
+    # Shadowing is by name regardless of enabled state (same rule as the
+    # delivery bundle), so ws_names comes from the unfiltered rows and the
+    # enabled filter only decides what this listing emits.
+    ws_names: set[str] = set()
     if workspace_id:
         ws_rows = await list_user_skills(user_id, workspace_id=workspace_id)
+        ws_names = {r["name"] for r in ws_rows}
         if not include_disabled:
             ws_rows = [r for r in ws_rows if r["enabled"]]
-    ws_names = {r["name"] for r in ws_rows}
     user_names = {r["name"] for r in user_rows}
 
     for r in user_rows:
@@ -272,6 +295,7 @@ async def _assemble_all_scopes(
     entries, the deny-list of workspaces that switched it off.
     """
     disabled_builtins = await get_disabled_builtin_skills(user_id)
+    overrides = await get_skill_command_overrides(user_id)
     disables_by_name: dict[str, list[str]] = {}
     for d in await list_skill_disables_for_user(user_id):
         disables_by_name.setdefault(d["name"], []).append(d["workspace_id"])
@@ -281,7 +305,11 @@ async def _assemble_all_scopes(
         user_dis = entry["name"] in disabled_builtins
         if user_dis and not include_disabled:
             continue
-        info = _platform_info(entry, enabled=not user_dis)
+        info = _platform_info(
+            entry,
+            enabled=not user_dis,
+            command_override=overrides.get(entry["name"]),
+        )
         info.disabled_workspace_ids = sorted(
             disables_by_name.get(entry["name"], [])
         )
@@ -360,18 +388,21 @@ async def _upload_skill_archive(
     """
     raw = await read_capped(file, MAX_SKILL_ARCHIVE_BYTES)
     try:
-        validated = validate_skill_archive(raw)
+        # Unzip + re-zip + hash over as much as 8 MB: off the event loop.
+        validated = await asyncio.to_thread(validate_skill_archive, raw)
     except SkillValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if validated.name in reserved_skill_names():
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"'{validated.name}' is reserved by a built-in skill or "
-                "command; choose another name"
-            ),
-        )
+    # The name is itself a live trigger (effective_trigger falls back to it),
+    # so it has to clear the platform tier the same way an alias does — a
+    # builtin the user renamed to this name would otherwise be shadowed by
+    # the upload. Renaming onto an existing row is already blocked in
+    # set_platform_alias; this is the same rule in the other order.
+    try:
+        await ensure_free_of_platform(user_id, validated.name)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    command_seed = await upload_seed(user_id, validated, workspace_id)
 
     archive_key: str | None = None
     archive_blob: bytes | None = None
@@ -382,7 +413,10 @@ async def _upload_skill_archive(
                 content=validated.canonical_zip,
                 content_hash=validated.content_hash,
             )
-        except skill_archive_storage.SkillArchiveUploadError as exc:
+        # Base class, not just the upload subclass: a key the adapter refuses
+        # to build is still a storage failure the caller should see as one,
+        # and the reconciler's copy of this call already catches the base.
+        except skill_archive_storage.SkillArchiveStorageError as exc:
             raise HTTPException(
                 status_code=502,
                 detail="Could not store the skill archive — please retry.",
@@ -414,14 +448,13 @@ async def _upload_skill_archive(
             archive_bytes=len(validated.canonical_zip),
             file_count=validated.file_count,
             workspace_id=workspace_id,
+            command=command_seed,
         )
     except BaseException:
-        if archive_key:
-            await skill_archive_storage.delete_archive(archive_key)
+        await drop_archive_if_unused(user_id, archive_key)
         raise
 
-    if superseded_key and not await archive_key_in_use(superseded_key):
-        await skill_archive_storage.delete_archive(superseded_key)
+    await drop_archive_if_unused(user_id, superseded_key)
     return _user_row_to_info(row)
 
 
@@ -436,6 +469,90 @@ async def upload_skill(
     return await _upload_skill_archive(user_id, file)
 
 
+def _normalize_command_input(raw: str | None) -> str | None:
+    """A user-typed trigger: leading slash tolerated, empty clears the alias
+    (falls back to the skill name), anything else must pass the charset."""
+    if raw is None:
+        return None
+    command = raw.strip().lstrip("/").strip()
+    if not command:
+        return None
+    if not valid_command(command):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Commands are lowercase letters, digits and hyphens, "
+                "64 characters max"
+            ),
+        )
+    return command
+
+
+async def _apply_platform_command_edit(
+    user_id: str, skill, command: str | None
+) -> SkillInfo:
+    """Rename a builtin's trigger; collision policy lives in
+    :func:`set_platform_alias`."""
+    try:
+        overrides = await set_platform_alias(
+            user_id, skill.name, skill.command, command
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    disabled = await get_disabled_builtin_skills(user_id)
+    return _builtin_info(
+        skill, enabled=skill.name not in disabled, overrides=overrides
+    )
+
+
+async def _apply_user_command_edit(
+    user_id: str, name: str, raw: str | None
+) -> SkillInfo:
+    command = _normalize_command_input(raw)
+    if command == name:
+        command = None
+
+    # A registry name is definitively the platform tier: user skill names can
+    # never equal builtin names (reserved at upload).
+    skill = SKILL_REGISTRY.get(name)
+    if skill is not None:
+        return await _apply_platform_command_edit(user_id, skill, command)
+
+    try:
+        if command is not None:
+            await ensure_free_of_platform(user_id, command)
+        row = await set_user_skill_command(user_id, name, command)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return _user_row_to_info(row)
+
+
+async def _apply_workspace_command_edit(
+    user_id: str, workspace_id: str, name: str, raw: str | None
+) -> SkillInfo:
+    command = _normalize_command_input(raw)
+    if command == name:
+        command = None
+    try:
+        if command is not None:
+            await ensure_free_of_platform(user_id, command)
+        row = await set_user_skill_command(
+            user_id, name, command, workspace_id=workspace_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if row is not None:
+        return _user_row_to_info(row)
+    if name in SKILL_REGISTRY or await get_user_skill(user_id, name) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This skill is inherited; rename its command in Plugins",
+        )
+    raise HTTPException(status_code=404, detail="Skill not found")
+
+
 @router.patch("/{name}", response_model=SkillInfo)
 @handle_api_exceptions("update skill", logger)
 async def patch_skill(
@@ -443,13 +560,21 @@ async def patch_skill(
     body: SkillEnabledInput,
     user_id: CurrentUserId,
 ):
-    """Enable/disable a skill; dispatches on tier by name.
+    """Enable/disable and/or re-alias a skill; dispatches on tier by name.
 
-    A user-skill name toggles its row; a builtin name writes the per-user
-    disable in preferences. The builtin disable takes effect on the next
-    agent build and the next sandbox sync (which also removes the files).
+    A user-skill name updates its row; a builtin name writes the per-user
+    disable or command override in preferences. Builtin changes take effect
+    on the next agent build and the next sandbox sync.
     """
     _validate_name_param(name)
+    fields = _validated_patch_fields(body)
+
+    info: SkillInfo | None = None
+    if "command" in fields:
+        info = await _apply_user_command_edit(user_id, name, body.command)
+    if "enabled" not in fields:
+        return info
+
     row = await set_user_skill_enabled(user_id, name, body.enabled)
     if row is not None:
         return _user_row_to_info(row)
@@ -458,14 +583,8 @@ async def patch_skill(
     if skill is None:
         raise HTTPException(status_code=404, detail="Skill not found")
     disabled = await set_builtin_skill_disabled(user_id, name, disabled=not body.enabled)
-    return SkillInfo(
-        name=name,
-        description=skill.description,
-        tool_count=len(skill.get_tool_names()),
-        tools=skill.get_tool_names(),
-        command=skill.command,
-        enabled=name not in disabled,
-    )
+    overrides = await get_skill_command_overrides(user_id)
+    return _builtin_info(skill, enabled=name not in disabled, overrides=overrides)
 
 
 class SkillMoveInput(BaseModel):
@@ -507,7 +626,7 @@ async def move_skill(name: str, body: SkillMoveInput, user_id: CurrentUserId):
         raise HTTPException(status_code=404, detail="Skill not found")
     for ws in (body.from_workspace_id, body.to_workspace_id):
         if ws is not None:
-            _schedule_workspace_reconcile(ws, user_id, source="ws_move")
+            WorkspaceManager.schedule_skill_reconcile(ws, user_id, source="ws_move")
     return _user_row_to_info(row)
 
 
@@ -524,9 +643,7 @@ async def delete_skill(name: str, user_id: CurrentUserId):
     row = await delete_user_skill(user_id, name)
     if row is None:
         raise HTTPException(status_code=404, detail="Skill not found")
-    key = row.get("archive_key")
-    if key and not await archive_key_in_use(key):
-        await skill_archive_storage.delete_archive(key)
+    await drop_archive_if_unused(user_id, row.get("archive_key"))
     return Response(status_code=204)
 
 
@@ -534,7 +651,7 @@ async def delete_skill(name: str, user_id: CurrentUserId):
 @handle_api_exceptions("read skill content", logger)
 async def get_skill_content(
     name: str,
-    user_id: OptionalUserId,
+    user_id: CurrentUserId,
     workspace_id: Optional[str] = Query(
         None, description="Prefer this workspace's row over the user tier."
     ),
@@ -543,29 +660,40 @@ async def get_skill_content(
     platform; reserved names keep the platform tier collision-free, so the
     tier walk is belt-and-braces)."""
     _validate_name_param(name)
-    if user_id is not None:
-        row = None
-        if workspace_id is not None:
-            await _require_owned_workspace(workspace_id, user_id)
-            row = await get_user_skill(user_id, name, workspace_id=workspace_id)
-        if row is None:
-            row = await get_user_skill(user_id, name)
-        if row is not None:
-            data = await fetch_skill_archive(user_id, row)
-            try:
-                with zipfile.ZipFile(io.BytesIO(data)) as zf:
-                    content = zf.read(f"{name}/SKILL.md").decode("utf-8")
-            except (KeyError, zipfile.BadZipFile) as exc:
-                logger.exception(
-                    "stored skill archive unreadable (user=%s name=%s)",
-                    user_id, name,
-                )
-                raise HTTPException(
-                    status_code=502, detail="Stored skill archive is unreadable"
-                ) from exc
-            return {"name": name, "content": content}
+    row = None
+    if workspace_id is not None:
+        await _require_owned_workspace(workspace_id, user_id)
+        row = await get_user_skill(user_id, name, workspace_id=workspace_id)
+    if row is None:
+        row = await get_user_skill(user_id, name)
+    if row is not None:
+        data = await fetch_skill_archive(user_id, row)
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                content = zf.read(f"{name}/SKILL.md").decode("utf-8")
+        except (KeyError, zipfile.BadZipFile) as exc:
+            logger.exception(
+                "stored skill archive unreadable (user=%s name=%s)",
+                user_id,
+                name,
+            )
+            raise HTTPException(
+                status_code=502, detail="Stored skill archive is unreadable"
+            ) from exc
+        return {"name": name, "content": content}
 
-    content = load_skill_content(name)
+    # Platform tier: resolve through the effective registry so a hidden skill,
+    # or one the account has disabled, is not readable here. Deliberately the
+    # account tier only, matching the row branch above: this reads a skill's
+    # source for management, and a workspace deny-list scopes where a skill
+    # runs, not whether its owner may look at it.
+    registry = build_effective_skill_registry(
+        None, disabled_skills=await get_disabled_builtin_skills(user_id)
+    )
+    skill = registry.get(name)
+    if skill is None or skill.exposure == "hidden":
+        raise HTTPException(status_code=404, detail="Skill not found")
+    content = load_skill_content(name, registry=registry)
     if content is None:
         raise HTTPException(status_code=404, detail="Skill not found")
     return {"name": name, "content": content}
@@ -584,17 +712,10 @@ _INHERITED_DELETE = (
 )
 
 
-@workspace_router.get("/{workspace_id}/skills", response_model=SkillsResponse)
-@handle_api_exceptions("list workspace skills", logger)
-async def get_workspace_skills(
-    workspace_id: str,
-    user_id: CurrentUserId,
-    mode: Optional[SkillMode] = Query(None),
-    include_disabled: bool = Query(False),
-):
-    """The workspace-effective merged list (management view)."""
-    await _require_owned_workspace(workspace_id, user_id)
-    return await _assemble_skills(user_id, mode, include_disabled, workspace_id)
+# The workspace-effective *listing* is `GET /api/v1/skills?workspace_id=` —
+# one merged view across all three tiers, so it belongs on the merged endpoint.
+# The routes below own what is genuinely workspace-scoped: this workspace's own
+# rows, and its disables of inherited ones.
 
 
 @workspace_router.post(
@@ -610,7 +731,7 @@ async def upload_workspace_skill(
     user-tier skill here. Platform names stay reserved in both scopes."""
     await _require_owned_workspace(workspace_id, user_id)
     info = await _upload_skill_archive(user_id, file, workspace_id=workspace_id)
-    _schedule_workspace_reconcile(workspace_id, user_id, source="ws_upload")
+    WorkspaceManager.schedule_skill_reconcile(workspace_id, user_id, source="ws_upload")
     return info
 
 
@@ -622,19 +743,37 @@ async def patch_workspace_skill(
     body: SkillEnabledInput,
     user_id: CurrentUserId,
 ):
-    """Enable/disable a skill within one workspace; dispatches on tier.
+    """Enable/disable or re-alias a skill within one workspace.
 
-    A workspace row toggles its own flag; an inherited name (platform or user
-    tier) writes a workspace-level disable. A user-level disable is not
-    workspace-reversible — mirrors the MCP builtin-disable asymmetry.
+    A workspace row updates its own flags; an inherited name (platform or
+    user tier) can only be workspace-disabled here, never renamed. A
+    user-level disable is not workspace-reversible — mirrors the MCP
+    builtin-disable asymmetry.
     """
     _validate_name_param(name)
     await _require_owned_workspace(workspace_id, user_id)
+    fields = _validated_patch_fields(body)
+
+    info: SkillInfo | None = None
+    if "command" in fields:
+        info = await _apply_workspace_command_edit(
+            user_id, workspace_id, name, body.command
+        )
+    if "enabled" not in fields:
+        return info
 
     row = await set_user_skill_enabled(
         user_id, name, body.enabled, workspace_id=workspace_id
     )
     if row is not None:
+        # A workspace row's dir is the reconciler's alone to write or remove —
+        # the prune path preserves linked names on purpose — so without this a
+        # skill the user just disabled keeps its SKILL.md on disk and stays
+        # readable for the whole of the next turn. Same call the upload and
+        # delete paths make, and best-effort in the same way.
+        WorkspaceManager.schedule_skill_reconcile(
+            workspace_id, user_id, source="ws_toggle"
+        )
         return _user_row_to_info(row)
 
     user_row = await get_user_skill(user_id, name)
@@ -657,13 +796,11 @@ async def patch_workspace_skill(
     if user_disabled and body.enabled:
         raise HTTPException(status_code=409, detail=_USER_LEVEL_DISABLED)
     await set_workspace_skill_disable(workspace_id, name, not body.enabled)
-    return SkillInfo(
-        name=name,
-        description=skill.description,
-        tool_count=len(skill.get_tool_names()),
-        tools=skill.get_tool_names(),
-        command=skill.command,
+    overrides = await get_skill_command_overrides(user_id)
+    return _builtin_info(
+        skill,
         enabled=body.enabled,
+        overrides=overrides,
         disabled_scope=None if body.enabled else "workspace",
     )
 
@@ -687,8 +824,6 @@ async def delete_workspace_skill(
         if await get_user_skill(user_id, name) is not None:
             raise HTTPException(status_code=409, detail=_INHERITED_DELETE)
         raise HTTPException(status_code=404, detail="Skill not found")
-    key = row.get("archive_key")
-    if key and not await archive_key_in_use(key):
-        await skill_archive_storage.delete_archive(key)
-    _schedule_workspace_reconcile(workspace_id, user_id, source="ws_delete")
+    await drop_archive_if_unused(user_id, row.get("archive_key"))
+    WorkspaceManager.schedule_skill_reconcile(workspace_id, user_id, source="ws_delete")
     return Response(status_code=204)

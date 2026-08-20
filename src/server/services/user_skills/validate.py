@@ -26,11 +26,12 @@ from typing import Any
 import yaml
 
 from ptc_agent.agent.middleware.skills.discovery import (
-    _validate_skill_name,
     parse_skill_metadata,
+    validate_skill_name,
 )
 from ptc_agent.agent.middleware.skills.registry import SKILL_REGISTRY
 from src.server.services.user_skills.limits import (
+    MAX_SKILL_DESCRIPTION_CHARS,
     MAX_SKILL_FILES,
     MAX_SKILL_MD_BYTES,
     MAX_SKILL_SINGLE_FILE_BYTES,
@@ -63,24 +64,39 @@ class ValidatedSkill:
     canonical_zip: bytes
     content_hash: str
     file_count: int
-    uncompressed_bytes: int
+    # Declared ``command:`` alias, charset-checked; only ever a SEED — the DB
+    # column is authoritative after creation. None when absent or invalid.
+    command: str | None = None
+
+
+# Triggers the composer owns outright: they run a client action or inject a
+# directive instead of starting a skill turn, so a skill sharing one is
+# unreachable by the default keystroke (the menu ranks skills last on an equal
+# match). Mirrored from BUILTIN_SLASH_COMMANDS in
+# web/src/components/ui/chat-input.helpers.tsx, which stays the source of truth
+# because it also carries the pill type and copy; a test pins the two together.
+COMPOSER_COMMANDS = frozenset(
+    {"subagent", "compact", "compaction", "summarize", "offload", "truncate"}
+)
 
 
 @functools.lru_cache(maxsize=1)
 def reserved_skill_names() -> frozenset[str]:
-    """Names a user skill may not take, all three sources.
+    """Names a user skill may not take, all four sources.
 
     Registry keys preserve the no-shadowing invariant; command names prevent a
     user skill named e.g. ``dashboard`` from colliding with
     ``interactive-dashboard``'s slash command; repo ``skills/`` dir names catch
-    shippers that never registered (e.g. ``x-api``). Static config, so caching
-    at module level is safe.
+    shippers that never registered (e.g. ``x-api``); composer commands are the
+    same collision one layer up, in the client. Static config, so caching at
+    module level is safe.
     """
     names: set[str] = set(SKILL_REGISTRY)
     names.update(s.command for s in SKILL_REGISTRY.values() if s.command)
     repo_skills = Path.cwd() / "skills"
     if repo_skills.is_dir():
         names.update(p.name for p in repo_skills.iterdir() if p.is_dir())
+    names |= COMPOSER_COMMANDS
     return frozenset(names)
 
 
@@ -88,12 +104,24 @@ def _entry_mode(info: zipfile.ZipInfo) -> int:
     return (info.external_attr >> 16) & _S_IFMT
 
 
+_UNSAFE_PATH_CHARS = frozenset("'\"`$;|&<>*?\n\r\t\\")
+
+
+def _unsafe_component(part: str) -> bool:
+    return (
+        part.startswith("-")
+        or any(c in _UNSAFE_PATH_CHARS or ord(c) < 0x20 or ord(c) == 0x7F for c in part)
+    )
+
+
 def _clean_member_path(info: zipfile.ZipInfo) -> str | None:
     """Return the member's sanitized posix path, or None for a directory entry.
 
     Raises SkillValidationError on anything that could escape the extraction
     root: absolute paths, drive letters, backslashes, ``..`` components, and
-    non-regular entries (symlinks, devices, fifos).
+    non-regular entries (symlinks, devices, fifos). Shell metacharacters and
+    leading dashes are rejected too — these paths are later interpolated into
+    sandbox command lines, and quoting there should not be the only guard.
     """
     name = info.filename
     if info.is_dir():
@@ -102,6 +130,8 @@ def _clean_member_path(info: zipfile.ZipInfo) -> str | None:
         raise SkillValidationError(f"unsafe path in archive: {name!r}")
     parts = [p for p in name.split("/") if p not in ("", ".")]
     if not parts or ".." in parts:
+        raise SkillValidationError(f"unsafe path in archive: {name!r}")
+    if any(_unsafe_component(p) for p in parts):
         raise SkillValidationError(f"unsafe path in archive: {name!r}")
     mode = _entry_mode(info)
     if mode and mode != _S_IFREG:
@@ -137,6 +167,51 @@ def _read_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
     return b"".join(chunks)
 
 
+def _forbid_alias_expansion(content: str) -> None:
+    """Reject YAML anchors and aliases in the frontmatter block.
+
+    ``yaml.safe_load`` blocks object construction but still expands aliases,
+    so a frontmatter well under MAX_SKILL_MD_BYTES can inflate into gigabytes
+    in memory (billion laughs) before any field check runs. Frontmatter has
+    no legitimate use for anchors, so they are rejected outright — ahead of
+    every ``safe_load`` in this module and in ``parse_skill_metadata``.
+    ``yaml.parse`` emits events without composing, so the scan itself cannot
+    expand anything.
+    """
+    match = _FRONTMATTER_RE.match(content)
+    if not match:
+        return
+    try:
+        for event in yaml.parse(match.group(1)):
+            if getattr(event, "anchor", None) is not None:
+                raise SkillValidationError(
+                    "YAML anchors and aliases are not allowed in frontmatter"
+                )
+    except yaml.YAMLError:
+        return  # the downstream parse names the syntax error
+
+
+def _frontmatter(content: str) -> dict[str, Any]:
+    """The raw frontmatter mapping, or empty when there isn't a usable one.
+
+    Reads the declared values rather than ``parse_skill_metadata``'s output,
+    which normalizes and truncates. Validation has to judge what the author
+    wrote, so a too-long field is rejected instead of silently trimmed.
+    """
+    match = _FRONTMATTER_RE.match(content)
+    if not match:
+        return {}
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _declared(content: str, key: str) -> str:
+    return str(_frontmatter(content).get(key, "") or "").strip()
+
+
 def _rejection_reason(content: str, dir_name: str) -> str:
     """Mirror parse_skill_metadata's downgrade branches to name the reason."""
     match = _FRONTMATTER_RE.match(content)
@@ -151,7 +226,7 @@ def _rejection_reason(content: str, dir_name: str) -> str:
     name = str(data.get("name", "")).strip()
     if not name:
         return "frontmatter must declare a name"
-    ok, err = _validate_skill_name(name, dir_name)
+    ok, err = validate_skill_name(name, dir_name)
     if not ok:
         return err
     if not str(data.get("description", "")).strip():
@@ -159,17 +234,22 @@ def _rejection_reason(content: str, dir_name: str) -> str:
     return "invalid SKILL.md frontmatter"
 
 
-def _declared_name(content: str) -> str | None:
-    match = _FRONTMATTER_RE.match(content)
-    if not match:
-        return None
-    try:
-        data = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    return str(data.get("name", "")).strip() or None
+_COMMAND_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+
+def valid_command(command: str) -> bool:
+    """Slash-command alias charset: same shape as a skill name."""
+    return len(command) <= 64 and bool(_COMMAND_RE.match(command))
+
+
+def _declared_command(content: str) -> str | None:
+    """Frontmatter ``command:`` seed; parse_skill_metadata ignores the key.
+
+    Invalid values degrade to None rather than failing validation — the alias
+    is an optional nicety on an otherwise valid skill.
+    """
+    command = _declared(content, "command")
+    return command if command and valid_command(command) else None
 
 
 def _canonical_zip(name: str, files: dict[str, bytes]) -> bytes:
@@ -225,6 +305,23 @@ def validate_skill_archive(raw: bytes) -> ValidatedSkill:
             )
 
         paths = {path for path, _ in members}
+
+        # A zip can hold both a file `x` and a file `x/y`; a filesystem cannot.
+        # Extraction would write `x`, then fail creating it as a parent dir —
+        # and that extraction runs inside resolve_llm_config, so one crafted
+        # upload would 500 every one of this user's turns. Reject at the door,
+        # before any member bytes are read.
+        ancestors = {
+            "/".join(path.split("/")[:i])
+            for path in paths
+            for i in range(1, path.count("/") + 1)
+        }
+        both = paths & ancestors
+        if both:
+            raise SkillValidationError(
+                f"archive member {min(both)!r} is both a file and a directory"
+            )
+
         top_dir: str | None = None
         if "SKILL.md" not in paths:
             top_levels = {path.split("/", 1)[0] for path in paths}
@@ -261,15 +358,23 @@ def validate_skill_archive(raw: bytes) -> ValidatedSkill:
     except UnicodeDecodeError as e:
         raise SkillValidationError("SKILL.md is not valid UTF-8") from e
 
-    dir_name = top_dir or _declared_name(skill_md)
+    _forbid_alias_expansion(skill_md)
+    dir_name = top_dir or _declared(skill_md, "name")
     if not dir_name:
         raise SkillValidationError("frontmatter must declare a name")
+
+    # The cap is measured on the declared value: parse_skill_metadata truncates
+    # at the same boundary, so checking its output would silently accept an
+    # over-long description instead of telling the author to shorten it.
+    if len(_declared(skill_md, "description")) > MAX_SKILL_DESCRIPTION_CHARS:
+        raise SkillValidationError(
+            f"description exceeds {MAX_SKILL_DESCRIPTION_CHARS} characters "
+            "(it is listed in the model's skill manifest every turn)"
+        )
 
     meta = parse_skill_metadata(skill_md, f"{dir_name}/SKILL.md", dir_name)
     if not meta["confirmed"]:
         raise SkillValidationError(_rejection_reason(skill_md, dir_name))
-    if not meta["description"]:
-        raise SkillValidationError("frontmatter must declare a description")
 
     name = meta["name"]
     canonical = _canonical_zip(name, files)
@@ -284,7 +389,7 @@ def validate_skill_archive(raw: bytes) -> ValidatedSkill:
         canonical_zip=canonical,
         content_hash=f"sha256:{sha256(canonical).hexdigest()}",
         file_count=len(files),
-        uncompressed_bytes=sum(len(v) for v in files.values()),
+        command=_declared_command(skill_md),
     )
 
 

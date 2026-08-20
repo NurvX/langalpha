@@ -1685,6 +1685,39 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
             sandbox, user_id=user_id, workspace_id=workspace_id, source=source
         )
 
+    # Strong refs to in-flight fire-and-forget reconciles (the standard
+    # asyncio.create_task GC anchor); never consulted as state.
+    _skill_reconcile_tasks: set[asyncio.Task] = set()
+
+    @classmethod
+    def schedule_skill_reconcile(
+        cls, workspace_id: str, user_id: str, *, source: str
+    ) -> None:
+        """Fire-and-forget sync of a just-mutated workspace skill into a
+        running sandbox, so the change lands before the user's next turn.
+        Best-effort: an uninitialized manager, a stopped workspace, or a
+        ready session held by another worker picks the change up at its next
+        cold acquire or post-turn pass instead."""
+        try:
+            manager = cls.get_instance()
+        except Exception:
+            return
+
+        async def _run() -> None:
+            try:
+                await manager.reconcile_skills_if_running(
+                    workspace_id, user_id, source=source
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[skill_sync] proactive reconcile failed for "
+                    f"{workspace_id}: {e}"
+                )
+
+        task = asyncio.create_task(_run())
+        cls._skill_reconcile_tasks.add(task)
+        task.add_done_callback(cls._skill_reconcile_tasks.discard)
+
     async def reconcile_skills_if_running(
         self, workspace_id: str, user_id: str, *, source: str
     ) -> None:

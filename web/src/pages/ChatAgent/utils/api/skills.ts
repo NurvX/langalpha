@@ -96,22 +96,21 @@ export async function setSkillEnabled(name: string, enabled: boolean): Promise<S
   return data;
 }
 
-export async function deleteSkill(name: string): Promise<void> {
-  await api.delete(`/api/v1/skills/${encodeURIComponent(name)}`);
+/** Re-alias a skill's slash trigger; null clears back to the name. Same
+ * tier dispatch as the enabled toggle (builtin names write a preference). */
+export async function setSkillCommand(
+  name: string,
+  command: string | null,
+): Promise<SkillInfo> {
+  const { data } = await api.patch<SkillInfo>(
+    `/api/v1/skills/${encodeURIComponent(name)}`,
+    { command },
+  );
+  return data;
 }
 
-export async function getWorkspaceSkills(
-  workspaceId: string,
-  opts?: { mode?: string | null; includeDisabled?: boolean },
-): Promise<SkillInfo[]> {
-  const params: Record<string, string | boolean> = {};
-  if (opts?.mode) params.mode = opts.mode;
-  if (opts?.includeDisabled) params.include_disabled = true;
-  const { data } = await api.get(
-    `/api/v1/workspaces/${workspaceId}/skills`,
-    { params },
-  );
-  return data.skills || [];
+export async function deleteSkill(name: string): Promise<void> {
+  await api.delete(`/api/v1/skills/${encodeURIComponent(name)}`);
 }
 
 export async function uploadWorkspaceSkill(
@@ -139,6 +138,19 @@ export async function setWorkspaceSkillEnabled(
   const { data } = await api.patch<SkillInfo>(
     `/api/v1/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}`,
     { enabled },
+  );
+  return data;
+}
+
+/** Re-alias a workspace-scoped row's trigger; inherited names 409. */
+export async function setWorkspaceSkillCommand(
+  workspaceId: string,
+  name: string,
+  command: string | null,
+): Promise<SkillInfo> {
+  const { data } = await api.patch<SkillInfo>(
+    `/api/v1/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}`,
+    { command },
   );
   return data;
 }

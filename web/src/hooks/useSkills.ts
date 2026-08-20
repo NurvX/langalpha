@@ -4,9 +4,10 @@ import {
   deleteSkill,
   deleteWorkspaceSkill,
   getSkills,
-  getWorkspaceSkills,
   moveSkill,
+  setSkillCommand,
   setSkillEnabled,
+  setWorkspaceSkillCommand,
   setWorkspaceSkillEnabled,
   uploadSkill,
   uploadWorkspaceSkill,
@@ -57,10 +58,10 @@ export function useMoveSkill() {
   });
 }
 
-/** Workspace-scoped toggle with the workspace id in the vars — for the
- * all-scopes Plugins view, where one list mixes rows from many workspaces
- * (the fixed-workspace variants below serve the single-workspace pages). */
-export function useSetSkillEnabledInWorkspace() {
+/** Workspace-scoped toggle. The workspace id rides in the vars rather than a
+ * hook argument because the all-scopes Plugins list mixes rows from many
+ * workspaces in one list; a fixed-workspace page just passes the same id. */
+export function useToggleWorkspaceSkill() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -78,7 +79,7 @@ export function useSetSkillEnabledInWorkspace() {
   });
 }
 
-export function useDeleteSkillInWorkspace() {
+export function useDeleteWorkspaceSkill() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ workspaceId, name }: { workspaceId: string; name: string }) =>
@@ -116,6 +117,30 @@ export function useToggleSkill() {
   });
 }
 
+/** Re-alias a skill's slash trigger in any scope; the workspace id in the
+ * vars routes workspace rows to their own endpoint. Whole-prefix
+ * invalidation so the slash menu picks the new trigger up immediately. */
+export function useSetSkillCommand() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      name,
+      command,
+      workspaceId,
+    }: {
+      name: string;
+      command: string | null;
+      workspaceId?: string | null;
+    }) =>
+      workspaceId
+        ? setWorkspaceSkillCommand(workspaceId, name, command)
+        : setSkillCommand(name, command),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.skills.all });
+    },
+  });
+}
+
 export function useDeleteSkill() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -123,15 +148,6 @@ export function useDeleteSkill() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.skills.all });
     },
-  });
-}
-
-export function useWorkspaceSkills(workspaceId: string, includeDisabled = true) {
-  return useQuery({
-    queryKey: queryKeys.skills.list(null, includeDisabled, workspaceId),
-    queryFn: () => getWorkspaceSkills(workspaceId, { includeDisabled }),
-    staleTime: 60_000,
-    enabled: !!workspaceId,
   });
 }
 
@@ -145,27 +161,6 @@ export function useUploadWorkspaceSkill(workspaceId: string) {
       file: File;
       onProgress?: (percent: number) => void;
     }) => uploadWorkspaceSkill(workspaceId, file, onProgress ?? null),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.skills.all });
-    },
-  });
-}
-
-export function useToggleWorkspaceSkill(workspaceId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
-      setWorkspaceSkillEnabled(workspaceId, name, enabled),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.skills.all });
-    },
-  });
-}
-
-export function useDeleteWorkspaceSkill(workspaceId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (name: string) => deleteWorkspaceSkill(workspaceId, name),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.skills.all });
     },

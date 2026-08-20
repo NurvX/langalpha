@@ -836,6 +836,8 @@ async def resolve_llm_config(
     config.user_skills = list(bundle.skills)
     config.disabled_skills = bundle.disabled_builtins
     config.user_skill_dir = bundle.dir
+    config.workspace_skill_dir = bundle.workspace_dir
+    config.skill_command_overrides = dict(bundle.command_overrides)
 
     # Bootstrap LLMConfig when agent_config.yaml has llm: null.
     # The user must have configured a model via the UI or per-request param.

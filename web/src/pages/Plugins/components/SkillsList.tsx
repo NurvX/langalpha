@@ -9,8 +9,9 @@ import {
   useToggleSkill,
   useDeleteSkill,
   useMoveSkill,
-  useSetSkillEnabledInWorkspace,
-  useDeleteSkillInWorkspace,
+  useSetSkillCommand,
+  useToggleWorkspaceSkill,
+  useDeleteWorkspaceSkill,
 } from '@/hooks/useSkills';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
 import {
@@ -19,6 +20,7 @@ import {
   ListEmpty,
   ListError,
   ListSkeleton,
+  SectionHeader,
 } from '@/pages/ChatAgent/components/mcp/McpPrimitives';
 import { formatApiErrorDetail } from '@/pages/ChatAgent/utils/api';
 import type { SkillInfo } from '@/pages/ChatAgent/utils/api';
@@ -36,17 +38,6 @@ import { SkillUploadModal } from './SkillUploadModal';
  * here disappears there, not here.
  */
 
-function SectionHeader({ children }: { children: React.ReactNode }) {
-  return (
-    <h3
-      className="text-[0.6875rem] font-medium uppercase tracking-wide"
-      style={{ color: 'var(--color-text-tertiary)' }}
-    >
-      {children}
-    </h3>
-  );
-}
-
 export function SkillsList() {
   const { t } = useTranslation();
   const { data: skills, isLoading, error } = useSkills(null, {
@@ -58,12 +49,16 @@ export function SkillsList() {
   const toggleMutation = useToggleSkill();
   const deleteMutation = useDeleteSkill();
   const moveMutation = useMoveSkill();
-  const wsToggleMutation = useSetSkillEnabledInWorkspace();
-  const wsDeleteMutation = useDeleteSkillInWorkspace();
+  const commandMutation = useSetSkillCommand();
+  const wsToggleMutation = useToggleWorkspaceSkill();
+  const wsDeleteMutation = useDeleteWorkspaceSkill();
 
   const [uploadOpen, setUploadOpen] = useState(false);
   const [togglingName, setTogglingName] = useState<string | null>(null);
   const [movingName, setMovingName] = useState<string | null>(null);
+  // Scope-qualified: a workspace row may share its name with the inherited
+  // user-tier row it shadows, and only the mutated row should read busy.
+  const rowKey = (s: SkillInfo) => `${s.workspace_id ?? ''}:${s.name}`;
   const [deleting, setDeleting] = useState<{
     name: string;
     workspaceId: string | null;
@@ -92,7 +87,7 @@ export function SkillsList() {
   );
 
   async function handleToggle(skill: SkillInfo, enabled: boolean) {
-    setTogglingName(skill.name);
+    setTogglingName(rowKey(skill));
     try {
       if (skill.origin === 'workspace' && skill.workspace_id) {
         await wsToggleMutation.mutateAsync({
@@ -119,7 +114,7 @@ export function SkillsList() {
     workspaceId: string,
     disabled: boolean,
   ) {
-    setTogglingName(skill.name);
+    setTogglingName(rowKey(skill));
     try {
       await wsToggleMutation.mutateAsync({
         workspaceId,
@@ -137,8 +132,27 @@ export function SkillsList() {
     }
   }
 
+  async function handleCommandSave(skill: SkillInfo, command: string | null) {
+    setTogglingName(rowKey(skill));
+    try {
+      await commandMutation.mutateAsync({
+        name: skill.name,
+        command,
+        workspaceId: skill.workspace_id ?? null,
+      });
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: t('plugins.skills.commandFailed'),
+        description: formatApiErrorDetail(err),
+      });
+    } finally {
+      setTogglingName(null);
+    }
+  }
+
   async function handleMove(skill: SkillInfo, toWorkspaceId: string | null) {
-    setMovingName(skill.name);
+    setMovingName(rowKey(skill));
     try {
       await moveMutation.mutateAsync({
         name: skill.name,
@@ -199,16 +213,16 @@ export function SkillsList() {
               <SkillRow
                 key={skill.name}
                 skill={skill}
-                toggling={togglingName === skill.name}
+                toggling={togglingName === rowKey(skill)}
                 onToggle={(enabled) => handleToggle(skill, enabled)}
+                onCommandSave={(command) => handleCommandSave(skill, command)}
                 scopeControl={
                   <ScopeControl
                     workspaces={wsOptions}
                     scopeWorkspaceId={null}
                     disabledWorkspaceIds={skill.disabled_workspace_ids ?? []}
                     checklistLocked={!skill.enabled}
-                    canMove={false}
-                    busy={togglingName === skill.name}
+                    busy={togglingName === rowKey(skill)}
                     onSetWorkspaceDisabled={(wsId, disabled) =>
                       handleSetWorkspaceDisabled(skill, wsId, disabled)
                     }
@@ -238,8 +252,9 @@ export function SkillsList() {
               <SkillRow
                 key={skill.name}
                 skill={skill}
-                toggling={togglingName === skill.name}
+                toggling={togglingName === rowKey(skill)}
                 onToggle={(enabled) => handleToggle(skill, enabled)}
+                onCommandSave={(command) => handleCommandSave(skill, command)}
                 onDelete={() => setDeleting({ name: skill.name, workspaceId: null })}
                 scopeControl={
                   <ScopeControl
@@ -247,7 +262,7 @@ export function SkillsList() {
                     scopeWorkspaceId={null}
                     disabledWorkspaceIds={skill.disabled_workspace_ids ?? []}
                     checklistLocked={!skill.enabled}
-                    busy={togglingName === skill.name || movingName === skill.name}
+                    busy={togglingName === rowKey(skill) || movingName === rowKey(skill)}
                     onSetWorkspaceDisabled={(wsId, disabled) =>
                       handleSetWorkspaceDisabled(skill, wsId, disabled)
                     }
@@ -272,14 +287,23 @@ export function SkillsList() {
               <SkillRow
                 key={`${wsId}:${skill.name}`}
                 skill={skill}
-                toggling={togglingName === skill.name}
+                toggling={togglingName === rowKey(skill)}
                 onToggle={(enabled) => handleToggle(skill, enabled)}
+                onCommandSave={(command) => handleCommandSave(skill, command)}
                 onDelete={() => setDeleting({ name: skill.name, workspaceId: wsId })}
                 scopeControl={
                   <ScopeControl
                     workspaces={wsOptions}
                     scopeWorkspaceId={wsId}
-                    busy={movingName === skill.name}
+                    busy={movingName === rowKey(skill)}
+                    moveToAllBlockedReason={
+                      // move_user_skill 409s on the known destination
+                      // collision, so don't advertise a move that is
+                      // guaranteed to fail for a shadowing row.
+                      skill.shadows_inherited
+                        ? t('plugins.scope.moveShadowBlocked')
+                        : null
+                    }
                     onMove={(toWorkspaceId) => handleMove(skill, toWorkspaceId)}
                   />
                 }

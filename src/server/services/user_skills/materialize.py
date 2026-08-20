@@ -28,7 +28,8 @@ import os
 import shutil
 import tempfile
 import uuid
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -39,7 +40,11 @@ from src.server.database.user_skills import (
     list_workspace_skill_disables,
 )
 from src.server.services import skill_archive_storage
-from src.server.services.features import get_disabled_builtin_skills
+from src.server.services.features import (
+    get_disabled_builtin_skills,
+    get_skill_command_overrides,
+)
+from src.server.services.user_skills.commands import effective_trigger
 from src.server.services.user_skills.validate import safe_extract_archive
 
 logger = logging.getLogger(__name__)
@@ -53,15 +58,23 @@ class UserSkillSpec:
     description: str
     command: str
     confirmed: bool
+    # Tier marker: workspace-tier rows sort after user-tier ones in the slash
+    # fold, so a workspace row wins a same-trigger collision in its workspace.
+    workspace_scoped: bool = False
 
 
 @dataclass(frozen=True)
 class UserSkillBundle:
-    """Everything the per-turn agent build consumes from the user skill tier."""
+    """Everything the per-turn agent build consumes from the user skill tier.
+
+    ``command_overrides`` is read-only by contract (the bundle is shared);
+    consumers copy before mutating.
+    """
 
     dir: str | None
     skills: tuple[UserSkillSpec, ...]
     disabled_builtins: frozenset[str]
+    command_overrides: Mapping[str, str] = field(default_factory=dict)
 
 
 EMPTY_USER_SKILL_BUNDLE = UserSkillBundle(
@@ -201,6 +214,7 @@ async def load_user_skill_bundle(
     """
     rows = await list_enabled_user_skills(user_id, workspace_id=workspace_id)
     disabled = await get_disabled_builtin_skills(user_id)
+    command_overrides = await get_skill_command_overrides(user_id)
 
     scope = "user"
     if workspace_id is not None:
@@ -235,12 +249,14 @@ async def load_user_skill_bundle(
             UserSkillSpec(
                 name=r["name"],
                 description=r["description"],
-                command=r["name"],
+                command=effective_trigger(r),
                 confirmed=bool(r["confirmed"]),
+                workspace_scoped=bool(r["workspace_id"]),
             )
             for r in spec_rows
         ),
         disabled_builtins=disabled,
+        command_overrides=command_overrides,
     )
 
 

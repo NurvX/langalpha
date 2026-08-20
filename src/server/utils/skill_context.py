@@ -77,6 +77,7 @@ def detect_slash_commands(
     mode: SkillMode | None = None,
     *,
     extra_commands: Optional[dict[str, str]] = None,
+    allowed_skills: Optional[set[str]] = None,
 ) -> tuple[str, list[SkillContext]]:
     """Detect slash command prefixes in user message text.
 
@@ -92,6 +93,8 @@ def detect_slash_commands(
         mode: Optional agent mode filter
         extra_commands: Additional command → skill-name entries (the caller's
             user-tier skills) merged over the builtin map.
+        allowed_skills: Names the caller's build actually exposes. None means
+            no per-build gating (the CLI and tests, which have no user).
 
     Returns:
         Tuple of (cleaned_message, detected_skill_contexts)
@@ -101,7 +104,25 @@ def detect_slash_commands(
 
     command_map = get_command_to_skill_map(mode)
     if extra_commands:
+        # A caller-supplied trigger REPLACES any builtin trigger for the same
+        # skill: a renamed platform command must stop answering to its old
+        # name. User-skill names can never collide with builtin skill names
+        # (reserved), so this filter only ever fires for platform renames.
+        renamed = set(extra_commands.values())
+        command_map = {
+            c: n for c, n in command_map.items() if n not in renamed
+        }
         command_map.update(extra_commands)
+    if allowed_skills is not None:
+        # After the merge, never before: this drops a disabled skill's alias,
+        # and doing it first would let the builtin trigger that alias replaced
+        # come back. One filter covers the renamed map, the default triggers,
+        # the build's mode, and the user's own feature opt-outs, because a
+        # command whose skill the build refuses only ever strips the prefix
+        # and loads nothing.
+        command_map = {
+            c: n for c, n in command_map.items() if n in allowed_skills
+        }
     if not command_map:
         return message_text, []
 

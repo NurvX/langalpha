@@ -58,6 +58,9 @@ def upgrade() -> None:
             user_id VARCHAR(255) NOT NULL,
             workspace_id UUID NULL,
             name VARCHAR(64) NOT NULL,
+            -- Slash-command alias; NULL means the name is the trigger. The
+            -- column is authoritative after creation (frontmatter only seeds).
+            command VARCHAR(64) NULL,
             description TEXT NOT NULL DEFAULT '',
             license TEXT NULL,
             frontmatter JSONB NOT NULL DEFAULT '{}',
@@ -102,12 +105,34 @@ def upgrade() -> None:
         ON user_skills(workspace_id, name)
         WHERE workspace_id IS NOT NULL
     """)
-
-    # The agent build reads only the enabled rows, once per turn.
+    # Command aliases mirror the name uniqueness per scope. Only explicit
+    # aliases collide here; name-as-default-trigger overlap is checked
+    # app-side (it spans two columns).
     op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_user_skills_user_enabled
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_user_skills_user_command
+        ON user_skills(user_id, command)
+        WHERE workspace_id IS NULL AND command IS NOT NULL
+    """)
+    op.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_user_skills_workspace_command
+        ON user_skills(workspace_id, command)
+        WHERE workspace_id IS NOT NULL AND command IS NOT NULL
+    """)
+
+    # Every per-user read goes through user_id: the per-turn enabled-rows
+    # query, the management listings, and the cap check. Unpartitioned on
+    # purpose — a `WHERE enabled` partial index would leave the listings and
+    # the cap count (which must see disabled rows) on a sequential scan.
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_skills_user
         ON user_skills(user_id)
-        WHERE enabled
+    """)
+    # Archive keys are content-addressed and shared, so every delete asks
+    # whether another row still points at the object.
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_skills_archive_key
+        ON user_skills(archive_key)
+        WHERE archive_key IS NOT NULL
     """)
     # Workspace skill management lists by workspace.
     op.execute("""

@@ -13,15 +13,22 @@ the full new one.
 
 Invariants: content beats deletion (a dirty tree survives its row's deletion
 by re-import; a dirty row survives its dir's deletion by re-push); conflicts
-resolve sandbox-wins with the displaced row content retained in object storage;
-equal content on both sides heals a stale tracking ref without data movement.
-Deterministic failures (validation, caps, reserved names, transfer bounds) are
+resolve sandbox-wins, and where object storage backs the archive the displaced
+row content is retained under its own content-addressed key (a deployment
+storing archives inline has nowhere to keep it, so the losing side is gone and
+the conflict log says so); equal content on both sides heals a stale tracking
+ref without data movement.
+Deterministic failures (validation, reserved names, transfer bounds) are
 recorded as ``lastFailedSync`` keyed on the exact (treeHash, dbHash) state so
-they retry only when either side actually changes.
+they retry only when either side actually changes. A failure whose cause lies
+outside that pair -- the per-user caps, a sibling's alias, whether object
+storage is configured -- is never suppressed: the fingerprint could not see
+the remedy, so suppressing it would wedge the skill permanently.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -33,7 +40,7 @@ from ptc_agent.core.sandbox import skill_sync
 from ptc_agent.core.sandbox.skill_sync import SkillSyncError
 
 from src.server.database.user_skills import (
-    archive_key_in_use,
+    SkillSyncLockBusy,
     create_user_skill,
     delete_user_skill_cas,
     get_user_skill_by_id,
@@ -42,13 +49,18 @@ from src.server.database.user_skills import (
     workspace_skill_sync_lock,
 )
 from src.server.services import skill_archive_storage
+from src.server.services.features import get_skill_command_overrides
+from src.server.services.user_skills.commands import free_seed
 from src.server.services.user_skills.limits import (
     MAX_SKILL_FILES,
     MAX_SKILL_INLINE_BLOB_BYTES,
     MAX_SKILL_SINGLE_FILE_BYTES,
     MAX_SKILL_UNCOMPRESSED_BYTES,
 )
-from src.server.services.user_skills.materialize import fetch_skill_archive
+from src.server.services.user_skills.materialize import (
+    drop_archive_if_unused,
+    fetch_skill_archive,
+)
 from src.server.services.user_skills.validate import (
     SkillValidationError,
     ValidatedSkill,
@@ -62,14 +74,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# download_tree failure messages that depend only on the tree's content, so a
+# download_tree failure codes that depend only on the tree's content, so a
 # retry without a tree change can never succeed and suppression is safe.
-_DETERMINISTIC_DOWNLOAD = (
-    "too many files",
-    "tree too large",
-    "file too large",
-    "unsyncable tree",
+# Stamped by the sandbox script's fail(); carried on SkillSyncError.code.
+_DETERMINISTIC_DOWNLOAD = frozenset(
+    {"too_many_files", "tree_too_large", "file_too_large", "unsyncable"}
 )
+
+# A pass is bounded by the caps it enforces, so overrunning this means the
+# sandbox stopped answering rather than that the tree got big. Generous enough
+# for a full-cap tree over a slow link; the point is that the advisory lock is
+# released instead of pinning the workspace behind a dead sandbox.
+RECONCILE_TIMEOUT_SECONDS = 120
 
 
 @dataclass
@@ -139,7 +155,32 @@ async def reconcile_workspace_skills(
         return None
     try:
         async with workspace_skill_sync_lock(workspace_id):
-            return await _run_pass(sandbox, user_id, workspace_id, source)
+            # Inside the lock on purpose. wait_for cancels only the inner
+            # coroutine, so the lock's finally still runs its unlock on a live,
+            # uncancelled task; a timeout wrapped around the whole block would
+            # deliver the cancellation into that unlock and leave the advisory
+            # lock held until the pooled connection dies, which is how one hung
+            # sandbox makes a workspace permanently un-reconcilable.
+            return await asyncio.wait_for(
+                _run_pass(sandbox, user_id, workspace_id, source),
+                timeout=RECONCILE_TIMEOUT_SECONDS,
+            )
+    except TimeoutError:
+        logger.warning(
+            "[skill_sync] pass timed out after %ss (ws=%s source=%s)",
+            RECONCILE_TIMEOUT_SECONDS,
+            workspace_id,
+            source,
+        )
+        return None
+    except SkillSyncLockBusy:
+        # Another worker is mid-pass on this workspace; it sees the same state.
+        logger.debug(
+            "[skill_sync] pass skipped, lock held elsewhere (ws=%s source=%s)",
+            workspace_id,
+            source,
+        )
+        return None
     except Exception:
         logger.exception(
             "[skill_sync] reconcile pass failed (ws=%s source=%s)",
@@ -247,6 +288,10 @@ async def _decide(ctx: _Pass, name: str) -> None:
         return  # platform skills belong to the generic delivery path
 
     sync = (entry or {}).get("sync") or {}
+    if row is not None and not row["enabled"]:
+        await _withdraw(ctx, name, rep, entry, sync, row)
+        return
+
     if sync.get("linkedSkillId"):
         await _decide_linked(ctx, name, rep, sync, row)
     elif entry and entry.get("sourceType") == MANAGED_SOURCE_TYPE:
@@ -261,7 +306,7 @@ async def _decide(ctx: _Pass, name: str) -> None:
         # Row with no sandbox trace at all: never delivered here. A deletion
         # would have left a linked entry behind, so absence of one is the
         # difference between "push it" and "propagate a deletion".
-        await _push_down(ctx, name, row)
+        await _push_down(ctx, name, rep, row)
         ctx.stats.pushed += 1
 
 
@@ -275,20 +320,6 @@ async def _decide_linked(
     skill_id = sync["linkedSkillId"]
     present = bool(rep.get("present"))
 
-    if sync.get("pendingPushDbHash"):
-        # A push-down intent from an interrupted apply: DB wins outright.
-        # (Current apply batching writes the ledger once at the end, so this
-        # is defensive reading, not a state we stamp ourselves.)
-        if row is not None:
-            await _push_down(ctx, name, row)
-            ctx.stats.pushed += 1
-        elif present:
-            ctx.actions.append({"op": "delete_dir", "name": name})
-            ctx.stats.dir_deletes += 1
-        else:
-            ctx.actions.append({"op": "remove_entry", "name": name})
-        return
-
     if row is not None and row["user_skill_id"] != skill_id:
         # The name maps to a different row now (deleted and re-created via
         # the API while this sandbox slept). Re-link through the arbiter.
@@ -301,7 +332,7 @@ async def _decide_linked(
                 return
             await _pull_up(ctx, name, row, conflict=True)
         else:
-            await _push_down(ctx, name, row)
+            await _push_down(ctx, name, rep, row)
             ctx.stats.pushed += 1
         return
 
@@ -325,7 +356,7 @@ async def _decide_linked(
         if tree_dirty and not db_dirty:
             await _pull_up(ctx, name, row, conflict=False)
         elif db_dirty and not tree_dirty:
-            await _push_down(ctx, name, row)
+            await _push_down(ctx, name, rep, row)
             ctx.stats.pushed += 1
         else:
             # Both moved: the arbiter compares actual content — equal hashes
@@ -384,7 +415,7 @@ async def _decide_linked(
     if row is not None:
         if row["content_hash"] != sync.get("syncedDbHash"):
             # The row moved since last sync: dirty survivor wins, re-deliver.
-            await _push_down(ctx, name, row)
+            await _push_down(ctx, name, rep, row)
             ctx.stats.pushed += 1
         else:
             deleted = await delete_user_skill_cas(
@@ -392,12 +423,46 @@ async def _decide_linked(
             )
             if deleted is not None:
                 ctx.stats.row_deletes += 1
-                await _drop_key_if_unused(deleted.get("archive_key"))
+                await drop_archive_if_unused(ctx.user_id, deleted.get("archive_key"))
             # CAS-lost means the row changed concurrently; removing the entry
             # is still right — next pass sees row-without-trace and pushes.
             ctx.actions.append({"op": "remove_entry", "name": name})
     else:
         ctx.actions.append({"op": "remove_entry", "name": name})
+
+
+async def _withdraw(
+    ctx: _Pass,
+    name: str,
+    rep: dict[str, Any],
+    entry: dict[str, Any] | None,
+    sync: dict[str, Any],
+    row: dict[str, Any],
+) -> None:
+    """A disabled row keeps its content but must not stay on disk.
+
+    Only the sandbox copy goes; the row survives and re-enabling re-pushes it.
+    Unpulled edits are pulled up first so disabling never destroys work — the
+    dir is removed on the pass after, once it is clean.
+    """
+    if not rep.get("present"):
+        if entry is not None:
+            ctx.actions.append({"op": "remove_entry", "name": name})
+        return
+    if not rep.get("syncable"):
+        ctx.stats.skipped += 1
+        return
+    synced = sync.get("syncedTreeHash")
+    if rep.get("treeHash") != synced:
+        if _suppressed(rep, row):
+            ctx.stats.skipped += 1
+            return
+        # No tracking ref means the dir was never this row's copy, so the
+        # displaced row content is retained the way any conflict is.
+        await _pull_up(ctx, name, row, conflict=synced is None)
+        return
+    ctx.actions.append({"op": "delete_dir", "name": name, "expectTreeHash": synced})
+    ctx.stats.dir_deletes += 1
 
 
 async def _decide_managed(
@@ -411,7 +476,7 @@ async def _decide_managed(
     # re-pushing the DB bytes with a link. Managed bytes are server-owned, so
     # any difference is delivery lag, not an agent edit — DB wins, and one
     # redundant push per adoption buys never having to diff here.
-    await _push_down(ctx, name, row)
+    await _push_down(ctx, name, rep, row)
     ctx.stats.adopted += 1
 
 
@@ -487,43 +552,66 @@ async def _pull_up(
             file_count=validated.file_count,
         )
     except ValueError as e:
-        await _drop_key_if_unused(key)
-        raise _SyncFailure("caps", str(e), suppress=True) from e
+        # Not suppressible: every ValueError the writers raise reads other
+        # rows (the per-user caps, a sibling's alias), so the fingerprint --
+        # this tree's hash and this row's hash -- cannot see the remedy. Freeing
+        # quota would otherwise leave the skill wedged for the life of the
+        # sandbox, silently, with the cap message telling the user to do the
+        # one thing that does not help.
+        await drop_archive_if_unused(ctx.user_id, key)
+        raise _SyncFailure("caps", str(e), suppress=False) from e
     except BaseException:
-        await _drop_key_if_unused(key)
+        await drop_archive_if_unused(ctx.user_id, key)
         raise
     if updated is None:
         # CAS lost — the row changed under us; next pass re-decides.
-        await _drop_key_if_unused(key)
+        await drop_archive_if_unused(ctx.user_id, key)
         return
     if conflict:
         ctx.stats.conflicts += 1
-        logger.warning(
-            "[skill_sync] conflict on %r (ws=%s): sandbox content kept, "
-            "displaced row content retained at %s",
-            name,
-            ctx.workspace_id,
-            superseded or "inline blob",
-        )
+        if superseded:
+            logger.warning(
+                "[skill_sync] conflict on %r (ws=%s): sandbox content kept, "
+                "displaced row content retained at %s",
+                name,
+                ctx.workspace_id,
+                superseded,
+            )
+        else:
+            # No object storage: the row carried its bytes inline and the CAS
+            # overwrote them in place, so there is nothing left to point at.
+            logger.warning(
+                "[skill_sync] conflict on %r (ws=%s): sandbox content kept, "
+                "displaced row content was inline and is gone",
+                name,
+                ctx.workspace_id,
+            )
     else:
         ctx.stats.pulled += 1
         if superseded:
-            await _drop_key_if_unused(superseded)
+            await drop_archive_if_unused(ctx.user_id, superseded)
     ctx.actions.append(stamp)
 
 
-async def _push_down(ctx: _Pass, name: str, row: dict[str, Any]) -> None:
+async def _push_down(
+    ctx: _Pass, name: str, rep: dict[str, Any], row: dict[str, Any]
+) -> None:
     """DB → sandbox: stage the row's archive beside the live dir and swap it
-    in atomically. Callers count the stat (pushed/adopted)."""
+    in atomically. Callers count the stat (pushed/adopted).
+
+    The swap carries the state ``rep`` observed, so an agent that creates or
+    edits the dir between report and apply aborts the swap instead of losing
+    the write.
+    """
     try:
         raw = await fetch_skill_archive(ctx.user_id, row)
     except Exception as e:
         raise _SyncFailure("fetch", str(e), suppress=False) from e
     try:
-        pairs = archive_file_pairs(raw)
+        pairs = await asyncio.to_thread(archive_file_pairs, raw)
     except SkillValidationError as e:
         raise _SyncFailure("unpack", str(e), suppress=True) from e
-    staged = await skill_sync.stage_skill_files(ctx.sandbox, name, pairs)
+    staged = await skill_sync.stage_skill_files(ctx.sandbox, pairs)
     entry = _entry_from_row(row, pairs)
     entry["sync"] = {
         "linkedSkillId": row["user_skill_id"],
@@ -531,9 +619,15 @@ async def _push_down(ctx: _Pass, name: str, row: dict[str, Any]) -> None:
         # syncedTreeHash + statCache are stamped by the swap op itself, from
         # the exact tree it just renamed into place.
     }
-    ctx.actions.append(
-        {"op": "swap_staged", "name": name, "staged": staged, "entry": entry}
-    )
+    action = {"op": "swap_staged", "name": name, "staged": staged, "entry": entry}
+    if not rep.get("present"):
+        action["expectAbsent"] = True
+    elif rep.get("treeHash"):
+        action["expectTreeHash"] = rep["treeHash"]
+    # A present-but-unsyncable dir gets no guard: the only caller that reaches
+    # it is the managed adoption below, where the bytes are server-owned and
+    # DB-wins is the rule.
+    ctx.actions.append(action)
 
 
 async def _import_new(ctx: _Pass, name: str) -> None:
@@ -569,12 +663,21 @@ async def _absorb_user_shadow(
 async def _create_linked_row(
     ctx: _Pass, name: str, validated: ValidatedSkill, tree_hash: str
 ) -> None:
+    command = None
+    if validated.command:
+        # Frontmatter seed on sandbox import: same free_seed policy as upload.
+        command = free_seed(
+            validated,
+            [*ctx.ws_rows.values(), *ctx.user_rows.values()],
+            await get_skill_command_overrides(ctx.user_id),
+        )
     key, blob = await _store(ctx, validated)
     try:
         row = await create_user_skill(
             ctx.user_id,
             name,
             workspace_id=ctx.workspace_id,
+            command=command,
             description=validated.description,
             license=validated.license,
             frontmatter=validated.frontmatter,
@@ -587,16 +690,24 @@ async def _create_linked_row(
             file_count=validated.file_count,
         )
     except ValueError as e:
-        await _drop_key_if_unused(key)
-        raise _SyncFailure("caps", str(e), suppress=True) from e
+        # Caps, or a name that collides with a sibling row's slash alias --
+        # both about other rows, so not suppressible for the same reason as
+        # the pull-up path above.
+        await drop_archive_if_unused(ctx.user_id, key)
+        raise _SyncFailure("insert", str(e), suppress=False) from e
     except BaseException:
-        await _drop_key_if_unused(key)
+        await drop_archive_if_unused(ctx.user_id, key)
         raise
     if row is None:
         # Name got taken between our list and the insert; next pass sees the
         # new row and arbitrates.
-        await _drop_key_if_unused(key)
+        await drop_archive_if_unused(ctx.user_id, key)
         return
+    # Later names in this same pass seed their trigger against ctx.ws_rows.
+    # Without this the snapshot is stale, so two sandbox skills declaring one
+    # `command:` both seed it and the second insert dies on the command index
+    # instead of installing name-triggered the way free_seed promises.
+    ctx.ws_rows[name] = row
     ctx.stats.imported += 1
     entry = _entry_from_validated(name, validated)
     entry["sync"] = {
@@ -622,10 +733,10 @@ async def _download_validated(
             max_total_bytes=MAX_SKILL_UNCOMPRESSED_BYTES,
         )
     except SkillSyncError as e:
-        deterministic = any(m in str(e) for m in _DETERMINISTIC_DOWNLOAD)
+        deterministic = e.code in _DETERMINISTIC_DOWNLOAD
         raise _SyncFailure("download", str(e), suppress=deterministic) from e
     try:
-        validated = validate_skill_archive(raw)
+        validated = await asyncio.to_thread(validate_skill_archive, raw)
     except SkillValidationError as e:
         raise _SyncFailure("validate", str(e), suppress=True) from e
     return validated, tree_hash
@@ -649,25 +760,15 @@ async def _store(
     if key is not None:
         return key, None
     if len(validated.canonical_zip) > MAX_SKILL_INLINE_BLOB_BYTES:
+        # Also not suppressible: the blocker is whether object storage is
+        # configured, which no fingerprint over the tree and the row can see.
         raise _SyncFailure(
             "store",
             "archive exceeds the inline fallback limit and object storage "
             "is unavailable",
-            suppress=True,
+            suppress=False,
         )
     return None, validated.canonical_zip
-
-
-async def _drop_key_if_unused(key: str | None) -> None:
-    """Archive keys are content-addressed and may be shared across rows —
-    only delete when nothing references the key anymore."""
-    if not key:
-        return
-    try:
-        if not await archive_key_in_use(key):
-            await skill_archive_storage.delete_archive(key)
-    except Exception:
-        logger.exception("[skill_sync] archive cleanup failed for %s", key)
 
 
 def _suppressed(rep: dict[str, Any], row: dict[str, Any] | None) -> bool:

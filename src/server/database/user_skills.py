@@ -17,9 +17,10 @@ row in the workspace scope to flag.
 — it is up to half a megabyte per row, and the hot paths (listing, agent build)
 need only the metadata.
 
-``plugin_id``/``plugin_skill_dir`` mark a row as owned by an installed plugin;
-:func:`detach_user_skill` clears them in place (fork-on-edit — a later plugin
-update sees the name un-owned and skips it instead of overwriting).
+``plugin_id``/``plugin_skill_dir`` mark a row as owned by an installed plugin.
+Nothing writes them yet; they are carried so the column exists when the
+plugin installer lands, since a name that is already un-owned is what tells a
+later plugin update to skip a row rather than overwrite it.
 """
 
 import logging
@@ -40,6 +41,19 @@ logger = logging.getLogger(__name__)
 # per-user lock; for cross-workspace moves, both workspace locks sorted by id.
 _SKILL_SYNC_NS = "SKILL_SYNC"
 
+# Rows of a soft-deleted workspace survive so restoring the workspace brings
+# its skills back, but they are not part of the live inventory: no management
+# surface can reach them, so counting them against the per-user caps would
+# reserve a budget nobody can free.
+_LIVE_SCOPE = """(
+    user_skills.workspace_id IS NULL
+    OR EXISTS (
+        SELECT 1 FROM workspaces w
+        WHERE w.workspace_id = user_skills.workspace_id
+          AND w.status <> 'deleted'
+    )
+)"""
+
 
 async def _lock_skill_sync_xact(cur, workspace_id: str) -> None:
     await cur.execute(
@@ -48,21 +62,31 @@ async def _lock_skill_sync_xact(cur, workspace_id: str) -> None:
     )
 
 
+class SkillSyncLockBusy(Exception):
+    """Another worker holds this workspace's sync lock."""
+
+
 @asynccontextmanager
 async def workspace_skill_sync_lock(workspace_id: str):
     """Session-level advisory lock held across one full reconcile pass.
 
     Pins one pooled connection for the duration; released in ``finally`` and
-    by Postgres automatically if the connection dies mid-pass.
+    by Postgres automatically if the connection dies mid-pass. Acquisition is
+    try-only: a pass is periodic, so waiting behind a stuck holder would park
+    a second pooled connection for as long as that holder lives, and a queue
+    of waiters is how one hung sandbox exhausts the pool.
     """
     async with get_db_connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                "SELECT pg_advisory_lock(hashtext(%s), hashtext(%s::text))",
+                "SELECT pg_try_advisory_lock(hashtext(%s), hashtext(%s::text))",
                 (_SKILL_SYNC_NS, workspace_id),
             )
+            row = await cur.fetchone()
+        if not (row and row[0]):
+            raise SkillSyncLockBusy(workspace_id)
         try:
-            yield conn
+            yield
         finally:
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -82,7 +106,7 @@ MAX_SKILL_TOTAL_BYTES_PER_USER = 32 * 1024 * 1024
 # Every column except archive_blob. `has_inline_archive` lets a caller tell
 # which storage backs the row without paying for the bytes.
 _SKILL_COLUMNS = """
-    user_skill_id, user_id, workspace_id, name, description, license,
+    user_skill_id, user_id, workspace_id, name, command, description, license,
     frontmatter, allowed_tools, enabled, confirmed, plugin_id,
     plugin_skill_dir, content_hash, archive_key, archive_bytes, file_count,
     created_at, updated_at, (archive_blob IS NOT NULL) AS has_inline_archive
@@ -122,12 +146,17 @@ async def list_user_skills(
 
 
 async def list_all_user_skills(user_id: str) -> list[dict[str, Any]]:
-    """Every skill row across every scope — the all-scopes management view."""
+    """Every live-scope skill row — the all-scopes management view.
+
+    Rows belonging to a deleted workspace are left out for the same reason
+    they don't count against the caps: that scope is not reachable from any
+    surface this listing feeds.
+    """
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 f"SELECT {_SKILL_COLUMNS} FROM user_skills "
-                "WHERE user_id = %s ORDER BY name",
+                f"WHERE user_id = %s AND {_LIVE_SCOPE} ORDER BY name",
                 (user_id,),
             )
             return [_row_to_dict(r) for r in await cur.fetchall()]
@@ -219,19 +248,114 @@ async def get_user_skill_archive_blob(
             return bytes(row[0])
 
 
-async def archive_key_in_use(archive_key: str) -> bool:
-    """True if any row still references this storage key.
+@asynccontextmanager
+async def archive_key_unused_guard(archive_key: str, user_id: str):
+    """Yield True when no row references this key, holding the write lock.
 
     Keys are content-addressed per user, so two same-content skills share one
-    object — the caller must check this before deleting a superseded key.
+    object and a superseded key can only be deleted once nothing points at it.
+    The lock has to span the storage delete, not just the query: it is the same
+    per-user lock every write takes, so releasing it early would let an upload
+    dedup onto the key and then find its bytes gone. Caller does the delete
+    inside the ``with`` block.
     """
     async with get_db_connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT 1 FROM user_skills WHERE archive_key = %s LIMIT 1",
-                (archive_key,),
-            )
-            return await cur.fetchone() is not None
+        async with conn.transaction():
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s::text))", (user_id,)
+                )
+                await cur.execute(
+                    "SELECT 1 FROM user_skills WHERE archive_key = %s LIMIT 1",
+                    (archive_key,),
+                )
+                yield await cur.fetchone() is None
+
+
+async def _check_trigger_clash(
+    cur, user_id: str, name: str, workspace_id: str | None
+) -> None:
+    """A name is also a trigger, so it must not land on a sibling's alias.
+
+    Within one scope nothing breaks the tie between two rows answering to the
+    same slash command. Across tiers it is fine: a workspace row deliberately
+    wins in its own workspace.
+    """
+    await cur.execute(
+        "SELECT name FROM user_skills WHERE user_id = %s "
+        "AND workspace_id IS NOT DISTINCT FROM %s "
+        "AND command = %s AND name <> %s LIMIT 1",
+        (user_id, workspace_id, name, name),
+    )
+    clash = await cur.fetchone()
+    if clash is not None:
+        raise ValueError(
+            f"/{name} is already the command of the skill {clash['name']!r}"
+        )
+
+
+async def _platform_override_values(cur, user_id: str) -> set[str]:
+    """The user's platform-skill alias values, read from the table under the
+    caller's per-user advisory lock. The cached reader
+    (``services.features.get_skill_command_overrides``) is fine for the
+    friendly pre-checks, but a trigger writer must see what a concurrent
+    ``set_platform_alias`` — which holds the same lock across its
+    check-and-write — actually committed."""
+    await cur.execute(
+        "SELECT other_preference #> '{skills,command_overrides}' AS ov "
+        "FROM user_preferences WHERE user_id = %s",
+        (user_id,),
+    )
+    row = await cur.fetchone()
+    ov = (row or {}).get("ov")
+    if not isinstance(ov, dict):
+        return set()
+    return {str(v) for v in ov.values() if v}
+
+
+@asynccontextmanager
+async def user_trigger_guard(user_id: str):
+    """Hold the per-user trigger lock across a cross-tier check-and-write.
+
+    ``set_platform_alias`` reads both tiers, checks, then writes preferences;
+    the row writers here check the platform tier symmetrically. Without one
+    shared guard the two can each read the other tier pre-commit and both
+    conclude a trigger is free. Reads and the preferences write may run on
+    other connections — they complete (and commit) before the guard exits,
+    which is all the mutual exclusion needs. Never nest inside a
+    SKILL_SYNC-holding transaction's caller (lock order is SKILL_SYNC →
+    per-user, and this guard takes only the per-user half).
+    """
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s::text))", (user_id,)
+                )
+            yield
+
+
+async def _free_command(
+    cur, user_id: str, name: str, workspace_id: str | None, command: str | None
+) -> str | None:
+    """Re-check an alias seed under the lock; None when it is no longer free.
+
+    ``free_seed`` picks the seed outside any lock, and the upload path then
+    spends a slow object PUT before it gets here, so a sibling can take the
+    trigger in between. Silent drop rather than a conflict, matching the seed
+    policy: the skill still installs, triggered by its name.
+    """
+    if command is None:
+        return None
+    if command in await _platform_override_values(cur, user_id):
+        return None
+    await cur.execute(
+        "SELECT 1 FROM user_skills WHERE user_id = %s "
+        "AND workspace_id IS NOT DISTINCT FROM %s "
+        "AND COALESCE(command, name) = %s AND name <> %s LIMIT 1",
+        (user_id, workspace_id, command, name),
+    )
+    return None if await cur.fetchone() is not None else command
 
 
 async def _check_skill_caps(
@@ -244,7 +368,8 @@ async def _check_skill_caps(
         "SELECT COUNT(*) AS cnt, "
         "COALESCE(SUM(archive_bytes), 0) AS total_bytes "
         "FROM user_skills WHERE user_id = %s AND NOT "
-        "(name = %s AND workspace_id IS NOT DISTINCT FROM %s)",
+        "(name = %s AND workspace_id IS NOT DISTINCT FROM %s) "
+        f"AND {_LIVE_SCOPE}",
         (user_id, name, workspace_id),
     )
     stats = await cur.fetchone()
@@ -278,6 +403,7 @@ async def upsert_user_skill(
     workspace_id: str | None = None,
     plugin_id: str | None = None,
     plugin_skill_dir: str | None = None,
+    command: str | None = None,
     conn=None,
 ) -> tuple[dict[str, Any], str | None]:
     """Insert or replace a skill by scope and name.
@@ -294,7 +420,10 @@ async def upsert_user_skill(
     On replace, ``enabled`` is preserved (a disabled skill re-uploaded stays
     disabled) while the plugin provenance columns take the caller's values —
     a direct re-upload of a plugin-owned name therefore detaches it, which is
-    the fork-on-edit semantic.
+    the fork-on-edit semantic. ``command`` seeds only on insert: the column is
+    authoritative after creation, so a re-upload never resets a user's alias.
+    The seed is re-checked here under the lock, since the caller chose it
+    before spending the object PUT.
     """
     async with get_db_connection(conn) as conn:
         async with conn.transaction():
@@ -305,6 +434,19 @@ async def upsert_user_skill(
                     "SELECT pg_advisory_xact_lock(hashtext(%s::text))", (user_id,)
                 )
                 await _check_skill_caps(cur, user_id, name, workspace_id, archive_bytes)
+
+                await _check_trigger_clash(cur, user_id, name, workspace_id)
+                # The router's ensure_free_of_platform ran before the object
+                # PUT; re-check under the lock so a platform alias committed
+                # since (set_platform_alias holds this same lock) can't end
+                # up duplicated by this row's name.
+                if name in await _platform_override_values(cur, user_id):
+                    raise ValueError(
+                        f"/{name} is already in use by another skill"
+                    )
+                command = await _free_command(
+                    cur, user_id, name, workspace_id, command
+                )
 
                 # The row being replaced is excluded from the aggregate above,
                 # so read its archive_key separately to hand back for cleanup.
@@ -327,12 +469,12 @@ async def upsert_user_skill(
                 await cur.execute(
                     f"""
                     INSERT INTO user_skills
-                        (user_id, workspace_id, name, description,
+                        (user_id, workspace_id, name, command, description,
                          license, frontmatter, allowed_tools, enabled,
                          confirmed, plugin_id, plugin_skill_dir, content_hash,
                          archive_key, archive_blob, archive_bytes, file_count,
                          created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, NOW(), NOW())
                     ON CONFLICT {conflict_target} DO UPDATE SET
                         description = EXCLUDED.description,
@@ -351,7 +493,7 @@ async def upsert_user_skill(
                     RETURNING {_SKILL_COLUMNS}
                     """,
                     (
-                        user_id, workspace_id, name, description,
+                        user_id, workspace_id, name, command, description,
                         license, Json(frontmatter), Json(allowed_tools),
                         enabled, confirmed, plugin_id, plugin_skill_dir,
                         content_hash, archive_key, archive_blob, archive_bytes,
@@ -407,6 +549,34 @@ async def move_user_skill(
                         f"A skill named {name!r} already exists in the "
                         "destination scope"
                     )
+                # The moving row's NAME is reserved at the destination too,
+                # even when an alias currently hides it: clearing that alias
+                # skips collision checks by design, so the name it falls back
+                # to has to still be free when it lands.
+                await _check_trigger_clash(cur, user_id, name, to_workspace_id)
+                # And its effective trigger (alias, else name) must not
+                # collide with a destination row's trigger or name.
+                await cur.execute(
+                    """
+                    WITH src AS (
+                        SELECT COALESCE(command, name) AS trig FROM user_skills
+                        WHERE user_id = %s AND name = %s
+                        AND workspace_id IS NOT DISTINCT FROM %s
+                    )
+                    SELECT 1 FROM user_skills dest, src
+                    WHERE dest.user_id = %s
+                    AND dest.workspace_id IS NOT DISTINCT FROM %s
+                    AND (dest.name = src.trig
+                         OR COALESCE(dest.command, dest.name) = src.trig)
+                    LIMIT 1
+                    """,
+                    (user_id, name, from_workspace_id, user_id, to_workspace_id),
+                )
+                if await cur.fetchone() is not None:
+                    raise ValueError(
+                        "The skill's command is already in use in the "
+                        "destination scope"
+                    )
                 await cur.execute(
                     f"UPDATE user_skills SET workspace_id = %s, updated_at = NOW() "
                     "WHERE user_id = %s AND name = %s "
@@ -436,36 +606,91 @@ async def set_user_skill_enabled(
 ) -> dict[str, Any] | None:
     """Toggle a skill row in one scope. Returns the row, or None when absent."""
     async with get_db_connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(
-                f"UPDATE user_skills SET enabled = %s, updated_at = NOW() "
-                f"WHERE user_id = %s AND name = %s "
-                f"AND workspace_id IS NOT DISTINCT FROM %s "
-                f"RETURNING {_SKILL_COLUMNS}",
-                (enabled, user_id, name, workspace_id),
-            )
-            return _row_to_dict(await cur.fetchone())
+        async with conn.transaction():
+            async with conn.cursor(row_factory=dict_row) as cur:
+                if workspace_id is not None:
+                    await _lock_skill_sync_xact(cur, workspace_id)
+                await cur.execute(
+                    f"UPDATE user_skills SET enabled = %s, updated_at = NOW() "
+                    f"WHERE user_id = %s AND name = %s "
+                    f"AND workspace_id IS NOT DISTINCT FROM %s "
+                    f"RETURNING {_SKILL_COLUMNS}",
+                    (enabled, user_id, name, workspace_id),
+                )
+                return _row_to_dict(await cur.fetchone())
 
 
-async def detach_user_skill(user_id: str, name: str) -> dict[str, Any] | None:
-    """Clear a skill's plugin provenance in place (fork-on-edit).
+async def set_user_skill_command(
+    user_id: str,
+    name: str,
+    command: str | None,
+    *,
+    workspace_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Set (or clear, with None) a skill row's slash-command alias.
 
-    Returns the updated row, or None when absent. Idempotent on an already
-    plugin-less row.
+    Returns the row, or None when absent. Raises ValueError when the alias
+    collides with another row's name or effective trigger — same-scope rows
+    always, plus the user tier for a workspace row (a workspace alias must
+    not shadow an inherited trigger; the reverse, checked at the API layer,
+    is allowed only because workspace rows win in-workspace). Names stay
+    reserved even when their own alias hides them: clearing an alias skips
+    these checks, so the name it falls back to must never have been given
+    away. Charset and reserved-name checks are the caller's job.
     """
     async with get_db_connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(
-                f"UPDATE user_skills "
-                f"SET plugin_id = NULL, plugin_skill_dir = NULL, updated_at = NOW() "
-                f"WHERE user_id = %s AND name = %s AND workspace_id IS NULL "
-                f"RETURNING {_SKILL_COLUMNS}",
-                (user_id, name),
-            )
-            row = _row_to_dict(await cur.fetchone())
-            if row:
-                logger.info("[user_skills] detach user_id=%s name=%s", user_id, name)
-            return row
+        async with conn.transaction():
+            async with conn.cursor(row_factory=dict_row) as cur:
+                if workspace_id is not None:
+                    await _lock_skill_sync_xact(cur, workspace_id)
+                await cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s::text))", (user_id,)
+                )
+                if command is not None and command in (
+                    await _platform_override_values(cur, user_id)
+                ):
+                    raise ValueError(
+                        f"Command /{command} is already in use by another skill"
+                    )
+                if command is not None:
+                    scope_pred = (
+                        "workspace_id IS NULL"
+                        if workspace_id is None
+                        else "(workspace_id IS NULL OR workspace_id = %s)"
+                    )
+                    params: list[Any] = [user_id]
+                    if workspace_id is not None:
+                        params.append(workspace_id)
+                    params.extend([command, command, name, workspace_id])
+                    await cur.execute(
+                        f"""
+                        SELECT 1 FROM user_skills
+                        WHERE user_id = %s AND {scope_pred}
+                        AND (name = %s OR COALESCE(command, name) = %s)
+                        AND NOT (name = %s
+                                 AND workspace_id IS NOT DISTINCT FROM %s)
+                        LIMIT 1
+                        """,
+                        params,
+                    )
+                    if await cur.fetchone() is not None:
+                        raise ValueError(
+                            f"Command /{command} is already in use by another skill"
+                        )
+                await cur.execute(
+                    f"UPDATE user_skills SET command = %s, updated_at = NOW() "
+                    "WHERE user_id = %s AND name = %s "
+                    "AND workspace_id IS NOT DISTINCT FROM %s "
+                    f"RETURNING {_SKILL_COLUMNS}",
+                    (command, user_id, name, workspace_id),
+                )
+                row = _row_to_dict(await cur.fetchone())
+                if row:
+                    logger.info(
+                        "[user_skills] command user_id=%s name=%s command=%s",
+                        user_id, name, command,
+                    )
+                return row
 
 
 async def delete_user_skill(
@@ -486,6 +711,20 @@ async def delete_user_skill(
                 )
                 row = _row_to_dict(await cur.fetchone())
                 if row:
+                    if workspace_id is None:
+                        # The deny-list markers describe THIS skill; leaving
+                        # them would silently disable a later same-name
+                        # upload (a different identity) in those workspaces.
+                        # Workspace-scoped deletes keep them: there the
+                        # marker points at the inherited skill, which the
+                        # delete re-exposes.
+                        await cur.execute(
+                            "DELETE FROM workspace_skill_disables "
+                            "WHERE name = %s AND workspace_id IN ("
+                            "SELECT workspace_id FROM workspaces "
+                            "WHERE user_id = %s)",
+                            (name, user_id),
+                        )
                     logger.info(
                         "[user_skills] delete user_id=%s workspace_id=%s name=%s",
                         user_id, workspace_id, name,
@@ -523,11 +762,15 @@ async def create_user_skill(
     archive_blob: bytes | None,
     archive_bytes: int,
     file_count: int,
+    command: str | None = None,
 ) -> dict[str, Any] | None:
     """Create-only insert for auto-import: never replaces an existing row.
 
     Returns None when the name is already taken in the scope (the reconciler
-    re-decides via the arbiter); raises ValueError on caps.
+    re-decides via the arbiter); raises ValueError on caps. Takes only the
+    per-user cap lock — the caller (the reconciler) already holds the
+    workspace's session-level SKILL_SYNC lock, which is what serializes this
+    against content mutations.
     """
     async with get_db_connection() as conn:
         async with conn.transaction():
@@ -536,21 +779,25 @@ async def create_user_skill(
                     "SELECT pg_advisory_xact_lock(hashtext(%s::text))", (user_id,)
                 )
                 await _check_skill_caps(cur, user_id, name, workspace_id, archive_bytes)
+                await _check_trigger_clash(cur, user_id, name, workspace_id)
+                command = await _free_command(
+                    cur, user_id, name, workspace_id, command
+                )
                 await cur.execute(
                     f"""
                     INSERT INTO user_skills
-                        (user_id, workspace_id, name, description,
+                        (user_id, workspace_id, name, command, description,
                          license, frontmatter, allowed_tools, enabled,
                          confirmed, content_hash, archive_key, archive_blob,
                          archive_bytes, file_count, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s, %s,
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s, %s,
                             %s, %s, %s, NOW(), NOW())
                     ON CONFLICT (workspace_id, name) WHERE workspace_id IS NOT NULL
                         DO NOTHING
                     RETURNING {_SKILL_COLUMNS}
                     """,
                     (
-                        user_id, workspace_id, name, description,
+                        user_id, workspace_id, name, command, description,
                         license, Json(frontmatter), Json(allowed_tools),
                         confirmed, content_hash, archive_key, archive_blob,
                         archive_bytes, file_count,
@@ -655,12 +902,12 @@ async def delete_user_skill_cas(
 async def list_workspace_skill_disables(workspace_id: str) -> set[str]:
     """Names of inherited skills this workspace has switched off."""
     async with get_db_connection() as conn:
-        async with conn.cursor() as cur:
+        async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 "SELECT name FROM workspace_skill_disables WHERE workspace_id = %s",
                 (workspace_id,),
             )
-            return {r[0] for r in await cur.fetchall()}
+            return {r["name"] for r in await cur.fetchall()}
 
 
 async def set_workspace_skill_disable(
