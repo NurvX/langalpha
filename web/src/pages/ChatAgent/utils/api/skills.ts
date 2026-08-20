@@ -25,6 +25,11 @@ export interface SkillInfo {
   updated_at: string | null;
   disabled_scope: 'user' | 'workspace' | null;
   shadows_inherited: boolean;
+  /** The scope a workspace-tier row belongs to (null = user/platform tier). */
+  workspace_id?: string | null;
+  /** Workspaces where an all-workspaces skill is switched off (deny-list);
+   * populated in the all-scopes view only. */
+  disabled_workspace_ids?: string[];
 }
 
 function uploadConfig(onProgress: ((percent: number) => void) | null) {
@@ -42,13 +47,29 @@ export async function getSkills(opts?: {
   mode?: string | null;
   includeDisabled?: boolean;
   workspaceId?: string | null;
+  allScopes?: boolean;
 }): Promise<SkillInfo[]> {
   const params: Record<string, string | boolean> = {};
   if (opts?.mode) params.mode = opts.mode;
   if (opts?.includeDisabled) params.include_disabled = true;
   if (opts?.workspaceId) params.workspace_id = opts.workspaceId;
+  if (opts?.allScopes) params.all_scopes = true;
   const { data } = await api.get('/api/v1/skills', { params });
   return data.skills || [];
+}
+
+/** Re-scope a skill row: user tier (every workspace) ↔ one workspace. Both
+ * scopes are explicit because names are only unique within one scope. */
+export async function moveSkill(
+  name: string,
+  fromWorkspaceId: string | null,
+  toWorkspaceId: string | null,
+): Promise<SkillInfo> {
+  const { data } = await api.post<SkillInfo>(
+    `/api/v1/skills/${encodeURIComponent(name)}/move`,
+    { from_workspace_id: fromWorkspaceId, to_workspace_id: toWorkspaceId },
+  );
+  return data;
 }
 
 export async function uploadSkill(

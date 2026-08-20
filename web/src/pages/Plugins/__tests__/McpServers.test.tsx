@@ -25,6 +25,9 @@ const mutateAsync = {
   disconnect: vi.fn(),
   refresh: vi.fn(),
   createSecret: vi.fn(),
+  wsEnable: vi.fn(),
+  adopt: vi.fn(),
+  moveUp: vi.fn(),
 };
 
 let catalogData: CatalogServerList | undefined;
@@ -45,6 +48,15 @@ vi.mock('@/hooks/useMcpServers', () => ({
   // these tests exercise the user-tier list only.
   useBuiltinMcpServers: () => ({ data: { servers: [] }, isLoading: false, error: null }),
   useToggleBuiltinMcpServer: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useSetMcpServerEnabledInWorkspace: () => ({ mutateAsync: mutateAsync.wsEnable, isPending: false }),
+  useAdoptMcpServerToWorkspace: () => ({ mutateAsync: mutateAsync.adopt, isPending: false }),
+  usePromoteMcpServerToTemplate: () => ({ mutateAsync: mutateAsync.moveUp, isPending: false }),
+}));
+
+// No workspaces → the scope control renders as a plain badge (or the OAuth
+// explainer) and the per-workspace checklist stays out of these tests.
+vi.mock('@/hooks/useWorkspaces', () => ({
+  useWorkspaces: () => ({ data: { workspaces: [] }, isLoading: false, error: null }),
 }));
 
 vi.mock('@/hooks/useUserVault', () => ({
@@ -75,18 +87,23 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
     disabled,
   }: {
     children: React.ReactNode;
-    onSelect?: () => void;
+    onSelect?: (e?: { preventDefault: () => void }) => void;
     disabled?: boolean;
     variant?: string;
   }) => (
     <button
       role="menuitem"
       aria-disabled={disabled ? 'true' : undefined}
-      onClick={() => { if (!disabled) onSelect?.(); }}
+      onClick={() => { if (!disabled) onSelect?.({ preventDefault: () => {} }); }}
     >
       {children}
     </button>
   ),
+  DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSeparator: () => <hr />,
+  DropdownMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSubTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSubContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
 import { McpServers } from '../components/McpServers';

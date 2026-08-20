@@ -327,10 +327,13 @@ class PromoteInput(BaseModel):
     """POST body for promoting a workspace server into the user template catalog.
 
     ``overwrite`` replaces an existing template of the same name; without it a
-    name clash is a 409 so the UI can confirm before clobbering.
+    name clash is a 409 so the UI can confirm before clobbering. ``remove_source``
+    turns the copy into a move: the workspace row is deleted after the catalog
+    write, so it does not shadow the template it just created.
     """
 
     overwrite: bool = False
+    remove_source: bool = False
 
     model_config = {"extra": "forbid"}
 
@@ -546,7 +549,7 @@ class EffectiveServer(BaseModel):
     shadows_inherited: bool = False
     # Inherited (origin='user') rows only: the owner's OAuth connection status
     # for this server, INCLUDING 'revoked' — so the UI can say "Disconnected,
-    # reconnect in Connectors" instead of waiting on a discovery that can
+    # reconnect in Plugins" instead of waiting on a discovery that can
     # never run. None = the server has no OAuth connection at all.
     oauth_status: Optional[ConnectionStatus] = None
     # DISABLED built-ins only: whether the disable is this workspace's marker
@@ -611,6 +614,25 @@ class CatalogServer(BaseModel):
     warnings: Optional[list[str]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    # Workspaces holding a tombstone for this name (deny-list) — populated in
+    # the all-scopes view only, for the "active in" checklist.
+    disabled_workspace_ids: list[str] = Field(default_factory=list)
+
+
+class WorkspaceScopedServer(BaseModel):
+    """A workspace-local server row surfaced in the all-scopes catalog view.
+
+    A summary, not an editable config: editing stays on the workspace
+    endpoints. ``shadows_inherited`` marks a name that also exists in the
+    catalog (the local fork hides the inherited copy in its workspace).
+    """
+
+    name: str
+    workspace_id: str
+    transport: str = "stdio"
+    enabled: bool = True
+    description: str = ""
+    shadows_inherited: bool = False
 
 
 class CatalogServerList(BaseModel):
@@ -618,6 +640,8 @@ class CatalogServerList(BaseModel):
 
     servers: list[CatalogServer]
     max_servers: int
+    # all_scopes=true only: workspace-local servers across the user's workspaces.
+    workspace_servers: list[WorkspaceScopedServer] = Field(default_factory=list)
 
 
 class BuiltinServer(BaseModel):
@@ -627,6 +651,8 @@ class BuiltinServer(BaseModel):
     description: str = ""
     transport: str = "stdio"
     enabled: bool
+    # Workspaces with a disable-marker for this builtin — all-scopes view only.
+    disabled_workspace_ids: list[str] = Field(default_factory=list)
 
 
 class BuiltinServerList(BaseModel):

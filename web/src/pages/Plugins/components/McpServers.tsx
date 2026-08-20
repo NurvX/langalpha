@@ -19,7 +19,11 @@ import {
   useImportMcpCatalogServers,
   useDisconnectMcpOauth,
   useRefreshMcpOauthSchemas,
+  useSetMcpServerEnabledInWorkspace,
+  useAdoptMcpServerToWorkspace,
+  usePromoteMcpServerToTemplate,
 } from '@/hooks/useMcpServers';
+import { useWorkspaces } from '@/hooks/useWorkspaces';
 import { useUserVaultSecrets, useCreateUserVaultSecret } from '@/hooks/useUserVault';
 import { McpServerModal } from '@/pages/ChatAgent/components/mcp/McpServerModal';
 import { McpImportModal } from '@/pages/ChatAgent/components/mcp/McpImportModal';
@@ -30,6 +34,8 @@ import {
 } from '@/pages/ChatAgent/components/mcp/mcpState';
 import { useMcpServerList } from '@/pages/ChatAgent/components/mcp/useMcpServerList';
 import { BuiltinMcpSection } from './BuiltinMcpSection';
+import { ScopeControl } from './ScopeControl';
+import type { ScopeWorkspace } from './ScopeControl';
 import {
   ConfirmStrip,
   EnabledToggle,
@@ -38,6 +44,7 @@ import {
   ListError,
   ListSkeleton,
   ListToolbar,
+  SectionHeader,
   ServerNameLine,
   ServerRowShell,
   TagBadge,
@@ -46,6 +53,7 @@ import {
   formatApiErrorDetail,
   startMcpOauth,
   type CatalogServer,
+  type WorkspaceScopedMcpServer,
 } from '@/pages/ChatAgent/utils/api';
 
 /**
@@ -74,6 +82,10 @@ export function McpServers() {
   const disconnectMutation = useDisconnectMcpOauth();
   const refreshMutation = useRefreshMcpOauthSchemas();
   const createSecretMutation = useCreateUserVaultSecret();
+  const wsEnableMutation = useSetMcpServerEnabledInWorkspace();
+  const adoptMutation = useAdoptMcpServerToWorkspace();
+  const moveUpMutation = usePromoteMcpServerToTemplate();
+  const { data: wsData } = useWorkspaces({ limit: 100 });
 
   const {
     modalOpen,
@@ -120,11 +132,82 @@ export function McpServers() {
 
   const [connectingName, setConnectingName] = useState<string | null>(null);
   const [refreshingName, setRefreshingName] = useState<string | null>(null);
+  const [movingName, setMovingName] = useState<string | null>(null);
+  const [wsTogglingKey, setWsTogglingKey] = useState<string | null>(null);
 
   const secretNames = (vault?.secrets ?? []).map((s) => s.name);
   const servers = catalog?.servers ?? [];
   const maxServers = catalog?.max_servers ?? 0;
   const atCap = maxServers > 0 && servers.length >= maxServers;
+
+  const workspaces = (
+    (wsData as { workspaces?: { workspace_id: string; name?: string }[] })
+      ?.workspaces ?? []
+  );
+  const wsOptions: ScopeWorkspace[] = workspaces.map((w) => ({
+    id: w.workspace_id,
+    name: w.name || t('plugins.scope.unknownWorkspace'),
+  }));
+  const wsNameById = new Map(wsOptions.map((w) => [w.id, w.name]));
+
+  const workspaceServers = catalog?.workspace_servers ?? [];
+  const byWorkspace = new Map<string, WorkspaceScopedMcpServer[]>();
+  for (const s of workspaceServers) {
+    byWorkspace.set(s.workspace_id, [...(byWorkspace.get(s.workspace_id) ?? []), s]);
+  }
+  const workspaceSections = [...byWorkspace.entries()].sort(([a], [b]) =>
+    (wsNameById.get(a) ?? '').localeCompare(wsNameById.get(b) ?? ''),
+  );
+
+  async function handleSetWorkspaceDisabled(
+    name: string,
+    workspaceId: string,
+    disabled: boolean,
+  ) {
+    // Keyed by row so one row's in-flight toggle doesn't lock its siblings.
+    setWsTogglingKey(`${workspaceId}:${name}`);
+    try {
+      await wsEnableMutation.mutateAsync({ workspaceId, name, enabled: !disabled });
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: t('plugins.servers.toggleFailed'),
+        description: formatApiErrorDetail(err),
+      });
+    } finally {
+      setWsTogglingKey(null);
+    }
+  }
+
+  async function handleAdopt(name: string, workspaceId: string) {
+    setMovingName(name);
+    try {
+      await adoptMutation.mutateAsync({ workspaceId, name });
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: t('plugins.scope.moveFailed'),
+        description: formatApiErrorDetail(err),
+      });
+    } finally {
+      setMovingName(null);
+    }
+  }
+
+  async function handleMoveUp(workspaceId: string, name: string) {
+    setMovingName(name);
+    try {
+      await moveUpMutation.mutateAsync({ workspaceId, name, removeSource: true });
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: t('plugins.scope.moveFailed'),
+        description: formatApiErrorDetail(err),
+      });
+    } finally {
+      setMovingName(null);
+    }
+  }
 
   async function handleConnect(name: string) {
     setConnectingName(name);
@@ -290,6 +373,32 @@ export function McpServers() {
                         </button>
                       )}
 
+                      <ScopeControl
+                        workspaces={wsOptions}
+                        scopeWorkspaceId={null}
+                        disabledWorkspaceIds={server.disabled_workspace_ids ?? []}
+                        checklistLocked={!server.enabled}
+                        busy={
+                          movingName === server.name ||
+                          // Names cannot contain ':', so the suffix match is
+                          // exact per row.
+                          !!wsTogglingKey?.endsWith(`:${server.name}`)
+                        }
+                        moveBlockedReason={
+                          // OAuth connections exist only at the user tier, so a
+                          // connected server cannot move into a workspace.
+                          status && status !== 'revoked'
+                            ? t('plugins.scope.moveOauthBlocked')
+                            : null
+                        }
+                        onSetWorkspaceDisabled={(wsId, disabled) =>
+                          handleSetWorkspaceDisabled(server.name, wsId, disabled)
+                        }
+                        onMove={(toWorkspaceId) => {
+                          if (toWorkspaceId) handleAdopt(server.name, toWorkspaceId);
+                        }}
+                      />
+
                       {/* Enabled toggle — fans out to every workspace */}
                       <EnabledToggle
                         enabled={!!server.enabled}
@@ -336,6 +445,75 @@ export function McpServers() {
           </AnimatePresence>
         </div>
       )}
+
+      {workspaceSections.map(([wsId, wsServers]) => (
+        <div key={wsId} className="flex flex-col gap-1.5">
+          <SectionHeader>
+            {t('plugins.scope.inWorkspace', {
+              name: wsNameById.get(wsId) ?? t('plugins.scope.unknownWorkspace'),
+            })}
+          </SectionHeader>
+          <AnimatePresence initial={false}>
+            {wsServers.map((server) => (
+              <ServerRowShell
+                key={`${wsId}:${server.name}`}
+                testid={`ws-server-row-${server.name}`}
+                main={
+                  <>
+                    <ServerNameLine icon={Server} name={server.name}>
+                      <TagBadge>{server.transport}</TagBadge>
+                      {server.shadows_inherited && (
+                        <TagBadge soft title={t('mcp.row.overridesInheritedHint')}>
+                          {t('mcp.row.overridesInherited')}
+                        </TagBadge>
+                      )}
+                    </ServerNameLine>
+                    {server.description && (
+                      <p
+                        className="text-[0.6875rem] line-clamp-2"
+                        style={{ color: 'var(--color-text-tertiary)' }}
+                      >
+                        {server.description}
+                      </p>
+                    )}
+                  </>
+                }
+                actions={
+                  <>
+                    <ScopeControl
+                      workspaces={wsOptions}
+                      scopeWorkspaceId={wsId}
+                      // No cross-workspace move endpoint for MCP servers: the
+                      // only destination is the user tier.
+                      allowWorkspaceTargets={false}
+                      busy={movingName === server.name}
+                      moveToAllBlockedReason={
+                        // The promote endpoint 409s when the name already
+                        // exists at the user tier, so don't advertise a move
+                        // that is known to fail for a shadowing row.
+                        server.shadows_inherited
+                          ? t('plugins.scope.moveShadowBlocked')
+                          : null
+                      }
+                      onMove={(toWorkspaceId) => {
+                        if (toWorkspaceId === null) handleMoveUp(wsId, server.name);
+                      }}
+                    />
+                    <EnabledToggle
+                      enabled={server.enabled}
+                      name={server.name}
+                      disabled={wsTogglingKey === `${wsId}:${server.name}`}
+                      onToggle={() =>
+                        handleSetWorkspaceDisabled(server.name, wsId, server.enabled)
+                      }
+                    />
+                  </>
+                }
+              />
+            ))}
+          </AnimatePresence>
+        </div>
+      ))}
 
       {deletingName && (
         <ConfirmStrip

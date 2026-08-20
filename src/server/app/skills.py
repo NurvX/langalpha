@@ -37,9 +37,12 @@ from src.server.database.user_skills import (
     archive_key_in_use,
     delete_user_skill,
     get_user_skill,
+    list_all_user_skills,
     list_enabled_user_skills,
+    list_skill_disables_for_user,
     list_user_skills,
     list_workspace_skill_disables,
+    move_user_skill,
     set_user_skill_enabled,
     set_workspace_skill_disable,
     upsert_user_skill,
@@ -101,6 +104,11 @@ class SkillInfo(BaseModel):
     disabled_scope: Literal["user", "workspace"] | None = None
     # Workspace row reusing (and thereby hiding) a user-tier name here.
     shadows_inherited: bool = False
+    # The scope a workspace-tier row belongs to (None = user/platform tier).
+    workspace_id: str | None = None
+    # Workspaces where an all-workspaces skill is switched off (deny-list) —
+    # populated in the all-scopes view only, for the "active in" checklist.
+    disabled_workspace_ids: list[str] = Field(default_factory=list)
 
 
 class SkillsResponse(BaseModel):
@@ -135,6 +143,7 @@ def _user_row_to_info(
         plugin_id=row.get("plugin_id"),
         size_bytes=int(row.get("archive_bytes") or 0),
         updated_at=row.get("updated_at"),
+        workspace_id=row.get("workspace_id"),
     )
 
 
@@ -218,6 +227,47 @@ async def _assemble_skills(
     return {"skills": skills}
 
 
+async def _assemble_all_scopes(
+    user_id: str, mode: SkillMode | None, include_disabled: bool
+) -> dict:
+    """Every scope at once — the Plugins page's scope-management inventory.
+
+    No shadowing or workspace-disable filtering here: each row appears exactly
+    once, tagged with its scope (``workspace_id``) and, for all-workspaces
+    entries, the deny-list of workspaces that switched it off.
+    """
+    disabled_builtins = await get_disabled_builtin_skills(user_id)
+    disables_by_name: dict[str, list[str]] = {}
+    for d in await list_skill_disables_for_user(user_id):
+        disables_by_name.setdefault(d["name"], []).append(d["workspace_id"])
+
+    skills: list[SkillInfo] = []
+    for entry in list_skills(mode=mode):
+        user_dis = entry["name"] in disabled_builtins
+        if user_dis and not include_disabled:
+            continue
+        info = _platform_info(entry, enabled=not user_dis)
+        info.disabled_workspace_ids = sorted(
+            disables_by_name.get(entry["name"], [])
+        )
+        skills.append(info)
+
+    rows = await list_all_user_skills(user_id)
+    user_names = {r["name"] for r in rows if not r.get("workspace_id")}
+    for r in rows:
+        if not r["enabled"] and not include_disabled:
+            continue
+        info = _user_row_to_info(r)
+        if r.get("workspace_id"):
+            info.shadows_inherited = r["name"] in user_names
+        else:
+            info.disabled_workspace_ids = sorted(
+                disables_by_name.get(r["name"], [])
+            )
+        skills.append(info)
+    return {"skills": skills}
+
+
 @router.get("", response_model=SkillsResponse)
 @handle_api_exceptions("list skills", logger)
 async def get_skills(
@@ -236,8 +286,23 @@ async def get_skills(
         "shadow user rows, workspace disables apply). Requires auth and "
         "workspace ownership.",
     ),
+    all_scopes: bool = Query(
+        False,
+        description="Return every scope at once (user tier plus every "
+        "workspace's rows, unfiltered) for scope management. Requires auth; "
+        "mutually exclusive with workspace_id.",
+    ),
 ):
     """List skills: platform tier always, plus the caller's own tiers."""
+    if all_scopes:
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if workspace_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="all_scopes and workspace_id are mutually exclusive",
+            )
+        return await _assemble_all_scopes(user_id, mode, include_disabled)
     if workspace_id is not None:
         if user_id is None:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -366,6 +431,46 @@ async def patch_skill(
         command=skill.command,
         enabled=name not in disabled,
     )
+
+
+class SkillMoveInput(BaseModel):
+    """Both scopes are explicit: names are only unique within one scope, so
+    the source disambiguates which row moves."""
+
+    from_workspace_id: str | None = None
+    to_workspace_id: str | None = None
+
+
+@router.post("/{name}/move", response_model=SkillInfo)
+@handle_api_exceptions("move skill", logger)
+async def move_skill(name: str, body: SkillMoveInput, user_id: CurrentUserId):
+    """Re-scope a skill: user tier (every workspace) ↔ one workspace.
+
+    The row moves in place — archive, enabled flag, and provenance travel
+    with it. 409 when the destination scope already has the name (shadowing
+    is created by uploading a workspace copy, never implicitly by a move).
+    Platform skills have no row and cannot move.
+    """
+    _validate_name_param(name)
+    if body.from_workspace_id == body.to_workspace_id:
+        raise HTTPException(
+            status_code=400, detail="The skill is already in that scope"
+        )
+    for ws in (body.from_workspace_id, body.to_workspace_id):
+        if ws is not None:
+            await _require_owned_workspace(ws, user_id)
+    try:
+        row = await move_user_skill(
+            user_id,
+            name,
+            from_workspace_id=body.from_workspace_id,
+            to_workspace_id=body.to_workspace_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return _user_row_to_info(row)
 
 
 @router.delete("/{name}", status_code=204)

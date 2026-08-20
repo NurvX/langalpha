@@ -2774,6 +2774,20 @@
       "inheritedHint": "当前工作区可见的平台技能与 Plugins 技能。在此关闭仅对当前工作区生效。",
       "shadowsBadge": "覆盖用户技能",
       "userDisabledBadge": "已在 Plugins 中停用"
+    },
+    "scope": {
+      "allWorkspaces": "所有工作区",
+      "allExcept": "所有工作区（除 {{count}} 个外）",
+      "activeIn": "生效于",
+      "futureHint": "新建工作区默认启用",
+      "moveToWorkspace": "移至工作区",
+      "moveToAll": "移至所有工作区",
+      "moveToAnother": "移至其他工作区",
+      "moveOauthBlocked": "请先断开 OAuth 连接，再将此服务器移至工作区",
+      "moveFailed": "移动失败",
+      "inWorkspace": "工作区：{{name}}",
+      "unknownWorkspace": "未知工作区",
+      "triggerAria": "范围：{{scope}}"
     }
   }
 }

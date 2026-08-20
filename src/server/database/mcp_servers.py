@@ -373,7 +373,9 @@ async def list_workspace_servers(workspace_id: str) -> list[dict[str, Any]]:
             return [_workspace_row_to_dict(r) for r in await cur.fetchall()]
 
 
-async def list_local_servers_for_user(user_id: str) -> list[dict[str, Any]]:
+async def list_local_servers_for_user(
+    user_id: str, *, live_only: bool = False
+) -> list[dict[str, Any]]:
     """Workspace-LOCAL rows (source='workspace') across ALL of a user's workspaces.
 
     For user-tier vault invalidation: the sandbox resolves one merged secret
@@ -381,21 +383,57 @@ async def list_local_servers_for_user(user_id: str) -> list[dict[str, Any]]:
     too, and nothing scoped to the catalog would ever reach that server's cached
     snapshot. Stopped workspaces and disabled rows included — a snapshot
     outlives both the sandbox that wrote it and the row being switched off.
+
+    ``live_only`` drops soft-deleted workspaces, for the callers that render
+    these rows to a user rather than sweeping their leftovers.
     """
+    status_filter = "AND w.status <> 'deleted'" if live_only else ""
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
-                """
+                f"""
                 SELECT workspace_mcp_server_id, workspace_id, name, source, enabled,
                        config, created_at, updated_at
                 FROM workspace_mcp_servers
                 WHERE source = 'workspace' AND workspace_id IN
-                    (SELECT workspace_id FROM workspaces WHERE user_id = %s)
+                    (SELECT w.workspace_id FROM workspaces w
+                      WHERE w.user_id = %s {status_filter})
                 ORDER BY name
                 """,
                 (user_id,),
             )
             return [_workspace_row_to_dict(r) for r in await cur.fetchall()]
+
+
+async def list_scope_markers_for_user(user_id: str) -> list[dict[str, Any]]:
+    """Disable-marker rows (inherited tombstones + builtin markers) across ALL
+    of a user's workspaces.
+
+    Feeds the all-scopes catalog view's per-name "active in" checklist; one
+    query instead of one per workspace. Real servers (source='workspace')
+    are excluded — those are rows, not markers. Soft-deleted workspaces are
+    excluded too: a tombstone in one is not a scope the user can still act on.
+    """
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT workspace_id, name, source FROM workspace_mcp_servers
+                WHERE source IN ('user', 'builtin') AND enabled = FALSE
+                  AND workspace_id IN
+                    (SELECT w.workspace_id FROM workspaces w
+                      WHERE w.user_id = %s AND w.status <> 'deleted')
+                """,
+                (user_id,),
+            )
+            return [
+                {
+                    "workspace_id": str(r["workspace_id"]),
+                    "name": r["name"],
+                    "source": r["source"],
+                }
+                for r in await cur.fetchall()
+            ]
 
 
 async def get_workspace_servers_and_version(

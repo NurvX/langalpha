@@ -90,8 +90,19 @@ export const queryKeys = {
   // workspace id keys the workspace-effective view (shadowing + disables).
   skills: {
     all:  ['skills'],
-    list: (mode: string | null, includeDisabled = false, workspaceId: string | null = null) =>
-      [...queryKeys.skills.all, 'list', mode ?? 'all', includeDisabled, workspaceId ?? 'user'],
+    // The scope slot is one of: 'user' (user view), a workspace id
+    // (workspace-effective view), or 'all-scopes' (the Plugins inventory) —
+    // allScopes and workspaceId are mutually exclusive on the wire.
+    list: (
+      mode: string | null,
+      includeDisabled = false,
+      workspaceId: string | null = null,
+      allScopes = false,
+    ) =>
+      [
+        ...queryKeys.skills.all, 'list', mode ?? 'all', includeDisabled,
+        allScopes ? 'all-scopes' : (workspaceId ?? 'user'),
+      ],
   },
   userVault: {
     all:     ['userVault'],

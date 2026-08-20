@@ -83,6 +83,40 @@ async def list_user_skills(
             return [_row_to_dict(r) for r in await cur.fetchall()]
 
 
+async def list_all_user_skills(user_id: str) -> list[dict[str, Any]]:
+    """Every skill row across every scope — the all-scopes management view."""
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                f"SELECT {_SKILL_COLUMNS} FROM user_skills "
+                "WHERE user_id = %s ORDER BY name",
+                (user_id,),
+            )
+            return [_row_to_dict(r) for r in await cur.fetchall()]
+
+
+async def list_skill_disables_for_user(user_id: str) -> list[dict[str, Any]]:
+    """Per-workspace skill disables across ALL of a user's workspaces.
+
+    Feeds the all-scopes view's per-name "active in" checklist; one query
+    instead of one per workspace.
+    """
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT workspace_id, name FROM workspace_skill_disables
+                WHERE workspace_id IN
+                    (SELECT workspace_id FROM workspaces WHERE user_id = %s)
+                """,
+                (user_id,),
+            )
+            return [
+                {"workspace_id": str(r["workspace_id"]), "name": r["name"]}
+                for r in await cur.fetchall()
+            ]
+
+
 async def list_enabled_user_skills(
     user_id: str, *, workspace_id: str | None = None
 ) -> list[dict[str, Any]]:
@@ -284,6 +318,63 @@ async def upsert_user_skill(
                 # make a no-op re-upload return the same one).
                 superseded = prior_key if prior_key and prior_key != archive_key else None
                 return row, superseded
+
+
+async def move_user_skill(
+    user_id: str,
+    name: str,
+    *,
+    from_workspace_id: str | None,
+    to_workspace_id: str | None,
+) -> dict[str, Any] | None:
+    """Re-scope a skill row (user tier ↔ one workspace) in place.
+
+    Raises ValueError when the name is taken in the target scope; returns None
+    when no row exists in the source scope. Runs under the same per-user
+    advisory lock as uploads, so the collision check and the update cannot
+    race a concurrent upsert. Any per-workspace disable of this name in the
+    two workspaces involved is cleared: the move is an explicit statement
+    that the skill is wanted where it now lives (and it was live where it
+    just left).
+    """
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s::text))", (user_id,)
+                )
+                await cur.execute(
+                    "SELECT 1 FROM user_skills WHERE user_id = %s AND name = %s "
+                    "AND workspace_id IS NOT DISTINCT FROM %s",
+                    (user_id, name, to_workspace_id),
+                )
+                if await cur.fetchone() is not None:
+                    raise ValueError(
+                        f"A skill named {name!r} already exists in the "
+                        "destination scope"
+                    )
+                await cur.execute(
+                    f"UPDATE user_skills SET workspace_id = %s, updated_at = NOW() "
+                    "WHERE user_id = %s AND name = %s "
+                    "AND workspace_id IS NOT DISTINCT FROM %s "
+                    f"RETURNING {_SKILL_COLUMNS}",
+                    (to_workspace_id, user_id, name, from_workspace_id),
+                )
+                row = _row_to_dict(await cur.fetchone())
+                if row is None:
+                    return None
+                for ws in (from_workspace_id, to_workspace_id):
+                    if ws is not None:
+                        await cur.execute(
+                            "DELETE FROM workspace_skill_disables "
+                            "WHERE workspace_id = %s AND name = %s",
+                            (ws, name),
+                        )
+                logger.info(
+                    "[user_skills] move user_id=%s name=%s from=%s to=%s",
+                    user_id, name, from_workspace_id, to_workspace_id,
+                )
+                return row
 
 
 async def set_user_skill_enabled(

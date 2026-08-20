@@ -5,6 +5,7 @@ import {
   deleteWorkspaceSkill,
   getSkills,
   getWorkspaceSkills,
+  moveSkill,
   setSkillEnabled,
   setWorkspaceSkillEnabled,
   uploadSkill,
@@ -22,13 +23,69 @@ import {
 
 export function useSkills(
   mode: string | null,
-  opts: { includeDisabled?: boolean; workspaceId?: string | null } = {},
+  opts: {
+    includeDisabled?: boolean;
+    workspaceId?: string | null;
+    allScopes?: boolean;
+  } = {},
 ) {
-  const { includeDisabled = false, workspaceId = null } = opts;
+  const { includeDisabled = false, workspaceId = null, allScopes = false } = opts;
   return useQuery({
-    queryKey: queryKeys.skills.list(mode, includeDisabled, workspaceId),
-    queryFn: () => getSkills({ mode, includeDisabled, workspaceId }),
+    queryKey: queryKeys.skills.list(mode, includeDisabled, workspaceId, allScopes),
+    queryFn: () => getSkills({ mode, includeDisabled, workspaceId, allScopes }),
     staleTime: 60_000,
+  });
+}
+
+/** Re-scope a skill (user tier ↔ one workspace). Whole-prefix invalidation:
+ * a move changes the slash menu, the workspace views, and shadowing at once. */
+export function useMoveSkill() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      name,
+      fromWorkspaceId,
+      toWorkspaceId,
+    }: {
+      name: string;
+      fromWorkspaceId: string | null;
+      toWorkspaceId: string | null;
+    }) => moveSkill(name, fromWorkspaceId, toWorkspaceId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.skills.all });
+    },
+  });
+}
+
+/** Workspace-scoped toggle with the workspace id in the vars — for the
+ * all-scopes Plugins view, where one list mixes rows from many workspaces
+ * (the fixed-workspace variants below serve the single-workspace pages). */
+export function useSetSkillEnabledInWorkspace() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      workspaceId,
+      name,
+      enabled,
+    }: {
+      workspaceId: string;
+      name: string;
+      enabled: boolean;
+    }) => setWorkspaceSkillEnabled(workspaceId, name, enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.skills.all });
+    },
+  });
+}
+
+export function useDeleteSkillInWorkspace() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ workspaceId, name }: { workspaceId: string; name: string }) =>
+      deleteWorkspaceSkill(workspaceId, name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.skills.all });
+    },
   });
 }
 

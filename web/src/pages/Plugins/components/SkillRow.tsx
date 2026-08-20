@@ -29,11 +29,13 @@ export function SkillRow({
   toggling,
   onToggle,
   onDelete,
+  scopeControl,
 }: {
   skill: SkillInfo;
   toggling: boolean;
   onToggle: (enabled: boolean) => void;
   onDelete?: () => void;
+  scopeControl?: React.ReactNode;
 }) {
   const { t } = useTranslation();
   const lockedByUserTier = skill.disabled_scope === 'user';
@@ -66,6 +68,7 @@ export function SkillRow({
       }
       actions={
         <>
+          {scopeControl}
           <EnabledToggle
             enabled={skill.enabled}
             name={skill.name}

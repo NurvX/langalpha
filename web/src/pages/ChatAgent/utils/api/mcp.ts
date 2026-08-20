@@ -89,6 +89,12 @@ export interface EffectiveServer {
    * OAuth rows are discovered host-side, never probed from the workspace.
    */
   oauth_status?: McpOauthStatus | null;
+  /**
+   * Disabled built-ins only: which tier switched it off. 'user' means the
+   * account-level disable, which a workspace cannot undo — the row renders
+   * read-only here and points at Plugins.
+   */
+  disabled_scope?: 'workspace' | 'user' | null;
 }
 
 /**
@@ -166,6 +172,20 @@ export interface CatalogServer {
   warnings?: string[] | null;
   created_at: string | null;
   updated_at: string | null;
+  /** Workspaces holding a tombstone for this name (deny-list); populated in
+   * the all-scopes view only. */
+  disabled_workspace_ids?: string[];
+}
+
+/** A workspace-local server surfaced in the all-scopes catalog view — a
+ * summary, not an editable config (editing stays on the workspace endpoints). */
+export interface WorkspaceScopedMcpServer {
+  name: string;
+  workspace_id: string;
+  transport: McpTransport;
+  enabled: boolean;
+  description: string;
+  shadows_inherited: boolean;
 }
 
 /** Result of a discovery probe (POST /discover). */
@@ -183,6 +203,8 @@ export interface McpDiscoveryResult {
 export interface CatalogServerList {
   servers: CatalogServer[];
   max_servers: number;
+  /** all_scopes=true only: workspace-local servers across the user's workspaces. */
+  workspace_servers?: WorkspaceScopedMcpServer[];
 }
 
 // --- Per-workspace MCP ---
@@ -288,19 +310,42 @@ export async function promoteWorkspaceMcpServerToTemplate(
   workspaceId: string,
   name: string,
   overwrite = false,
+  removeSource = false,
 ): Promise<CatalogServer> {
   const { data } = await api.post<CatalogServer>(
     `/api/v1/workspaces/${workspaceId}/mcp/servers/${name}/promote`,
-    { overwrite },
+    { overwrite, remove_source: removeSource },
   );
   return data;
 }
 
+/**
+ * Move a user-level (Connectors) server INTO one workspace — the inverse of
+ * promote-with-removeSource. The catalog row becomes a workspace-local fork
+ * and is then deleted; OAuth-connected servers refuse with a 409 (connections
+ * exist only at the user tier).
+ */
+export async function adoptMcpServerToWorkspace(workspaceId: string, name: string) {
+  const { data } = await api.post(
+    `/api/v1/workspaces/${workspaceId}/mcp/servers/${name}/adopt`,
+  );
+  return data as { name: string; source: string; enabled: boolean };
+}
+
 // --- User catalog (templates) ---
 
+/** Always fetches the all-scopes shape: one cache key serves both the Plugins
+ * scope view and plain catalog reads (the extra fields are two cheap queries
+ * server-side, and a per-scope key would break the optimistic toggle). */
 export async function getMcpCatalog(): Promise<CatalogServerList> {
-  const { data } = await api.get<CatalogServerList>('/api/v1/mcp/servers');
-  return { servers: data.servers ?? [], max_servers: data.max_servers ?? 20 };
+  const { data } = await api.get<CatalogServerList>('/api/v1/mcp/servers', {
+    params: { all_scopes: true },
+  });
+  return {
+    servers: data.servers ?? [],
+    max_servers: data.max_servers ?? 20,
+    workspace_servers: data.workspace_servers ?? [],
+  };
 }
 
 export async function createMcpCatalogServer(body: McpServerInput): Promise<CatalogServer> {
@@ -344,10 +389,14 @@ export interface BuiltinMcpServer {
   description: string;
   transport: string;
   enabled: boolean;
+  /** Workspaces with a disable-marker for this builtin — all-scopes view only. */
+  disabled_workspace_ids?: string[];
 }
 
 export async function getBuiltinMcpServers(): Promise<{ servers: BuiltinMcpServer[] }> {
-  const { data } = await api.get('/api/v1/mcp/builtin-servers');
+  const { data } = await api.get('/api/v1/mcp/builtin-servers', {
+    params: { all_scopes: true },
+  });
   return data;
 }
 

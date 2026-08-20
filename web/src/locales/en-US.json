@@ -2796,6 +2796,20 @@
       "inheritedHint": "Platform skills and your Plugins skills, as this workspace sees them. Switching one off here hides it in this workspace only.",
       "shadowsBadge": "Overrides user skill",
       "userDisabledBadge": "Disabled in Plugins"
+    },
+    "scope": {
+      "allWorkspaces": "All workspaces",
+      "allExcept": "All workspaces except {{count}}",
+      "activeIn": "Active in",
+      "futureHint": "New workspaces start enabled",
+      "moveToWorkspace": "Move to workspace",
+      "moveToAll": "Move to all workspaces",
+      "moveToAnother": "Move to another workspace",
+      "moveOauthBlocked": "Disconnect OAuth first to move this server into a workspace",
+      "moveFailed": "Move failed",
+      "inWorkspace": "Workspace: {{name}}",
+      "unknownWorkspace": "Unknown workspace",
+      "triggerAria": "Scope: {{scope}}"
     }
   }
 }
