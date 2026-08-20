@@ -272,17 +272,40 @@
          two reasons: it must exist on every route, including the ones with no
          sidebar (a login screen that reserves nothing tells the shell this build
          reserves nothing), and a window whose entry chunk never ran still has to
-         be movable. Wide enough to cover the buttons and no wider — the rest of
-         the top row holds real controls. */
-      #window-drag { display: none; position: fixed; top: 0; left: 0; width: 120px; height: 38px; z-index: 9999; -webkit-app-region: drag; }
+         be movable.
+
+         Spans the window, because this element is only ever *visible* on a page
+         that has no chrome of its own — the handover below retires it the moment
+         a real strip exists. Those are the login, legal and wizard routes, whose
+         top row is empty, so a titlebar's width of it is free. It was 120px on
+         the reasoning that the rest of the row holds controls, which is true of
+         the app and never true while this is on screen; the window buttons cover
+         most of that 120px, leaving a sliver nobody finds by aiming for it.
+
+         Two mechanisms decide what happens at the top of the window and they are
+         not the same one. Drag regions are collected from the layout tree in
+         preorder and differenced in that order, so the `no-drag` rule in
+         chrome.css, which already names every control in the app, subtracts them
+         from this strip whatever the stacking: z-index is not an input to it,
+         and this element sitting before #root is what puts the app's controls
+         later in that order. Ordinary clicks and text selection are decided by
+         hit testing instead, where a fixed element beats every in-flow element
+         that is not itself positioned, whatever the DOM order says. So the strip
+         declares the region and then takes itself out of hit testing entirely.
+         Without `pointer-events: none` it swallows the clicks of every statically
+         positioned control that scrolls under it, on exactly the chrome-less
+         routes it exists for, and the failure is invisible to the browser suite:
+         those controls still compute `no-drag`, because the region really was
+         subtracted. It was the hit test that ate them. */
+      #window-drag { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 38px; z-index: 0; pointer-events: none; -webkit-app-region: drag; }
       html.desktop-mac #window-drag { display: block; }
-      /* ...and stands down the moment the sidebar renders its own strip. This
-         one is fixed and above everything, so while the app is up it also sits
-         on top of the main column: the collapsed sidebar is 80px and this is
-         120px, and a control in that 40px cannot take its clicks back — an
-         element's `no-drag` loses to a drag region painted over it. The handover
-         is `:has` rather than a class the app sets, because the condition IS the
-         real strip existing, and asking about it directly cannot drift. */
+      /* ...and stands down the moment the sidebar renders its own strip, which is
+         what keeps this from spanning a top row the app fills with its own
+         chrome. A plain div carrying an onClick is not in the `no-drag` list and
+         could not take its clicks back from underneath, so the app's own bars
+         stay the ones that decide. The handover is `:has` rather than a class
+         the app sets, because the condition IS the real strip existing, and
+         asking about it directly cannot drift. */
       html.desktop-mac:has(.sidebar-window-drag) #window-drag { display: none; }
     </style>
     <link rel="icon" type="image/svg+xml" href="/logo-favicon.svg" />
