@@ -1052,6 +1052,7 @@ from src.server.app.insights import router as insights_router
 from src.server.app.oauth import router as oauth_router
 from src.server.app.public import router as public_router
 from src.server.app.skills import router as skills_router
+from src.server.app.skills import workspace_router as workspace_skills_router
 from src.server.app.vault import router as vault_router
 from src.server.app.memo import router as memo_router
 from src.server.app.memory import router as memory_router
@@ -1129,6 +1130,9 @@ app.include_router(
 )  # /api/v1/public/* - Public shared thread access (no auth)
 app.include_router(skills_router)  # /api/v1/skills - Available agent skills
 app.include_router(
+    workspace_skills_router
+)  # /api/v1/workspaces/{id}/skills - Workspace-scoped skills
+app.include_router(
     vault_router
 )  # /api/v1/workspaces/{id}/vault/secrets - Per-workspace secret storage
 app.include_router(
@@ -1140,7 +1144,7 @@ app.include_router(
 include_workflow_router(app)  # /api/v1/workflows/* - Reusable JavaScript workflows
 app.include_router(
     mcp_catalog_router
-)  # /api/v1/mcp/servers - User-level MCP servers (Connectors backing store)
+)  # /api/v1/mcp/servers - User-level MCP servers (Plugins backing store)
 app.include_router(
     mcp_oauth_router
 )  # /api/v1/mcp/servers/{name}/oauth + /api/v1/mcp/oauth/callback - MCP OAuth

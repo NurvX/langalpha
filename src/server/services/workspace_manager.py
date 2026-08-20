@@ -870,7 +870,9 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
                 tokens = await self._mint_sandbox_tokens(user_id, workspace_id)
 
             user_skill_params = await sandbox_skill_sync_params(
-                user_id, self.config.skills.sandbox_skills_base
+                user_id,
+                self.config.skills.sandbox_skills_base,
+                workspace_id=workspace_id,
             )
             return await sandbox.sync_sandbox_assets(
                 skill_dirs=skill_dirs,

@@ -168,7 +168,9 @@ class SessionService:
                     workspace = await db_get_workspace(workspace_id)
                     owner_id = workspace.get("user_id") if workspace else None
                     user_skill_params = await sandbox_skill_sync_params(
-                        owner_id, self.config.skills.sandbox_skills_base
+                        owner_id,
+                        self.config.skills.sandbox_skills_base,
+                        workspace_id=workspace_id,
                     )
                     result = await session.sandbox.sync_sandbox_assets(
                         skill_dirs=skill_dirs,

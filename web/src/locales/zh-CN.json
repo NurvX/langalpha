@@ -2766,7 +2766,14 @@
       "uploadNotZip": "该文件不是 .zip 压缩包。",
       "uploadTooLarge": "zip 超过 2 MB。",
       "uploading": "上传中 {{percent}}%",
-      "uploadConfirm": "上传"
+      "uploadConfirm": "上传",
+      "workspaceSection": "当前工作区",
+      "workspaceHint": "在此上传的技能仅在当前工作区可用，并会覆盖 Plugins 中的同名技能。",
+      "workspaceEmpty": "暂无工作区技能。上传包含 SKILL.md 的 zip 即可添加。",
+      "inheritedSection": "继承的技能",
+      "inheritedHint": "当前工作区可见的平台技能与 Plugins 技能。在此关闭仅对当前工作区生效。",
+      "shadowsBadge": "覆盖用户技能",
+      "userDisabledBadge": "已在 Plugins 中停用"
     }
   }
 }

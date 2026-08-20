@@ -86,11 +86,12 @@ export const queryKeys = {
     workspace: (wsId: string) => [...queryKeys.mcp.all, 'workspace', wsId],
   },
   // Skills are per-user and mutable; the mode variant is what the slash menu
-  // reads, the manage variant is the full list including disabled rows.
+  // reads, the manage variant is the full list including disabled rows. A
+  // workspace id keys the workspace-effective view (shadowing + disables).
   skills: {
     all:  ['skills'],
-    list: (mode: string | null, includeDisabled = false) =>
-      [...queryKeys.skills.all, 'list', mode ?? 'all', includeDisabled],
+    list: (mode: string | null, includeDisabled = false, workspaceId: string | null = null) =>
+      [...queryKeys.skills.all, 'list', mode ?? 'all', includeDisabled, workspaceId ?? 'user'],
   },
   userVault: {
     all:     ['userVault'],

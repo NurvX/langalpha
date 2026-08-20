@@ -1,9 +1,17 @@
-"""Database CRUD for user-tier skills (``user_skills``).
+"""Database CRUD for user- and workspace-tier skills (``user_skills``).
 
 One row per skill a user owns, carrying the denormalized SKILL.md frontmatter
 so listings and the per-turn agent build never open the archive. The archive
 bytes live in object storage (``archive_key``) or inline (``archive_blob``)
 when no object storage is configured.
+
+A row's scope is its ``workspace_id``: NULL = user tier (every workspace),
+set = that workspace only. Scope-keyed functions take ``workspace_id`` and
+match it exactly (``IS NOT DISTINCT FROM``); a workspace row may reuse a
+user-tier name and shadows it there, so name lookups are only unique within
+one scope. ``workspace_skill_disables`` records per-workspace disables of
+skills the workspace merely inherits (platform + user tier), which have no
+row in the workspace scope to flag.
 
 ``archive_blob`` is excluded from every read except :func:`get_user_skill_archive_blob`
 — it is up to half a megabyte per row, and the hot paths (listing, agent build)
@@ -36,10 +44,10 @@ MAX_SKILL_TOTAL_BYTES_PER_USER = 32 * 1024 * 1024
 # Every column except archive_blob. `has_inline_archive` lets a caller tell
 # which storage backs the row without paying for the bytes.
 _SKILL_COLUMNS = """
-    user_skill_id, user_id, name, description, license, frontmatter,
-    allowed_tools, enabled, confirmed, plugin_id, plugin_skill_dir,
-    content_hash, archive_key, archive_bytes, file_count, created_at,
-    updated_at, (archive_blob IS NOT NULL) AS has_inline_archive
+    user_skill_id, user_id, workspace_id, name, description, license,
+    frontmatter, allowed_tools, enabled, confirmed, plugin_id,
+    plugin_skill_dir, content_hash, archive_key, archive_bytes, file_count,
+    created_at, updated_at, (archive_blob IS NOT NULL) AS has_inline_archive
 """
 
 
@@ -48,7 +56,7 @@ def _row_to_dict(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if row is None:
         return None
     out = dict(row)
-    for key in ("user_skill_id", "plugin_id"):
+    for key in ("user_skill_id", "workspace_id", "plugin_id"):
         if out.get(key) is not None:
             out[key] = str(out[key])
     for key in ("created_at", "updated_at"):
@@ -60,58 +68,78 @@ def _row_to_dict(row: dict[str, Any] | None) -> dict[str, Any] | None:
     return out
 
 
-async def list_user_skills(user_id: str) -> list[dict[str, Any]]:
-    """Every skill the user owns, enabled or not, ordered by name."""
+async def list_user_skills(
+    user_id: str, *, workspace_id: str | None = None
+) -> list[dict[str, Any]]:
+    """Every skill in one scope (user tier or one workspace), ordered by name."""
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 f"SELECT {_SKILL_COLUMNS} FROM user_skills "
-                "WHERE user_id = %s ORDER BY name",
-                (user_id,),
+                "WHERE user_id = %s AND workspace_id IS NOT DISTINCT FROM %s "
+                "ORDER BY name",
+                (user_id, workspace_id),
             )
             return [_row_to_dict(r) for r in await cur.fetchall()]
 
 
-async def list_enabled_user_skills(user_id: str) -> list[dict[str, Any]]:
+async def list_enabled_user_skills(
+    user_id: str, *, workspace_id: str | None = None
+) -> list[dict[str, Any]]:
     """The agent build's input: only rows that should reach a turn.
 
-    When the plugin entity lands, this query (and only this one) additionally
-    gains the plugin-disable join predicate
+    With a ``workspace_id`` this is the two-scope union (user tier plus that
+    workspace's rows) — the caller resolves name shadowing; without one it is
+    the user tier alone. When the plugin entity lands, this query (and only
+    this one) additionally gains the plugin-disable join predicate
     ``AND (plugin_id IS NULL OR plugin.enabled)`` — plugin-level disable
     reaches skills exclusively through this delivery chokepoint.
     """
+    scope = (
+        "workspace_id IS NULL"
+        if workspace_id is None
+        else "(workspace_id IS NULL OR workspace_id = %s)"
+    )
+    params = (user_id,) if workspace_id is None else (user_id, workspace_id)
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 f"SELECT {_SKILL_COLUMNS} FROM user_skills "
-                "WHERE user_id = %s AND enabled ORDER BY name",
-                (user_id,),
+                f"WHERE user_id = %s AND enabled AND {scope} ORDER BY name",
+                params,
             )
             return [_row_to_dict(r) for r in await cur.fetchall()]
 
 
 async def get_user_skill(
-    user_id: str, name: str, *, conn=None
+    user_id: str, name: str, *, workspace_id: str | None = None, conn=None
 ) -> dict[str, Any] | None:
-    """One skill's metadata by name, or None."""
+    """One skill's metadata by scope and name, or None."""
     async with get_db_connection(conn) as db:
         async with db.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 f"SELECT {_SKILL_COLUMNS} FROM user_skills "
-                "WHERE user_id = %s AND name = %s",
-                (user_id, name),
+                "WHERE user_id = %s AND name = %s "
+                "AND workspace_id IS NOT DISTINCT FROM %s",
+                (user_id, name, workspace_id),
             )
             return _row_to_dict(await cur.fetchone())
 
 
-async def get_user_skill_archive_blob(user_id: str, name: str) -> bytes | None:
-    """The inline archive bytes, or None when the row is object-storage backed."""
+async def get_user_skill_archive_blob(
+    user_id: str, user_skill_id: str
+) -> bytes | None:
+    """The inline archive bytes, or None when the row is object-storage backed.
+
+    Keyed by row id, not name — with workspace shadowing, a name no longer
+    identifies one row per user.
+    """
     async with get_db_connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 "SELECT archive_blob FROM user_skills "
-                "WHERE user_id = %s AND name = %s",
-                (user_id, name),
+                "WHERE user_id = %s AND user_skill_id = %s",
+                (user_id, user_skill_id),
             )
             row = await cur.fetchone()
             if not row or row[0] is None:
@@ -149,19 +177,21 @@ async def upsert_user_skill(
     archive_bytes: int,
     file_count: int,
     enabled: bool = True,
+    workspace_id: str | None = None,
     plugin_id: str | None = None,
     plugin_skill_dir: str | None = None,
     conn=None,
 ) -> tuple[dict[str, Any], str | None]:
-    """Insert or replace a user's skill by name.
+    """Insert or replace a skill by scope and name.
 
     Returns ``(row, superseded_archive_key)`` — the caller deletes the
     superseded object after the write commits, so a failed upsert can never
     orphan the bytes the surviving row still points at.
 
-    Both caps are enforced under an advisory lock on the user so concurrent
-    uploads can't slip past them. The name being replaced is excluded from
-    both counts: overwriting an existing skill is always allowed.
+    Both caps are per user across every scope, enforced under an advisory
+    lock on the user so concurrent uploads can't slip past them. The exact
+    row being replaced (scope + name) is excluded from both counts:
+    overwriting an existing skill is always allowed.
 
     On replace, ``enabled`` is preserved (a disabled skill re-uploaded stays
     disabled) while the plugin provenance columns take the caller's values —
@@ -177,8 +207,9 @@ async def upsert_user_skill(
                 await cur.execute(
                     "SELECT COUNT(*) AS cnt, "
                     "COALESCE(SUM(archive_bytes), 0) AS total_bytes "
-                    "FROM user_skills WHERE user_id = %s AND name <> %s",
-                    (user_id, name),
+                    "FROM user_skills WHERE user_id = %s AND NOT "
+                    "(name = %s AND workspace_id IS NOT DISTINCT FROM %s)",
+                    (user_id, name, workspace_id),
                 )
                 stats = await cur.fetchone()
                 if stats["cnt"] >= MAX_SKILLS_PER_USER:
@@ -196,23 +227,31 @@ async def upsert_user_skill(
                 # so read its archive_key separately to hand back for cleanup.
                 await cur.execute(
                     "SELECT archive_key FROM user_skills "
-                    "WHERE user_id = %s AND name = %s FOR UPDATE",
-                    (user_id, name),
+                    "WHERE user_id = %s AND name = %s "
+                    "AND workspace_id IS NOT DISTINCT FROM %s FOR UPDATE",
+                    (user_id, name, workspace_id),
                 )
                 prior = await cur.fetchone()
                 prior_key = prior["archive_key"] if prior else None
 
+                # Uniqueness is a partial index per scope, so ON CONFLICT must
+                # name the matching index's columns + predicate to infer it.
+                conflict_target = (
+                    "(user_id, name) WHERE workspace_id IS NULL"
+                    if workspace_id is None
+                    else "(workspace_id, name) WHERE workspace_id IS NOT NULL"
+                )
                 await cur.execute(
                     f"""
                     INSERT INTO user_skills
-                        (user_id, name, description, license, frontmatter,
-                         allowed_tools, enabled, confirmed, plugin_id,
-                         plugin_skill_dir, content_hash, archive_key,
-                         archive_blob, archive_bytes, file_count,
+                        (user_id, workspace_id, name, description, license,
+                         frontmatter, allowed_tools, enabled, confirmed,
+                         plugin_id, plugin_skill_dir, content_hash,
+                         archive_key, archive_blob, archive_bytes, file_count,
                          created_at, updated_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, NOW(), NOW())
-                    ON CONFLICT (user_id, name) DO UPDATE SET
+                            %s, %s, %s, %s, NOW(), NOW())
+                    ON CONFLICT {conflict_target} DO UPDATE SET
                         description = EXCLUDED.description,
                         license = EXCLUDED.license,
                         frontmatter = EXCLUDED.frontmatter,
@@ -229,16 +268,16 @@ async def upsert_user_skill(
                     RETURNING {_SKILL_COLUMNS}
                     """,
                     (
-                        user_id, name, description, license, Json(frontmatter),
-                        Json(allowed_tools), enabled, confirmed, plugin_id,
-                        plugin_skill_dir, content_hash, archive_key,
-                        archive_blob, archive_bytes, file_count,
+                        user_id, workspace_id, name, description, license,
+                        Json(frontmatter), Json(allowed_tools), enabled,
+                        confirmed, plugin_id, plugin_skill_dir, content_hash,
+                        archive_key, archive_blob, archive_bytes, file_count,
                     ),
                 )
                 row = _row_to_dict(await cur.fetchone())
                 logger.info(
-                    "[user_skills] upsert user_id=%s name=%s bytes=%d",
-                    user_id, name, archive_bytes,
+                    "[user_skills] upsert user_id=%s workspace_id=%s name=%s bytes=%d",
+                    user_id, workspace_id, name, archive_bytes,
                 )
                 # Only a genuine replacement leaves an orphan, and only when the
                 # new bytes landed under a different key (content-addressed keys
@@ -248,15 +287,17 @@ async def upsert_user_skill(
 
 
 async def set_user_skill_enabled(
-    user_id: str, name: str, enabled: bool
+    user_id: str, name: str, enabled: bool, *, workspace_id: str | None = None
 ) -> dict[str, Any] | None:
-    """Toggle a user skill. Returns the updated row, or None when absent."""
+    """Toggle a skill row in one scope. Returns the row, or None when absent."""
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 f"UPDATE user_skills SET enabled = %s, updated_at = NOW() "
-                f"WHERE user_id = %s AND name = %s RETURNING {_SKILL_COLUMNS}",
-                (enabled, user_id, name),
+                f"WHERE user_id = %s AND name = %s "
+                f"AND workspace_id IS NOT DISTINCT FROM %s "
+                f"RETURNING {_SKILL_COLUMNS}",
+                (enabled, user_id, name, workspace_id),
             )
             return _row_to_dict(await cur.fetchone())
 
@@ -272,7 +313,8 @@ async def detach_user_skill(user_id: str, name: str) -> dict[str, Any] | None:
             await cur.execute(
                 f"UPDATE user_skills "
                 f"SET plugin_id = NULL, plugin_skill_dir = NULL, updated_at = NOW() "
-                f"WHERE user_id = %s AND name = %s RETURNING {_SKILL_COLUMNS}",
+                f"WHERE user_id = %s AND name = %s AND workspace_id IS NULL "
+                f"RETURNING {_SKILL_COLUMNS}",
                 (user_id, name),
             )
             row = _row_to_dict(await cur.fetchone())
@@ -282,18 +324,53 @@ async def detach_user_skill(user_id: str, name: str) -> dict[str, Any] | None:
 
 
 async def delete_user_skill(
-    user_id: str, name: str, *, conn=None
+    user_id: str, name: str, *, workspace_id: str | None = None, conn=None
 ) -> dict[str, Any] | None:
-    """Delete a user skill, returning the deleted row so the caller can drop
+    """Delete a skill row in one scope, returning it so the caller can drop
     its archive object. Returns None when there was nothing to delete."""
     async with get_db_connection(conn) as db:
         async with db.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 f"DELETE FROM user_skills WHERE user_id = %s AND name = %s "
+                f"AND workspace_id IS NOT DISTINCT FROM %s "
                 f"RETURNING {_SKILL_COLUMNS}",
-                (user_id, name),
+                (user_id, name, workspace_id),
             )
             row = _row_to_dict(await cur.fetchone())
             if row:
-                logger.info("[user_skills] delete user_id=%s name=%s", user_id, name)
+                logger.info(
+                    "[user_skills] delete user_id=%s workspace_id=%s name=%s",
+                    user_id, workspace_id, name,
+                )
             return row
+
+
+async def list_workspace_skill_disables(workspace_id: str) -> set[str]:
+    """Names of inherited skills this workspace has switched off."""
+    async with get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT name FROM workspace_skill_disables WHERE workspace_id = %s",
+                (workspace_id,),
+            )
+            return {r[0] for r in await cur.fetchall()}
+
+
+async def set_workspace_skill_disable(
+    workspace_id: str, name: str, disabled: bool
+) -> None:
+    """Record or clear a workspace-level disable of an inherited skill."""
+    async with get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            if disabled:
+                await cur.execute(
+                    "INSERT INTO workspace_skill_disables (workspace_id, name) "
+                    "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (workspace_id, name),
+                )
+            else:
+                await cur.execute(
+                    "DELETE FROM workspace_skill_disables "
+                    "WHERE workspace_id = %s AND name = %s",
+                    (workspace_id, name),
+                )

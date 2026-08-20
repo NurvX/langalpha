@@ -2788,7 +2788,14 @@
       "uploadNotZip": "That file is not a .zip archive.",
       "uploadTooLarge": "The zip is larger than 2 MB.",
       "uploading": "Uploading {{percent}}%",
-      "uploadConfirm": "Upload"
+      "uploadConfirm": "Upload",
+      "workspaceSection": "This workspace",
+      "workspaceHint": "A skill uploaded here runs only in this workspace and overrides a same-named skill from your Plugins.",
+      "workspaceEmpty": "No workspace skills yet. Upload a zip with a SKILL.md to add one.",
+      "inheritedSection": "Inherited",
+      "inheritedHint": "Platform skills and your Plugins skills, as this workspace sees them. Switching one off here hides it in this workspace only.",
+      "shadowsBadge": "Overrides user skill",
+      "userDisabledBadge": "Disabled in Plugins"
     }
   }
 }

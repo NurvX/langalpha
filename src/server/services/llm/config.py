@@ -775,6 +775,7 @@ async def resolve_llm_config(
     thread_id: str | None = None,
     *,
     enabled_subagents: list[str] | None = None,
+    workspace_id: str | None = None,
 ):
     """
     Resolve final LLM config with priority:
@@ -788,6 +789,9 @@ async def resolve_llm_config(
     points; all current callers pass it explicitly). ``enabled_subagents``
     threads the request's active subagent list so per-subagent model roles get
     their own credential resolution; ``None`` falls back to the config default.
+    ``workspace_id`` scopes the skill tier: workspace rows shadow user rows
+    and workspace disables apply; ``None`` (maintenance paths) resolves the
+    user tier alone.
     """
     from ptc_agent.config import LLMConfig
 
@@ -828,7 +832,7 @@ async def resolve_llm_config(
     # single indexed SELECT and sets nothing.
     from src.server.services.user_skills import load_user_skill_bundle
 
-    bundle = await load_user_skill_bundle(user_id)
+    bundle = await load_user_skill_bundle(user_id, workspace_id)
     config.user_skills = list(bundle.skills)
     config.disabled_skills = bundle.disabled_builtins
     config.user_skill_dir = bundle.dir

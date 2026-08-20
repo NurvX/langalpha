@@ -1736,6 +1736,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       onModelChange={setInputModel}
                       threadModels={threadModels}
                       mode={isFlashMode ? 'fast' : 'ptc'}
+                      selectedWorkspaceId={workspaceId}
                     />
                   </>
                 ) : activeAgent && activeAgent.type !== WORKFLOW_TASK_TYPE ? (

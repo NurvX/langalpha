@@ -48,13 +48,13 @@ def _empty_user_skill_bundle(monkeypatch):
     ``resolve_llm_config`` loads it from Postgres on every turn; unit tests
     have no pool. Both binding sites are patched: the package attribute the
     lazy imports resolve, and the defining module's global that
-    ``sandbox_skill_sync_params`` calls. A test exercising real bundles
-    overrides this symbol.
+    ``sandbox_skill_sync_params`` calls. Tests *about* the bundle itself put
+    the real function back — see ``server/services/user_skills/conftest.py``.
     """
     from src.server.services import user_skills
     from src.server.services.user_skills import materialize
 
-    async def _empty(user_id):
+    async def _empty(user_id, workspace_id=None):
         return user_skills.EMPTY_USER_SKILL_BUNDLE
 
     monkeypatch.setattr(user_skills, "load_user_skill_bundle", _empty)

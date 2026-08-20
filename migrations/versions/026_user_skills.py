@@ -1,10 +1,24 @@
-"""User-tier skills: per-user skill records + their packaged archives.
+"""User- and workspace-tier skills: per-user skill records + their archives.
 
-Adds the third skill tier. Until now a skill was either platform-authored
+Adds the user-owned skill tiers. Until now a skill was either platform-authored
 (SKILL_REGISTRY + the repo's skills/ directory) or agent-installed (discovered
 by scanning a sandbox's .agents/skills, invisible to the server). Neither can
 represent "a skill this user brought and owns", which is what plugin install
 fans its skills component into.
+
+A row is user-scoped (workspace_id NULL, visible in every workspace) or
+workspace-scoped (workspace_id set, visible only there). Both scopes live in
+one table because they share the whole archive/materialization pipeline; scope
+is just a shadowing key. Uniqueness is per scope, via two partial indexes: a
+workspace row may reuse a user-tier name and shadows it in that workspace,
+mirroring how workspace MCP servers shadow user-level connectors by name.
+
+workspace_skill_disables holds per-workspace disables of skills the workspace
+merely inherits (platform builtins and the user tier). A dedicated table
+rather than a row flag because the inherited skill has no row in this scope
+to flag; mirrors user_mcp_builtin_disables. No FK on workspace_id for the
+same reason user_id has none, and rows deliberately survive workspace soft
+delete (the workspace convention; MCP rows behave the same).
 
 A row carries the denormalized SKILL.md frontmatter so listings and the agent
 build never need to open the archive; the archive itself is the source of
@@ -42,6 +56,7 @@ def upgrade() -> None:
         CREATE TABLE IF NOT EXISTS user_skills (
             user_skill_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             user_id VARCHAR(255) NOT NULL,
+            workspace_id UUID NULL,
             name VARCHAR(64) NOT NULL,
             description TEXT NOT NULL DEFAULT '',
             license TEXT NULL,
@@ -58,7 +73,6 @@ def upgrade() -> None:
             file_count INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE(user_id, name),
             -- The archive lives in object storage or inline, never both and
             -- never neither: a row with no retrievable bytes would advertise a
             -- skill in the manifest that can never be materialized.
@@ -74,11 +88,32 @@ def upgrade() -> None:
         FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()
     """)
 
+    # Per-scope uniqueness: one name per user tier, one name per workspace.
+    # Partial indexes rather than one UNIQUE(user_id, workspace_id, name)
+    # because NULL workspace_id rows would never collide under a composite
+    # unique; ON CONFLICT infers each index by columns + predicate.
+    op.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_user_skills_user_name
+        ON user_skills(user_id, name)
+        WHERE workspace_id IS NULL
+    """)
+    op.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_user_skills_workspace_name
+        ON user_skills(workspace_id, name)
+        WHERE workspace_id IS NOT NULL
+    """)
+
     # The agent build reads only the enabled rows, once per turn.
     op.execute("""
         CREATE INDEX IF NOT EXISTS idx_user_skills_user_enabled
         ON user_skills(user_id)
         WHERE enabled
+    """)
+    # Workspace skill management lists by workspace.
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_skills_workspace
+        ON user_skills(workspace_id)
+        WHERE workspace_id IS NOT NULL
     """)
     # Plugin uninstall/update scans by owner.
     op.execute("""
@@ -87,6 +122,16 @@ def upgrade() -> None:
         WHERE plugin_id IS NOT NULL
     """)
 
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS workspace_skill_disables (
+            workspace_id UUID NOT NULL,
+            name VARCHAR(64) NOT NULL,
+            disabled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (workspace_id, name)
+        )
+    """)
+
 
 def downgrade() -> None:
+    op.execute("DROP TABLE IF EXISTS workspace_skill_disables CASCADE")
     op.execute("DROP TABLE IF EXISTS user_skills CASCADE")

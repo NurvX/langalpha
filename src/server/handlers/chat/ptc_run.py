@@ -367,6 +367,7 @@ async def astream_ptc_workflow(
                 fast_mode=getattr(request, "fast_mode", None),
                 thread_id=thread_id,
                 enabled_subagents=request.subagents_enabled,
+                workspace_id=workspace_id,
             )
 
         # Propagate fetch model override to tool context

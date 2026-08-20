@@ -14,11 +14,13 @@ export function useSlashCommands({
   message,
   setMessage,
   mode,
+  workspaceId,
 }: {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   message: string;
   setMessage: Dispatch<SetStateAction<string>>;
   mode?: 'fast' | 'ptc';
+  workspaceId?: string | null;
 }) {
   const { t } = useTranslation();
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
@@ -29,9 +31,11 @@ export function useSlashCommands({
   const listRef = useRef<HTMLDivElement>(null);
 
   // Enabled-only skills for the agent mode, via React Query so a skill
-  // uploaded or toggled on the Plugins page reaches this menu without a reload.
+  // uploaded or toggled on the Plugins page reaches this menu without a
+  // reload. Inside a workspace this is the workspace-effective view, so
+  // workspace-scoped skills surface here too.
   const skillsMode = mode === 'fast' ? 'flash' : 'ptc';
-  const { data: skills = [] } = useSkills(skillsMode);
+  const { data: skills = [] } = useSkills(skillsMode, { workspaceId });
 
   const filtered = useMemo(() => {
     if (!open) return [];

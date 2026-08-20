@@ -19,7 +19,9 @@ import type { SkillInfo } from '@/pages/ChatAgent/utils/api';
  * One skill on the shared row shell. Platform rows carry only the account-wide
  * disable toggle; user rows add delete. The `/command` chip is the skill's
  * slash-menu identity, shown so the row and the menu obviously name the same
- * thing.
+ * thing. In workspace views, `disabled_scope: 'user'` marks a disable this
+ * surface cannot undo (the toggle locks), and `shadows_inherited` marks a
+ * workspace row overriding a same-named user skill.
  */
 
 export function SkillRow({
@@ -34,6 +36,7 @@ export function SkillRow({
   onDelete?: () => void;
 }) {
   const { t } = useTranslation();
+  const lockedByUserTier = skill.disabled_scope === 'user';
   return (
     <ServerRowShell
       testid={`skill-row-${skill.name}`}
@@ -43,6 +46,12 @@ export function SkillRow({
             {skill.command && <TagBadge>/{skill.command}</TagBadge>}
             {skill.origin === 'platform' && (
               <TagBadge soft>{t('plugins.skills.platformBadge')}</TagBadge>
+            )}
+            {skill.shadows_inherited && (
+              <TagBadge soft>{t('plugins.skills.shadowsBadge')}</TagBadge>
+            )}
+            {lockedByUserTier && (
+              <TagBadge soft>{t('plugins.skills.userDisabledBadge')}</TagBadge>
             )}
           </ServerNameLine>
           {skill.description && (
@@ -60,7 +69,7 @@ export function SkillRow({
           <EnabledToggle
             enabled={skill.enabled}
             name={skill.name}
-            disabled={toggling}
+            disabled={toggling || lockedByUserTier}
             onToggle={() => onToggle(!skill.enabled)}
           />
           {skill.deletable && onDelete && (

@@ -889,7 +889,9 @@ async def refresh_workspace(
 
     try:
         user_skill_params = await sandbox_skill_sync_params(
-            x_user_id, manager.config.skills.sandbox_skills_base
+            x_user_id,
+            manager.config.skills.sandbox_skills_base,
+            workspace_id=workspace_id,
         )
         result = await sandbox.sync_sandbox_assets(
             skill_dirs=skill_dirs,
