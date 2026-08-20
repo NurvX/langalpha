@@ -307,6 +307,50 @@ async def bump_user_workspaces_mcp_version(user_id: str) -> int:
             return cur.rowcount
 
 
+async def list_user_builtin_disables(user_id: str) -> set[str]:
+    """Builtin server names this user disabled account-wide."""
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT name FROM user_mcp_builtin_disables WHERE user_id = %s",
+                (user_id,),
+            )
+            return {r["name"] for r in await cur.fetchall()}
+
+
+async def set_user_builtin_disable(user_id: str, name: str, disabled: bool) -> None:
+    """Write/clear an account-wide builtin disable.
+
+    Both directions change every workspace's effective set, so the fan-out
+    bump runs in the same transaction (next-acquire convergence).
+    """
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor() as cur:
+                if disabled:
+                    await cur.execute(
+                        """
+                        INSERT INTO user_mcp_builtin_disables (user_id, name)
+                        VALUES (%s, %s)
+                        ON CONFLICT (user_id, name) DO NOTHING
+                        """,
+                        (user_id, name),
+                    )
+                else:
+                    await cur.execute(
+                        """
+                        DELETE FROM user_mcp_builtin_disables
+                        WHERE user_id = %s AND name = %s
+                        """,
+                        (user_id, name),
+                    )
+                await _bump_user_versions(cur, user_id)
+                logger.info(
+                    f"[mcp_db] set_user_builtin_disable user_id={user_id} "
+                    f"name={name} disabled={disabled}"
+                )
+
+
 # ---------------------------------------------------------------------------
 # Per-workspace rows (source of truth) — every write bumps mcp_config_version
 # ---------------------------------------------------------------------------

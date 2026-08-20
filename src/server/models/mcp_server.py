@@ -549,6 +549,10 @@ class EffectiveServer(BaseModel):
     # reconnect in Connectors" instead of waiting on a discovery that can
     # never run. None = the server has no OAuth connection at all.
     oauth_status: Optional[ConnectionStatus] = None
+    # DISABLED built-ins only: whether the disable is this workspace's marker
+    # row or the account-wide user disable — the latter renders read-only here
+    # ("disabled for your account", managed in Plugins).
+    disabled_scope: Optional[Literal["workspace", "user"]] = None
 
 
 class EffectiveServerList(BaseModel):
@@ -614,6 +618,21 @@ class CatalogServerList(BaseModel):
 
     servers: list[CatalogServer]
     max_servers: int
+
+
+class BuiltinServer(BaseModel):
+    """One process-global builtin, with this user's account-wide toggle."""
+
+    name: str
+    description: str = ""
+    transport: str = "stdio"
+    enabled: bool
+
+
+class BuiltinServerList(BaseModel):
+    """GET /api/v1/mcp/builtin-servers payload."""
+
+    servers: list[BuiltinServer]
 
 
 # ---------------------------------------------------------------------------

@@ -196,6 +196,7 @@ def _effective_server(
     origin = entry.origin
     return EffectiveServer(
         oauth_status=entry.oauth_status,
+        disabled_scope=entry.disabled_scope,
         name=srv.name,
         origin=origin,
         transport=srv.transport,

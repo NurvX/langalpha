@@ -15,6 +15,8 @@ Endpoints (user-scoped):
 - PUT    /api/v1/mcp/servers/{name}
 - PATCH  /api/v1/mcp/servers/{name}/enabled
 - DELETE /api/v1/mcp/servers/{name}
+- GET    /api/v1/mcp/builtin-servers
+- PATCH  /api/v1/mcp/builtin-servers/{name}/enabled
 """
 
 from __future__ import annotations
@@ -37,7 +39,9 @@ from src.server.database.mcp_servers import (
     delete_catalog_server,
     get_catalog_server,
     list_catalog_servers,
+    list_user_builtin_disables,
     set_catalog_server_enabled,
+    set_user_builtin_disable,
     update_catalog_server,
 )
 from src.server.database.mcp_tool_schemas import get_user_tool_schemas
@@ -46,6 +50,8 @@ from src.server.database.user_vault_secrets import (
     get_user_secret_names,
 )
 from src.server.models.mcp_server import (
+    BuiltinServer,
+    BuiltinServerList,
     CatalogServer,
     CatalogServerList,
     EnabledInput,
@@ -399,3 +405,50 @@ async def delete_server(name: str, user_id: CurrentUserId) -> dict:
     # is an accepted write.
     await disconnect_server(user_id, name)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Builtins — process-global servers with a per-user account-wide toggle
+# ---------------------------------------------------------------------------
+
+
+@router.get("/builtin-servers")
+@handle_api_exceptions("list builtin MCP servers", logger)
+async def list_builtin_servers(user_id: CurrentUserId) -> BuiltinServerList:
+    """The process-global builtins with this user's account-wide enabled state.
+
+    A separate route from the catalog list on purpose: builtins are config,
+    not rows, and the catalog wire shape stays untouched.
+    """
+    from src.server.app import setup
+
+    if setup.agent_config is None:
+        # Startup race: report an empty list rather than 500.
+        return BuiltinServerList(servers=[])
+    disabled = await list_user_builtin_disables(user_id)
+    return BuiltinServerList(
+        servers=[
+            BuiltinServer(
+                name=s.name,
+                description=s.description or "",
+                transport=s.transport,
+                enabled=s.name not in disabled,
+            )
+            for s in setup.agent_config.mcp.servers
+            if getattr(s, "enabled", True)
+        ]
+    )
+
+
+@router.patch("/builtin-servers/{name}/enabled")
+@handle_api_exceptions("toggle builtin MCP server", logger)
+async def set_builtin_enabled(
+    name: str, body: EnabledInput, user_id: CurrentUserId
+) -> dict:
+    """Account-wide toggle for a builtin — applies to every workspace of the
+    user, and no workspace marker can re-enable it. The DB layer fans the
+    ``mcp_config_version`` bump out in the same transaction."""
+    if name not in builtin_names():
+        raise HTTPException(status_code=404, detail="Unknown builtin server")
+    await set_user_builtin_disable(user_id, name, disabled=not body.enabled)
+    return {"name": name, "enabled": body.enabled}

@@ -1534,6 +1534,10 @@ async def test_patch_enable_builtin_deletes_marker(client):
     with (
         patch("src.server.app.mcp_servers.db_get_workspace", new=AsyncMock(return_value=ws)),
         patch("src.server.app.setup.agent_config", base),
+        patch(
+            "src.server.app.mcp_servers.list_user_builtin_disables",
+            new=AsyncMock(return_value=set()),
+        ),
         patch("src.server.app.mcp_servers.upsert_workspace_server", new=AsyncMock(return_value={})) as up,
         patch("src.server.app.mcp_servers.delete_workspace_server", new=AsyncMock(return_value=True)) as dele,
     ):
@@ -1543,6 +1547,29 @@ async def test_patch_enable_builtin_deletes_marker(client):
         )
     assert resp.status_code == 200
     assert dele.await_count == 1 and up.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_patch_enable_builtin_conflicts_when_disabled_for_user(client):
+    """A workspace cannot re-enable what the account tier switched off: the
+    marker delete would report success and change nothing."""
+    ws = _ws()
+    base = _agent_config([_builtin("builtin_search")])
+    with (
+        patch("src.server.app.mcp_servers.db_get_workspace", new=AsyncMock(return_value=ws)),
+        patch("src.server.app.setup.agent_config", base),
+        patch(
+            "src.server.app.mcp_servers.list_user_builtin_disables",
+            new=AsyncMock(return_value={"builtin_search"}),
+        ),
+        patch("src.server.app.mcp_servers.delete_workspace_server", new=AsyncMock(return_value=True)) as dele,
+    ):
+        resp = await client.patch(
+            f"/api/v1/workspaces/{ws['workspace_id']}/mcp/servers/builtin_search/enabled",
+            json={"enabled": True},
+        )
+    assert resp.status_code == 409
+    assert dele.await_count == 0
 
 
 @pytest.mark.asyncio
