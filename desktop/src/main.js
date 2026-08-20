@@ -12,6 +12,8 @@ const deeplink = require('./deeplink')
 const theme = require('./theme')
 const updater = require('./updater')
 const outage = require('./outage')
+const pdf = require('./pdf')
+const downloads = require('./downloads')
 const { probe } = require('./probe')
 const { navigate } = require('./navigate')
 const { forDisplay } = require('./redact')
@@ -697,6 +699,8 @@ function registerIpc() {
   })
 
   ipcMain.handle('server:current', () => store.get('serverUrl'))
+
+  pdf.registerIpc()
 }
 
 // ---------------------------------------------------------------------------
@@ -807,6 +811,7 @@ app.on('web-contents-created', (_event, contents) => {
   // session with only the first set falls through to the defaults for the
   // second. Same answer from both, or the policy is only half a policy.
   contents.session.setPermissionCheckHandler((_wc, permission) => permitted(permission))
+  downloads.attach(contents.session)
 })
 
 // Exported for the tests: the verdict path that policy cannot own (it opens the

@@ -53,10 +53,22 @@ const files = readdirSync(dir, { recursive: true })
   .map((f) => path.basename(String(f)))
   .filter((f, i, all) => all.indexOf(f) === i)
 
+// One match per platform, or none. Two is not a tie to break: the scan is
+// recursive and flattened to basenames, so a directory holding more than one
+// candidate is either a previous version's artifacts left behind or a parent of
+// the per-edition output directories electron-builder now writes
+// (`dist/<edition>`, see electron-builder.yml). Picking the first in read order
+// publishes an index that names a build this release did not produce, which is
+// the one failure this file exists to prevent, and it does it silently.
 const artifacts = {}
 for (const [key, pattern] of PLATFORMS) {
-  const match = files.find((f) => pattern.test(f))
-  if (match) artifacts[key] = match
+  const matches = files.filter((f) => pattern.test(f))
+  if (matches.length > 1) {
+    console.error(`[index] ${matches.length} candidates for ${key} in ${dir}: ${matches.join(', ')}`)
+    console.error('[index] point this at one build\'s output directory, not a parent of several')
+    process.exit(1)
+  }
+  if (matches.length === 1) artifacts[key] = matches[0]
 }
 
 if (Object.keys(artifacts).length === 0) {

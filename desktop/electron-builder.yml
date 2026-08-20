@@ -26,7 +26,16 @@ copyright: LangAlpha
 artifactName: LangAlpha-${EDITION}-${version}-${arch}.${ext}
 
 directories:
-  output: dist
+  # Per edition, because `artifactName` above is the only thing that carries one
+  # and it does not reach everything written here. The unpacked bundle is named
+  # from `productName`, so both editions' `.app`s land side by side under
+  # `mac-arm64`; the update manifests are `latest-mac.yml` and `latest.yml`,
+  # fixed names with no edition in them at all, so a second edition built into
+  # one tree silently overwrites the first's. Downstream of that, scripts/build.mjs
+  # searches this directory for what it just produced: sharing it means a signing
+  # check that verifies the other edition's stale bundle, and a no-feed build
+  # whose sweep strips the other edition's baked app-update.yml.
+  output: dist/${EDITION}
   buildResources: resources
 
 # The shell is a remote-URL wrapper: it carries no web bundle, so `files` is just
