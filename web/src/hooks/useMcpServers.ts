@@ -12,6 +12,8 @@ import {
   importWorkspaceMcpServers,
   promoteWorkspaceMcpServerToTemplate,
   getMcpCatalog,
+  getBuiltinMcpServers,
+  setBuiltinMcpServerEnabled,
   createMcpCatalogServer,
   updateMcpCatalogServer,
   deleteMcpCatalogServer,
@@ -154,6 +156,27 @@ export function useMcpCatalog(enabled = true) {
     queryFn: getMcpCatalog,
     enabled,
     staleTime: 60_000,
+  });
+}
+
+/** Process-global builtin servers with the user's account-wide toggles. */
+export function useBuiltinMcpServers() {
+  return useQuery({
+    queryKey: queryKeys.mcp.builtins(),
+    queryFn: getBuiltinMcpServers,
+    staleTime: 60_000,
+  });
+}
+
+export function useToggleBuiltinMcpServer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
+      setBuiltinMcpServerEnabled(name, enabled),
+    onSuccess: () => {
+      // The toggle changes every workspace's effective list, not just this page.
+      queryClient.invalidateQueries({ queryKey: queryKeys.mcp.all });
+    },
   });
 }
 
@@ -328,7 +351,7 @@ export function useDeleteMcpCatalogServer() {
   });
 }
 
-/** Optimistic user-level enabled toggle (Connectors). */
+/** Optimistic user-level enabled toggle (Plugins page). */
 export function useToggleMcpCatalogServer() {
   const queryClient = useQueryClient();
   const key = queryKeys.mcp.catalog();
@@ -358,7 +381,7 @@ export function useToggleMcpCatalogServer() {
 }
 
 /**
- * Bulk-import a standard `mcpServers` blob into the user catalog (Connectors).
+ * Bulk-import a standard `mcpServers` blob into the user catalog (Plugins page).
  * The backend also auto-extracts inline literal credentials into the USER
  * vault, so the vault list is invalidated too — otherwise the freshly created
  * secrets stay invisible (and the server modal's picker keeps offering to

@@ -5,7 +5,7 @@ import { api } from '@/api/client';
 
 //
 // Per-workspace effective list mixes built-in servers with workspace-added
-// ones; the catalog holds reusable user templates managed in Connectors.
+// ones; the catalog holds reusable user templates managed on the Plugins page.
 // Env/header literal values are never echoed by
 // the backend — only `${vault:NAME}` reference names surface (as `*_refs`).
 
@@ -52,7 +52,7 @@ export type McpOauthStatus =
 /** One row in the effective per-workspace MCP list. */
 export interface EffectiveServer {
   name: string;
-  /** 'user' = inherited from the user's Connectors (manage at /connectors). */
+  /** 'user' = inherited from the user's servers (manage at /plugins). */
   origin: 'builtin' | 'workspace' | 'user';
   /** Workspace-local fork that overrides a same-named inherited server. */
   shadows_inherited?: boolean;
@@ -156,7 +156,7 @@ export interface CatalogServer {
   instruction: string;
   tool_exposure_mode: string;
   discovery_uses_secrets?: boolean;
-  /** True = inherited by every workspace of the user (Connectors toggle). */
+  /** True = inherited by every workspace of the user (Plugins page toggle). */
   enabled?: boolean;
   /** OAuth connection status, when one exists for this server. */
   oauth_status?: McpOauthStatus | null;
@@ -337,10 +337,30 @@ export async function importMcpCatalogServers(payload: unknown): Promise<McpImpo
   return data;
 }
 
-// --- User-level OAuth (Connectors) ---
+// --- Builtin servers (process-global, per-user account-wide toggle) ---
+
+export interface BuiltinMcpServer {
+  name: string;
+  description: string;
+  transport: string;
+  enabled: boolean;
+}
+
+export async function getBuiltinMcpServers(): Promise<{ servers: BuiltinMcpServer[] }> {
+  const { data } = await api.get('/api/v1/mcp/builtin-servers');
+  return data;
+}
+
+/** Account-wide toggle: applies to every workspace, no workspace re-enable. */
+export async function setBuiltinMcpServerEnabled(name: string, enabled: boolean) {
+  const { data } = await api.patch(`/api/v1/mcp/builtin-servers/${name}/enabled`, { enabled });
+  return data as { name: string; enabled: boolean };
+}
+
+// --- User-level OAuth (Plugins page) ---
 
 /** Phase 1 of the connect flow; the caller navigates to `authorize_url`. */
-export async function startMcpOauth(name: string, returnTo = '/connectors') {
+export async function startMcpOauth(name: string, returnTo = '/plugins') {
   const { data } = await api.post<{ authorize_url: string }>(
     `/api/v1/mcp/servers/${name}/oauth/start`,
     { return_to: returnTo },

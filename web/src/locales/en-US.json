@@ -120,7 +120,7 @@
     "collapse": "Collapse sidebar",
     "expand": "Expand sidebar",
     "resize": "Resize sidebar",
-    "connectors": "Connectors"
+    "plugins": "Plugins"
   },
   "account": {
     "menuLabel": "Account menu"
@@ -2625,34 +2625,34 @@
       "empty": "No MCP servers. Add one or copy a template."
     },
     "tab": {
-      "connectors": "Connectors",
-      "connectorsHint": "User-level servers, OAuth connections and shared secrets",
+      "plugins": "Plugins",
+      "pluginsHint": "User-level servers, skills, OAuth connections and shared secrets",
       "startingWorkspace": "Starting workspace — your servers are checked automatically as soon as it's up.",
       "workspaceStopped": "Workspace is stopped — saving a server starts it back up and checks the server automatically.",
-      "promoteExistsBefore": "Connector ",
+      "promoteExistsBefore": "Server ",
       "promoteExistsAfter": " already exists. Overwrite it with this server's current config?",
       "overwrite": "Overwrite",
       "savedWithWarnings": "Server saved with warnings",
-      "promotedTitle": "Saved to Connectors",
-      "promoteUpdatedTitle": "Connector updated",
-      "promotedDesc": "\"{{name}}\" is now in your Connectors — manage it there and use it in any workspace.",
-      "promoteFailed": "Could not save to Connectors"
+      "promotedTitle": "Saved to your servers",
+      "promoteUpdatedTitle": "Server updated",
+      "promotedDesc": "\"{{name}}\" is now one of your servers. Manage it on the Plugins page and use it in any workspace.",
+      "promoteFailed": "Could not save the server"
     },
     "row": {
       "builtin": "built-in",
       "inherited": "inherited",
       "workspace": "workspace",
-      "inheritedHint": "Inherited from your Connectors — applies to all your workspaces",
+      "inheritedHint": "Inherited from your servers, applies to all your workspaces",
       "overridesInherited": "overrides inherited",
-      "overridesInheritedHint": "A workspace copy overrides the same-named Connectors server here",
+      "overridesInheritedHint": "A workspace copy overrides your same-named user-level server here",
       "toolCount_one": "{{count}} tool",
       "toolCount_other": "{{count}} tools",
       "setupSecret": "Set up {{name}}",
-      "manageInConnectors": "Manage in Connectors",
-      "reconnectInConnectors": "Reconnect in Connectors",
+      "manageInPlugins": "Manage in Plugins",
+      "reconnectInPlugins": "Reconnect in Plugins",
       "edit": "Edit",
       "testConnection": "Test connection",
-      "saveToConnectors": "Save to Connectors",
+      "promoteToUser": "Save to your servers",
       "delete": "Delete",
       "enableAria": "Enable {{name}}",
       "disableAria": "Disable {{name}}",
@@ -2713,22 +2713,23 @@
       "security4b": "API is allowed."
     }
   },
-  "connectors": {
-    "title": "Connectors",
-    "description": "MCP servers and credentials available to your agent in every workspace.",
+  "plugins": {
+    "title": "Plugins",
+    "description": "MCP servers, skills, and credentials available to your agent in every workspace.",
     "tabs": {
-      "servers": "Servers",
+      "mcp": "MCP servers",
+      "skills": "Skills",
       "secrets": "Secrets"
     },
     "servers": {
       "inheritHint": "A server switched on here is available in every one of your workspaces; switch it off in a single workspace from that workspace's MCP tab. Switched-off servers are inert templates.",
       "enabledState": "On in all workspaces",
-      "disabledState": "Off — not inherited",
-      "empty": "No connectors yet. Add a server or import a JSON config.",
+      "disabledState": "Off, not inherited",
+      "empty": "No servers yet. Add a server or import a JSON config.",
       "toggleFailed": "Could not change server state",
       "enabledWithWarnings": "Server enabled with warnings",
       "deleteFailed": "Could not delete server",
-      "deleteConfirm": "Delete \"{{server}}\" from your Connectors? Workspaces stop inheriting it immediately.",
+      "deleteConfirm": "Delete \"{{server}}\" from your servers? Workspaces stop inheriting it immediately.",
       "deleteConfirmYes": "Delete",
       "deleteConfirmNo": "Cancel",
       "warningTitle": "Server saved with warnings"
@@ -2761,8 +2762,33 @@
     },
     "secrets": {
       "title": "Vault",
-      "scopeHint": "Secrets here back your Connectors servers and are available in every workspace. A workspace secret with the same name overrides the value in that workspace.",
-      "empty": "No secrets stored. Add API keys or credentials for your connectors."
+      "scopeHint": "Secrets here back your MCP servers and are available in every workspace. A workspace secret with the same name overrides the value in that workspace.",
+      "empty": "No secrets stored. Add API keys or credentials for your servers."
+    },
+    "mcp": {
+      "platform": "Platform servers",
+      "platformBadge": "Platform",
+      "yours": "Your servers"
+    },
+    "skills": {
+      "platform": "Platform skills",
+      "yours": "Your skills",
+      "platformBadge": "Platform",
+      "upload": "Upload skill",
+      "inheritHint": "A skill uploaded here is available in every one of your workspaces. Switched-off skills stay listed here but leave the agent's menu.",
+      "empty": "No skills yet. Upload a zip with a SKILL.md to teach your agent a new workflow.",
+      "toggleFailed": "Could not change skill state",
+      "deleteFailed": "Could not delete skill",
+      "deleteConfirm": "Delete \"{{skill}}\"? Workspaces stop receiving it immediately.",
+      "deleteConfirmYes": "Delete",
+      "deleteConfirmNo": "Cancel",
+      "uploadTitle": "Upload a skill",
+      "uploadHint": "A zip with SKILL.md at its root (or inside one top-level folder), up to 2 MB.",
+      "uploadDropzone": "Drop a .zip here or click to choose",
+      "uploadNotZip": "That file is not a .zip archive.",
+      "uploadTooLarge": "The zip is larger than 2 MB.",
+      "uploading": "Uploading {{percent}}%",
+      "uploadConfirm": "Upload"
     }
   }
 }

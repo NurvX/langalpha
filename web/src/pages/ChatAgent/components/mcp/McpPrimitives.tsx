@@ -6,7 +6,7 @@ import { Loader } from '@/components/ui/loader';
 
 /**
  * Shared building blocks for the two MCP server surfaces — the global
- * Connectors page (user level) and the workspace settings MCP tab. Both lists
+ * Plugins page (user level) and the workspace settings MCP tab. Both lists
  * must read as one system: same row anatomy (name line → status line →
  * detail), same toggle, same chrome. Anything visual that exists on both
  * sides lives here; the surfaces keep only their own semantics.
@@ -177,6 +177,18 @@ export const KebabTrigger = React.forwardRef<
     </button>
   );
 });
+
+/** Small caps label above a group of rows (`Platform servers`, `Your skills`). */
+export function SectionHeader({ children }: { children: React.ReactNode }) {
+  return (
+    <h3
+      className="text-[0.6875rem] font-medium uppercase tracking-wide"
+      style={{ color: 'var(--color-text-tertiary)' }}
+    >
+      {children}
+    </h3>
+  );
+}
 
 /** List header: icon + title + `n / max` counter on the left, actions right. */
 export function ListHeader({

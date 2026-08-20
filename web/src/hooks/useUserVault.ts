@@ -7,7 +7,7 @@ import {
   updateUserVaultSecret,
 } from '../pages/ChatAgent/utils/api';
 
-/** React Query hooks for the user-level vault (Connectors → Secrets). */
+/** React Query hooks for the user-level vault (Plugins → Secrets). */
 
 export function useUserVaultSecrets(enabled = true) {
   return useQuery({

@@ -6,7 +6,7 @@ import { renderWithProviders } from '@/test/utils';
 
 /**
  * `SecretsManager` is one state machine behind two ports: the workspace Vault
- * tab drives it with imperative API calls + an explicit reload, Connectors →
+ * tab drives it with imperative API calls + an explicit reload, Plugins →
  * Secrets drives it with React Query mutations. Every branch below is exercised
  * through a real adapter rather than through hand-passed props, because the
  * interesting failures live in the wiring — a mutation shape the component
@@ -20,7 +20,7 @@ import { renderWithProviders } from '@/test/utils';
  */
 
 // ---------------------------------------------------------------------------
-// Hook boundary — the user (Connectors) adapter
+// Hook boundary — the user (Plugins) adapter
 // ---------------------------------------------------------------------------
 
 const userVault = {
@@ -96,7 +96,7 @@ vi.mock('@/api/client', () => ({
   },
 }));
 
-import { ConnectorSecrets } from '../ConnectorSecrets';
+import { PluginSecrets } from '../components/PluginSecrets';
 import { SandboxSettingsContent } from '@/pages/ChatAgent/components/SandboxSettingsPanel';
 
 // ---------------------------------------------------------------------------
@@ -146,7 +146,7 @@ beforeEach(() => {
 });
 
 // ===========================================================================
-// User adapter — Connectors → Secrets (React Query mutations)
+// User adapter — Plugins → Secrets (React Query mutations)
 // ===========================================================================
 
 describe('SecretsManager via the user vault adapter — list', () => {
@@ -158,7 +158,7 @@ describe('SecretsManager via the user vault adapter — list', () => {
       ],
       remaining_slots: 18,
     };
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     expect(screen.getByText('ALPHA_TOKEN')).toBeInTheDocument();
     expect(screen.getByText('BETA_TOKEN')).toBeInTheDocument();
@@ -169,27 +169,27 @@ describe('SecretsManager via the user vault adapter — list', () => {
   });
 
   it('shows the user-scope empty state and hint', () => {
-    renderWithProviders(<ConnectorSecrets />);
-    expect(screen.getByText(/No secrets stored. Add API keys or credentials for your connectors/i)).toBeInTheDocument();
+    renderWithProviders(<PluginSecrets />);
+    expect(screen.getByText(/No secrets stored. Add API keys or credentials for your servers/i)).toBeInTheDocument();
     expect(screen.getByText(/available in every workspace/i)).toBeInTheDocument();
   });
 
   it('surfaces a load failure', () => {
     userVaultError = new Error('vault unreachable');
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
     expect(screen.getByText('vault unreachable')).toBeInTheDocument();
   });
 
   it('renders the skeleton while loading, not an empty list', () => {
     userVaultLoading = true;
     userVaultData = undefined;
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
     expect(screen.queryByText(/No secrets stored/i)).not.toBeInTheDocument();
   });
 
   it('hides Add Secret at the cap', () => {
     userVaultData = { secrets: [userSecret('ONLY_TOKEN')], remaining_slots: 0 };
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
     expect(screen.queryByRole('button', { name: /add secret/i })).not.toBeInTheDocument();
   });
 });
@@ -197,7 +197,7 @@ describe('SecretsManager via the user vault adapter — list', () => {
 describe('SecretsManager via the user vault adapter — create', () => {
   it('creates through the mutation and closes the form', async () => {
     userVault.create.mockResolvedValue({ name: 'NEW_TOKEN' });
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByRole('button', { name: /add secret/i }));
     fireEvent.change(screen.getByPlaceholderText('SECRET_NAME'), { target: { value: 'NEW_TOKEN' } });
@@ -219,7 +219,7 @@ describe('SecretsManager via the user vault adapter — create', () => {
     // satisfies the backend's name rule. (`vault.nameInvalid` still backstops
     // the prefill deep-link, which sets the name without passing through here.)
     userVault.create.mockResolvedValue({ name: 'BAD_NAME' });
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByRole('button', { name: /add secret/i }));
     const nameInput = screen.getByPlaceholderText('SECRET_NAME');
@@ -235,7 +235,7 @@ describe('SecretsManager via the user vault adapter — create', () => {
   });
 
   it('keeps Save disabled until both a name and a value are present', () => {
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByRole('button', { name: /add secret/i }));
     const save = screen.getByRole('button', { name: /^save$/i });
@@ -251,7 +251,7 @@ describe('SecretsManager via the user vault adapter — create', () => {
 
   it('surfaces a rejected create and keeps the form open', async () => {
     userVault.create.mockRejectedValue({ response: { data: { detail: 'name already taken' } } });
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByRole('button', { name: /add secret/i }));
     fireEvent.change(screen.getByPlaceholderText('SECRET_NAME'), { target: { value: 'DUP_TOKEN' } });
@@ -267,7 +267,7 @@ describe('SecretsManager via the user vault adapter — update', () => {
   it('sends the adapter-shaped { name, body } payload', async () => {
     userVaultData = { secrets: [userSecret('EDIT_TOKEN', { description: 'old' })], remaining_slots: 19 };
     userVault.update.mockResolvedValue({ name: 'EDIT_TOKEN' });
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByTitle('Edit'));
     fireEvent.change(screen.getByPlaceholderText('New value (leave empty to keep current)'), {
@@ -286,7 +286,7 @@ describe('SecretsManager via the user vault adapter — update', () => {
   it('omits the value entirely when only the description changed', async () => {
     userVaultData = { secrets: [userSecret('EDIT_TOKEN', { description: 'old' })], remaining_slots: 19 };
     userVault.update.mockResolvedValue({ name: 'EDIT_TOKEN' });
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByTitle('Edit'));
     fireEvent.change(screen.getByPlaceholderText('Description (optional)'), { target: { value: 'new note' } });
@@ -300,7 +300,7 @@ describe('SecretsManager via the user vault adapter — update', () => {
   it('surfaces a rejected update', async () => {
     userVaultData = { secrets: [userSecret('EDIT_TOKEN')], remaining_slots: 19 };
     userVault.update.mockRejectedValue({ response: { data: { detail: 'value too long' } } });
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByTitle('Edit'));
     fireEvent.click(screen.getByRole('button', { name: /^update$/i }));
@@ -313,7 +313,7 @@ describe('SecretsManager via the user vault adapter — delete', () => {
   it('requires the inline confirm before deleting', async () => {
     userVaultData = { secrets: [userSecret('DOOMED_TOKEN')], remaining_slots: 19 };
     userVault.del.mockResolvedValue({ ok: true });
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByTitle('Delete'));
     expect(userVault.del).not.toHaveBeenCalled();
@@ -324,7 +324,7 @@ describe('SecretsManager via the user vault adapter — delete', () => {
 
   it('cancels the confirm without deleting', () => {
     userVaultData = { secrets: [userSecret('DOOMED_TOKEN')], remaining_slots: 19 };
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByTitle('Delete'));
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
@@ -336,7 +336,7 @@ describe('SecretsManager via the user vault adapter — delete', () => {
   it('surfaces a rejected delete instead of silently dismissing the confirm', async () => {
     userVaultData = { secrets: [userSecret('DOOMED_TOKEN')], remaining_slots: 19 };
     userVault.del.mockRejectedValue({ response: { data: { detail: 'referenced by a live server' } } });
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByTitle('Delete'));
     fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }));
@@ -351,7 +351,7 @@ describe('SecretsManager via the user vault adapter — reveal', () => {
   it('fetches the value on reveal and hides it again on the second click', async () => {
     userVaultData = { secrets: [userSecret('SHOW_TOKEN')], remaining_slots: 19 };
     mockRevealUserVaultSecret.mockResolvedValue('placeholder-plaintext');
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByTitle('Reveal value'));
 
@@ -368,7 +368,7 @@ describe('SecretsManager via the user vault adapter — reveal', () => {
   it('surfaces a rejected reveal and keeps the value masked', async () => {
     userVaultData = { secrets: [userSecret('SHOW_TOKEN')], remaining_slots: 19 };
     mockRevealUserVaultSecret.mockRejectedValue({ response: { data: { detail: 'decrypt failed' } } });
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByTitle('Reveal value'));
 
@@ -386,7 +386,7 @@ describe('SecretsManager via the user vault adapter — reveal', () => {
       () => new Promise<string>((resolve) => { resolveReveal = resolve; }),
     );
     userVault.del.mockResolvedValue({ ok: true });
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByTitle('Reveal value'));
     await waitFor(() => expect(mockRevealUserVaultSecret).toHaveBeenCalledWith('RACE_TOKEN'));
@@ -410,7 +410,7 @@ describe('SecretsManager via the user vault adapter — reveal', () => {
       () => new Promise<string>((resolve) => { resolveReveal = resolve; }),
     );
     userVault.update.mockResolvedValue({ name: 'RACE_TOKEN' });
-    renderWithProviders(<ConnectorSecrets />);
+    renderWithProviders(<PluginSecrets />);
 
     fireEvent.click(screen.getByTitle('Reveal value'));
     await waitFor(() => expect(mockRevealUserVaultSecret).toHaveBeenCalledWith('RACE_TOKEN'));
@@ -526,7 +526,7 @@ describe('SecretsManager — the two ports drive the same state machine', () => 
       secrets: [userSecret('FIRST_TOKEN'), userSecret('SECOND_TOKEN')],
       remaining_slots: 18,
     };
-    const { unmount } = renderWithProviders(<ConnectorSecrets />);
+    const { unmount } = renderWithProviders(<PluginSecrets />);
     fireEvent.click(within(screen.getByText('SECOND_TOKEN').closest('div.flex')!.parentElement!.parentElement!)
       .getByTitle('Edit'));
     expect(screen.getByPlaceholderText('New value (leave empty to keep current)')).toBeInTheDocument();

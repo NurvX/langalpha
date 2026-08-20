@@ -1,6 +1,6 @@
 """Scope-neutral bulk import of standard ``mcpServers`` JSON.
 
-Both import surfaces (per-workspace servers and the user-level Connectors
+Both import surfaces (per-workspace servers and the user-level Plugins
 catalog) accept the same blob with inline credentials and run the same
 per-entry gauntlet: skip reserved/duplicate names, enforce the scope's cap,
 rewrite credential-looking literals to ``${vault:NAME}`` refs, validate — all

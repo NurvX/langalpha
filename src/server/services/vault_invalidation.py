@@ -64,7 +64,7 @@ def refs_for_server(server: MCPServerConfig) -> set[str]:
 
 async def _workspace_servers(workspace_id: str, user_id: str) -> list[MCPServerConfig]:
     """Every server a WORKSPACE secret can satisfy: the workspace's own rows
-    plus the user connectors this workspace inherits.
+    plus the user plugins this workspace inherits.
 
     The inherited half is not optional. Both vault tiers resolve out of one
     merged namespace in the sandbox (workspace wins), so a workspace secret
@@ -146,7 +146,7 @@ class VaultTier:
     label: str
     log_prefix: str
     # Called with (owner_id, user_id): the workspace tier needs the owning user
-    # to reach the connectors its workspace inherits, and one signature for both
+    # to reach the plugins its workspace inherits, and one signature for both
     # tiers keeps the caller free of tier branching.
     servers: Callable[[str, str], Awaitable[list[MCPServerConfig]]]
     # Purges every snapshot tier the owner's discovery can land in — for the

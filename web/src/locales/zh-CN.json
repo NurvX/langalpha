@@ -120,7 +120,7 @@
     "collapse": "收起侧边栏",
     "expand": "展开侧边栏",
     "resize": "调整侧边栏宽度",
-    "connectors": "连接器"
+    "plugins": "插件"
   },
   "account": {
     "menuLabel": "账号菜单"
@@ -2604,33 +2604,33 @@
       "empty": "还没有 MCP 服务器。添加一个或复制模板。"
     },
     "tab": {
-      "connectors": "连接器",
-      "connectorsHint": "用户级服务器、OAuth 连接与共享密钥",
+      "plugins": "插件",
+      "pluginsHint": "用户级服务器、技能、OAuth 连接与共享密钥",
       "startingWorkspace": "工作区启动中 — 启动完成后将自动检查你的服务器。",
       "workspaceStopped": "工作区已停止 — 保存服务器会自动重新启动并检查该服务器。",
-      "promoteExistsBefore": "连接器 ",
+      "promoteExistsBefore": "服务器 ",
       "promoteExistsAfter": " 已存在。用此服务器的当前配置覆盖它吗？",
       "overwrite": "覆盖",
       "savedWithWarnings": "服务器已保存（含提示）",
-      "promotedTitle": "已保存到连接器",
-      "promoteUpdatedTitle": "连接器已更新",
-      "promotedDesc": "“{{name}}”已在你的连接器中 — 可在那里管理并在任意工作区使用。",
-      "promoteFailed": "无法保存到连接器"
+      "promotedTitle": "已保存到你的服务器",
+      "promoteUpdatedTitle": "服务器已更新",
+      "promotedDesc": "“{{name}}”已成为你的服务器，可在插件页管理并在任意工作区使用。",
+      "promoteFailed": "无法保存服务器"
     },
     "row": {
       "builtin": "内置",
       "inherited": "继承",
       "workspace": "工作区",
-      "inheritedHint": "继承自你的连接器 — 对所有工作区生效",
+      "inheritedHint": "继承自你的服务器，对所有工作区生效",
       "overridesInherited": "覆盖继承项",
-      "overridesInheritedHint": "此工作区的同名副本在这里覆盖了连接器中的服务器",
+      "overridesInheritedHint": "此工作区的同名副本在这里覆盖了你的用户级服务器",
       "toolCount_other": "{{count}} 个工具",
       "setupSecret": "设置 {{name}}",
-      "manageInConnectors": "在连接器中管理",
-      "reconnectInConnectors": "在连接器中重新连接",
+      "manageInPlugins": "在插件页管理",
+      "reconnectInPlugins": "在插件页重新连接",
       "edit": "编辑",
       "testConnection": "测试连接",
-      "saveToConnectors": "保存到连接器",
+      "promoteToUser": "保存到你的服务器",
       "delete": "删除",
       "enableAria": "启用 {{name}}",
       "disableAria": "禁用 {{name}}",
@@ -2691,22 +2691,23 @@
       "security4b": "API。"
     }
   },
-  "connectors": {
-    "title": "连接器",
-    "description": "在所有工作区中可供智能体使用的 MCP 服务器与凭据。",
+  "plugins": {
+    "title": "插件",
+    "description": "在所有工作区中可供智能体使用的 MCP 服务器、技能与凭据。",
     "tabs": {
-      "servers": "服务器",
+      "mcp": "MCP 服务器",
+      "skills": "技能",
       "secrets": "密钥"
     },
     "servers": {
       "inheritHint": "在此开启的服务器对你的所有工作区生效；如需在单个工作区关闭，请前往该工作区的 MCP 标签页。关闭状态的服务器仅作为模板保留。",
       "enabledState": "已在所有工作区开启",
-      "disabledState": "已关闭 — 不会被继承",
-      "empty": "还没有连接器。添加一个服务器或导入 JSON 配置。",
+      "disabledState": "已关闭，不会被继承",
+      "empty": "还没有服务器。添加一个服务器或导入 JSON 配置。",
       "toggleFailed": "无法更改服务器状态",
       "enabledWithWarnings": "服务器已启用，但存在警告",
       "deleteFailed": "无法删除服务器",
-      "deleteConfirm": "从连接器中删除“{{server}}”？所有工作区将立即停止继承它。",
+      "deleteConfirm": "从你的服务器中删除“{{server}}”？所有工作区将立即停止继承它。",
       "deleteConfirmYes": "删除",
       "deleteConfirmNo": "取消",
       "warningTitle": "服务器已保存（含提示）"
@@ -2739,8 +2740,33 @@
     },
     "secrets": {
       "title": "密钥库",
-      "scopeHint": "此处的密钥用于你的连接器服务器，并在所有工作区可用。同名的工作区密钥会在该工作区内覆盖此处的值。",
-      "empty": "尚未存储密钥。为你的连接器添加 API 密钥或凭据。"
+      "scopeHint": "此处的密钥用于你的 MCP 服务器，并在所有工作区可用。同名的工作区密钥会在该工作区内覆盖此处的值。",
+      "empty": "尚未存储密钥。为你的服务器添加 API 密钥或凭据。"
+    },
+    "mcp": {
+      "platform": "平台服务器",
+      "platformBadge": "平台",
+      "yours": "你的服务器"
+    },
+    "skills": {
+      "platform": "平台技能",
+      "yours": "你的技能",
+      "platformBadge": "平台",
+      "upload": "上传技能",
+      "inheritHint": "在此上传的技能对你的所有工作区可用。关闭状态的技能仍会在此列出，但不会出现在智能体的菜单中。",
+      "empty": "还没有技能。上传一个包含 SKILL.md 的 zip，教你的智能体一个新工作流。",
+      "toggleFailed": "无法更改技能状态",
+      "deleteFailed": "无法删除技能",
+      "deleteConfirm": "删除“{{skill}}”？所有工作区将立即停止使用它。",
+      "deleteConfirmYes": "删除",
+      "deleteConfirmNo": "取消",
+      "uploadTitle": "上传技能",
+      "uploadHint": "zip 根目录（或唯一的顶层文件夹内）需包含 SKILL.md，大小不超过 2 MB。",
+      "uploadDropzone": "将 .zip 拖到此处，或点击选择文件",
+      "uploadNotZip": "该文件不是 .zip 压缩包。",
+      "uploadTooLarge": "zip 超过 2 MB。",
+      "uploading": "上传中 {{percent}}%",
+      "uploadConfirm": "上传"
     }
   }
 }

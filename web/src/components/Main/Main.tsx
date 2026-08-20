@@ -17,8 +17,10 @@ const routeChunks = {
   market: () => import('../../pages/MarketView/MarketView'),
   news: () => import('../../pages/Detail/NewsDetailPage'),
   automations: () => import('../../pages/Automations/Automations'),
-  connectors: () => import('../../pages/Connectors/Connectors'),
+  plugins: () => import('../../pages/Plugins/Plugins'),
   settings: () => import('../../pages/Settings/Settings'),
+  // Alias so preloading /connectors (the legacy path) warms the right chunk.
+  connectors: () => import('../../pages/Plugins/Plugins'),
 };
 
 const Dashboard = React.lazy(routeChunks.dashboard);
@@ -26,7 +28,7 @@ const ChatAgent = React.lazy(routeChunks.chat);
 const MarketView = React.lazy(routeChunks.market);
 const NewsDetailPage = React.lazy(routeChunks.news);
 const Automations = React.lazy(routeChunks.automations);
-const Connectors = React.lazy(routeChunks.connectors);
+const Plugins = React.lazy(routeChunks.plugins);
 const Settings = React.lazy(routeChunks.settings);
 
 /** Start downloading the chunk for `pathname` without rendering it, so the
@@ -42,6 +44,15 @@ export function preloadRouteChunk(pathname: string): void {
   // fires vite:preloadError (index.html reports it), and React.lazy retries the
   // same import at mount, where StaleBuildBoundary catches it.
   void (chunkFor[segment] ?? routeChunks.dashboard)().catch(() => {});
+}
+
+/** Permanent alias for the pre-rename Connectors page. Keeps search + hash:
+ * OAuth `return_to` values persisted before the rename (Redis ConnectState,
+ * 600s TTL) still land on `/connectors?mcp_connected=…` and must reach the
+ * page that renders the toast. */
+export function LegacyConnectorsRedirect() {
+  const { search, hash } = useLocation();
+  return <Navigate to={`/plugins${search}${hash}`} replace />;
 }
 
 function Main() {
@@ -74,7 +85,8 @@ function Main() {
           <Route path="/chat/:workspaceId" element={<ChatAgent />} />
           <Route path="/market" element={<MarketView />} />
           <Route path="/automations" element={<Automations />} />
-          <Route path="/connectors" element={<Connectors />} />
+          <Route path="/plugins" element={<Plugins />} />
+          <Route path="/connectors" element={<LegacyConnectorsRedirect />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/news/:id" element={<NewsDetailPage />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
