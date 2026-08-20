@@ -32,6 +32,12 @@ const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'la-test-'))
 let online = true
 const setOnline = (value) => { online = value }
 
+// What the save dialog answers. Mutable for the same reason: a user who
+// dismissed the dialog and a user who chose a path are two different endings of
+// the PDF export, and neither is reachable without driving the dialog.
+let saveDialog = { canceled: true }
+const setSaveDialog = (value) => { saveDialog = value }
+
 // What Electron falls back to with no `productName`: the package.json `name`.
 // Nothing should ever run on it — main sets the edition's name before anything
 // asks where userData lives — so it is deliberately neither edition's.
@@ -75,8 +81,13 @@ const electronStub = {
   dialog: {
     showErrorBox: (title, content) => { errorBoxes.push({ title, content }) },
     showMessageBox: async () => ({ response: 0 }),
+    showSaveDialog: async () => saveDialog,
   },
-  BrowserWindow: { getAllWindows: () => [] },
+  // `fromWebContents` is how the PDF path finds the window it was asked from.
+  // The stub reads a back-reference the caller hangs on its own fake contents,
+  // rather than keeping a registry: the mapping is Electron's, not ours, and a
+  // registry here would be a second implementation of it.
+  BrowserWindow: { getAllWindows: () => [], fromWebContents: (wc) => (wc && wc.window) || null },
   Menu: { buildFromTemplate: (t) => t, setApplicationMenu: () => {} },
   ipcMain: { on: () => {}, handle: () => {} },
 }
@@ -125,6 +136,7 @@ function loadShell({ edition = 'oss', appOrigin, platformOrigin, serverUrl = nul
     deeplink: require(path.join(SRC, 'deeplink.js')),
     theme: require(path.join(SRC, 'theme.js')),
     outage: require(path.join(SRC, 'outage.js')),
+    pdf: require(path.join(SRC, 'pdf.js')),
     captive: require(path.join(SRC, 'captive.js')),
     main: require(path.join(SRC, 'main.js')),
   }
@@ -146,10 +158,21 @@ function loadEntryWith(buildConfig) {
   return { errorBoxes, exits }
 }
 
+/** Directories a test made and wants the shared teardown to take away again. */
+const TEMP_DIRS = []
+
+/** A temp directory this suite will not leave behind. */
+function tempDir(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  TEMP_DIRS.push(dir)
+  return dir
+}
+
 function cleanup() {
   if (STASHED_BUILD_CONFIG) fs.writeFileSync(BUILD_CONFIG, STASHED_BUILD_CONFIG)
   else fs.rmSync(BUILD_CONFIG, { force: true })
   fs.rmSync(userData, { recursive: true, force: true })
+  for (const dir of TEMP_DIRS) fs.rmSync(dir, { recursive: true, force: true })
 }
 
-module.exports = { loadShell, loadEntryWith, cleanup, opened, electronStub, setOnline }
+module.exports = { loadShell, loadEntryWith, cleanup, opened, electronStub, setOnline, setSaveDialog, tempDir }

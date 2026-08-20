@@ -43,6 +43,14 @@ contextBridge.exposeInMainWorld('langalphaDesktop', {
 
   /** Open a URL in the user's real browser. */
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+
+  /**
+   * Save this page as a PDF file, replacing the print dialog a browser has to
+   * fall back to. Answers `{ saved }`, `{ canceled }` or `{ error }` rather
+   * than rejecting, so a caller can tell a refusal apart from a shell too old
+   * to know the channel and keep its browser path for the second case.
+   */
+  savePdf: (options) => ipcRenderer.invoke('shell:save-pdf', options),
 })
 
 // The outage page is a local file loaded into this same window, so it shares

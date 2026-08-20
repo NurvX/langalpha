@@ -5,7 +5,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const { EventEmitter } = require('node:events')
-const { loadShell, loadEntryWith, cleanup, opened, setOnline, electronStub } = require('./helpers')
+const { loadShell, loadEntryWith, cleanup, opened, setOnline, setSaveDialog, tempDir, electronStub } = require('./helpers')
 
 after(cleanup)
 
@@ -1289,6 +1289,32 @@ describe('the two editions can sit on one machine', () => {
     assert.match(yml, /^artifactName: LangAlpha-\$\{EDITION\}/m)
     assert.ok(!/^artifactName:.*\$\{productName\}/m.test(yml), 'artifactName still interpolates productName')
   })
+
+  // The filename is not enough on its own. The unpacked bundle is named from
+  // productName and lands in a shared `mac-arm64`, and the update manifests are
+  // fixed names (`latest-mac.yml` carries no edition at all), so one output tree
+  // means the second edition to build overwrites the first's metadata.
+  test('neither edition builds into the other\'s output tree', () => {
+    assert.match(read('electron-builder.yml'), /^ {2}output: dist\/\$\{EDITION\}$/m)
+  })
+
+  // Everything build.mjs does after electron-builder returns, the stale-feed
+  // sweep and the signing verification and the manifest check, is a search of
+  // the output directory. A second, hardcoded copy of that path is how all three
+  // quietly become searches of an empty tree, which reads exactly like a clean
+  // build. It reads the directive back off the config it just resolved instead.
+  test('build.mjs looks for its own output where the config puts it', () => {
+    const build = read('scripts/build.mjs')
+    // The derivation, not the expression that parses it: how the line is found
+    // is this script's own business, but that the path comes from the config
+    // rather than from a second copy of it is the property.
+    assert.match(build, /output:\[ \\t\]\*/,
+      'build.mjs no longer reads directories.output out of the resolved config')
+    assert.match(build, /const dist = path\.resolve\(root, outputDir\)/,
+      'build.mjs no longer derives its output directory from that line')
+    assert.ok(!/path\.(join|resolve)\(root, 'dist'\)/.test(build),
+      'build.mjs also hardcodes the output directory somewhere')
+  })
 })
 
 // The window-chrome contract is four string literals spread across three files
@@ -1347,5 +1373,288 @@ describe('the window-chrome contract holds across the two processes', () => {
                          '../web/src/components/Sidebar/Sidebar.css']) {
       assert.ok(read(sheet).includes('html.desktop-mac'), sheet)
     }
+  })
+
+  // The fallback strip rests on two properties from two different mechanisms,
+  // and the browser suite can only see one of them. The region walk is settled
+  // by tree order; the click is settled by hit testing. `getComputedStyle`
+  // reports `no-drag` on a control the strip is swallowing whole, verified
+  // against a pre-fix document, so a check that reads the region calls the
+  // broken arrangement healthy. The e2e suite now hit-tests as well, and these
+  // two literals are what stands between either half and a silent revert.
+  test('the fallback drag strip declines the mouse and stays first in tree order', () => {
+    const indexHtml = read('../web/index.html')
+    // Regions are collected in layout-tree preorder and differenced in that
+    // order, so the app's `no-drag` controls only subtract from this strip while
+    // it comes first. z-index is not an input to that walk.
+    const strip = indexHtml.indexOf('<div id="window-drag"')
+    const root = indexHtml.indexOf('<div id="root"')
+    assert.ok(strip >= 0 && root >= 0, 'one of the two elements is missing')
+    assert.ok(strip < root, '#window-drag must precede #root, or the no-drag rule cannot reach it')
+    // And the other half, which is a different mechanism entirely: hit testing,
+    // where a fixed box beats every in-flow element that is not itself
+    // positioned. Without this the strip swallowed the clicks of every static
+    // control that scrolled under the titlebar, while those controls went on
+    // computing `no-drag` -- so nothing that reads the region could see it.
+    assert.match(indexHtml, /#window-drag \{[^}]*pointer-events: none;/,
+      '#window-drag takes pointer events, so it eats the clicks of whatever scrolls under it')
+  })
+
+  // What the strip cannot subtract is prose: `no-drag` covers controls, so a
+  // route that renders a document with no chrome of its own has its top line
+  // inside a drag region, where a press-and-drag moves the window instead of
+  // selecting the text. Terms and privacy are the two such documents this app
+  // ships, and the answer is that neither opens in the shell at all -- an
+  // anchor with a target reaches setWindowOpenHandler in src/main.js, which
+  // hands one of our own URLs to the system browser. A `<Link>` is a
+  // client-side navigation that never reaches that handler, and a plain `<a>`
+  // navigates this window; both put the document back under the titlebar, and
+  // both look correct in a browser.
+  test('a legal document is never opened inside the app window', () => {
+    const src = path.join(__dirname, '..', '..', 'web/src')
+    // The documents themselves are exempt, and by the same rule rather than as
+    // a hole in it: they only ever render in a browser tab, so a link between
+    // them is an ordinary in-tab navigation. The rule is about app surface.
+    const exempt = `pages${path.sep}Legal${path.sep}`
+    const offenders = []
+    for (const rel of fs.readdirSync(src, { recursive: true })) {
+      if (!/\.tsx$/.test(rel) || rel.includes('__tests__') || rel.includes(exempt)) continue
+      const text = fs.readFileSync(path.join(src, rel), 'utf8')
+      // `[^<>]` and not `[^>]`: the sign-in page passes its anchors as props to
+      // <Trans>, so a match that may cross a `<` swallows the outer element and
+      // reports the wrong tag.
+      for (const [tag] of text.matchAll(/<\w+\b[^<>]*?\b(?:to|href)=["'{]+\/(?:legal|privacy)\b[^<>]*>/g)) {
+        const external = tag.startsWith('<a') && tag.includes('target="_blank"')
+        if (!external) offenders.push(`${rel}: ${tag.replace(/\s+/g, ' ')}`)
+      }
+    }
+    assert.deepEqual(offenders, [],
+      'a legal page is reachable without leaving the app window:\n' + offenders.join('\n'))
+  })
+})
+
+// The one string this feature spans two processes on, spelled in exactly two
+// places with nothing that reads both. Drift does not fail anything: the page
+// sees a channel that never answers, decides the shell is too old to know it,
+// and falls back to browser print. That is precisely the pre-feature behaviour,
+// so the whole path silently reverts and the tests stay green — savePdf is
+// called directly everywhere below, and the ipcMain stub records nothing.
+describe('the PDF channel is the same one on both sides', () => {
+  const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8')
+
+  test('the channel main handles is the one preload invokes', () => {
+    assert.match(read('src/pdf.js'), /ipcMain\.handle\('shell:save-pdf'/)
+    assert.match(read('src/preload.js'), /ipcRenderer\.invoke\('shell:save-pdf'/)
+  })
+
+  test('the bridge key preload exposes is the one the web app feature-detects', () => {
+    assert.match(read('src/preload.js'), /^\s*savePdf: \(options\) =>/m)
+    assert.match(read('../web/src/lib/desktop.ts'), /^\s*savePdf\?\(options\?: SavePdfOptions\)/m)
+  })
+})
+
+// The three pure functions below stand between a page loaded over the network
+// and Chromium's printer. Every one of them exists because the input is not
+// trusted: the options come from the renderer, and the filename is a title an
+// agent wrote. A live run only ever exercises the well-formed case, so the
+// cases that matter here are the ones that must be REFUSED or repaired.
+describe('rendering a page to a PDF', () => {
+  let pdf
+  before(() => { ({ pdf } = loadShell({ edition: 'saas' })) })
+  after(() => setSaveDialog({ canceled: true }))
+
+  describe('what a page is allowed to ask for', () => {
+    test('a field Chromium has never heard of does not reach it', () => {
+      const options = pdf.normalizeOptions({ headerTemplate: '<img src=x>', displayHeaderFooter: true })
+      assert.equal('headerTemplate' in options, false)
+      assert.equal('displayHeaderFooter' in options, false)
+    })
+
+    test('a page size outside the enum is dropped, not passed through', () => {
+      // printToPDF throws on a name outside its own enum, and a throw here is
+      // an export the user simply does not get.
+      assert.equal('pageSize' in pdf.normalizeOptions({ pageSize: 'A4; DROP' }), false)
+      assert.equal('pageSize' in pdf.normalizeOptions({ pageSize: 'Poster' }), false)
+      assert.equal(pdf.normalizeOptions({ pageSize: 'Letter' }).pageSize, 'Letter')
+    })
+
+    test('an out-of-range scale is clamped rather than refused', () => {
+      assert.equal(pdf.normalizeOptions({ scale: 99 }).scale, 2)
+      assert.equal(pdf.normalizeOptions({ scale: 0 }).scale, 0.1)
+      assert.equal(pdf.normalizeOptions({ scale: 1.5 }).scale, 1.5)
+      // NaN and Infinity survive JSON round-trips through the widget layer.
+      assert.equal('scale' in pdf.normalizeOptions({ scale: NaN }), false)
+      assert.equal('scale' in pdf.normalizeOptions({ scale: Infinity }), false)
+    })
+
+    test('pageRanges has to look like a page range', () => {
+      assert.equal(pdf.normalizeOptions({ pageRanges: '1-3, 7' }).pageRanges, '1-3, 7')
+      assert.equal('pageRanges' in pdf.normalizeOptions({ pageRanges: 'all' }), false)
+      assert.equal('pageRanges' in pdf.normalizeOptions({ pageRanges: '1'.repeat(65) }), false)
+    })
+
+    test('the two things a print dialog cannot produce are on by default', () => {
+      // A tagged reading order and a real outline are much of the reason this
+      // path exists at all, so they are opt-out rather than opt-in.
+      const defaults = pdf.normalizeOptions({})
+      assert.equal(defaults.generateTaggedPDF, true)
+      assert.equal(defaults.generateDocumentOutline, true)
+      assert.equal(defaults.printBackground, true)
+      assert.equal(defaults.preferCSSPageSize, true)
+      const declined = pdf.normalizeOptions({ tagged: false, outline: false, printBackground: false })
+      assert.equal(declined.generateTaggedPDF, false)
+      assert.equal(declined.generateDocumentOutline, false)
+      assert.equal(declined.printBackground, false)
+    })
+
+    test('a request that is not an object at all still yields defaults', () => {
+      assert.equal(pdf.normalizeOptions(null).generateTaggedPDF, true)
+      assert.equal(pdf.normalizeOptions('A4').generateTaggedPDF, true)
+    })
+  })
+
+  describe('the name the save dialog opens on', () => {
+    test('a name cannot walk out of the folder it was offered in', () => {
+      // The suggestion is joined onto the downloads path, so a traversal here
+      // would open the dialog somewhere the user never asked for.
+      assert.equal(pdf.safeFileName('../../../etc/passwd'), 'etc-passwd.pdf')
+      assert.equal(pdf.safeFileName('/tmp/evil'), 'tmp-evil.pdf')
+    })
+
+    test('characters that are legal on one desktop and rejected on another go', () => {
+      // Otherwise the same export fails only on Windows, which is the kind of
+      // bug that gets found by a user rather than by us.
+      assert.equal(pdf.safeFileName('Q3: profit/loss <draft>'), 'Q3- profit-loss -draft-.pdf')
+      assert.equal(pdf.safeFileName('tab\there'), 'tabhere.pdf')
+    })
+
+    test('a name that survives to nothing still produces a file', () => {
+      assert.equal(pdf.safeFileName('...'), 'export.pdf')
+      assert.equal(pdf.safeFileName(''), 'export.pdf')
+      assert.equal(pdf.safeFileName(undefined), 'export.pdf')
+      assert.equal(pdf.safeFileName('.pdf'), 'export.pdf')
+    })
+
+    test('an agent-length title is cut to something every filesystem accepts', () => {
+      const name = pdf.safeFileName('x'.repeat(400))
+      assert.equal(name.length, 124)
+      assert.ok(name.endsWith('.pdf'))
+    })
+
+    test('the extension is not doubled on a name that already carries it', () => {
+      assert.equal(pdf.safeFileName('report.pdf'), 'report.pdf')
+      assert.equal(pdf.safeFileName('report.PDF'), 'report.pdf')
+    })
+  })
+
+  describe('what the render does to the window', () => {
+    const windowWithColor = (colors) => {
+      let current = '#191919'
+      return {
+        isDestroyed: () => false,
+        getBackgroundColor: () => current,
+        setBackgroundColor: (c) => { current = c; colors.push(c) },
+      }
+    }
+
+    test('the page is printed on white paper, not on the window ground', async () => {
+      // printToPDF composites over the window's own background, and nothing
+      // paints the margin area — so a dark window produced dark paper with the
+      // text block floating in it.
+      const colors = []
+      const win = windowWithColor(colors)
+      let duringRender = null
+      await pdf.renderToBuffer(win, {
+        printToPDF: async () => { duringRender = win.getBackgroundColor(); return Buffer.from('%PDF') },
+      }, {})
+      assert.equal(duringRender, '#ffffff')
+      assert.deepEqual(colors, ['#ffffff', '#191919'])
+    })
+
+    test('the window colour is put back even when the render throws', async () => {
+      const colors = []
+      await assert.rejects(pdf.renderToBuffer(windowWithColor(colors), {
+        printToPDF: async () => { throw new Error('boom') },
+      }, {}))
+      assert.deepEqual(colors, ['#ffffff', '#191919'])
+    })
+  })
+
+  // The web side branches on which of the three it got, and treats them
+  // differently on purpose: only `error` may fall back to browser print, because
+  // reopening a dialog the user just dismissed reads as the app ignoring them.
+  describe('the three answers a save can give', () => {
+    const senderFor = (printToPDF) => ({
+      printToPDF,
+      window: {
+        isDestroyed: () => false,
+        getBackgroundColor: () => '#191919',
+        setBackgroundColor: () => {},
+      },
+    })
+
+    test('a dismissed dialog is canceled, never an error', async () => {
+      setSaveDialog({ canceled: true })
+      const result = await pdf.savePdf({ sender: senderFor(async () => Buffer.from('%PDF')) }, {})
+      assert.deepEqual(result, { canceled: true })
+    })
+
+    test('a failed render answers with an error instead of rejecting', async () => {
+      // A rejected `invoke` reaches the page as an opaque error it cannot tell
+      // from a shell too old to know the channel, and the caller's fallback
+      // depends on telling those apart.
+      const result = await pdf.savePdf({ sender: senderFor(async () => { throw new Error('no printer') }) }, {})
+      assert.ok(result.error.includes('no printer'))
+      assert.equal('canceled' in result, false)
+    })
+
+    test('a chosen path gets the bytes, and the page is told only that it worked', async () => {
+      const target = path.join(tempDir('la-pdf-'), 'out.pdf')
+      setSaveDialog({ canceled: false, filePath: target })
+      const result = await pdf.savePdf(
+        { sender: senderFor(async () => Buffer.from('%PDF-1.7 body')) },
+        { fileName: 'Q3 review' },
+      )
+      assert.deepEqual(result, { saved: true })
+      assert.equal(fs.readFileSync(target, 'utf8'), '%PDF-1.7 body')
+      // No path in the answer: the page gets no filesystem detail back.
+      assert.equal('filePath' in result, false)
+    })
+
+    test('a window already closing answers rather than throwing on it', async () => {
+      const result = await pdf.savePdf({ sender: { printToPDF: async () => Buffer.from('x') } }, {})
+      assert.ok(result.error)
+    })
+
+    test('a failed write leaves the file the user was overwriting where it was', async () => {
+      // The destination is usually a previous export of the same report, so the
+      // in-place write had already truncated something the user owned by the
+      // time it failed, and the cleanup then removed what was left of it.
+      const target = path.join(tempDir('la-pdf-'), 'out.pdf')
+      fs.writeFileSync(target, 'the export from last week')
+      setSaveDialog({ canceled: false, filePath: target })
+      const fsp = require('node:fs/promises')
+      const real = fsp.writeFile
+      // Some of the bytes land before it fails, which is what a full volume
+      // actually does. Throwing without writing leaves no staged file at all,
+      // and the directory assertion below then passes on a cleanup that never
+      // ran, so removing it would not fail this test.
+      fsp.writeFile = async (to, bytes) => {
+        await real(to, bytes.subarray(0, 1))
+        const e = new Error('no space left')
+        e.code = 'ENOSPC'
+        throw e
+      }
+      let result
+      try {
+        result = await pdf.savePdf({ sender: senderFor(async () => Buffer.from('%PDF')) }, {})
+      } finally {
+        fsp.writeFile = real
+      }
+      assert.ok(result.error.includes('ENOSPC'))
+      assert.equal(fs.readFileSync(target, 'utf8'), 'the export from last week')
+      // And nothing half-written left beside it under a name nobody will explain.
+      assert.deepEqual(fs.readdirSync(path.dirname(target)), ['out.pdf'])
+    })
   })
 })
