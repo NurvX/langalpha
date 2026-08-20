@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 import structlog
 
@@ -34,7 +34,33 @@ def is_agent_installed(entry: SkillLockEntry) -> bool:
     return entry.get("owner") == "user" and entry.get("sourceType") != MANAGED_SOURCE_TYPE
 
 
+def is_linked(entry: SkillLockEntry) -> bool:
+    """Two-way synced with a workspace-tier DB row.
+
+    The reconciler is the sole writer of linked entries and their skill dirs;
+    the generic upload/prune path must treat them like agent-installed content
+    and never touch them.
+    """
+    sync = entry.get("sync")
+    return bool(sync and sync.get("linkedSkillId"))
+
+
 # --- Types ---
+
+
+class SkillSyncState(TypedDict, total=False):
+    """Two-way sync tracking ref stored on a linked lock entry.
+
+    The git analogy: the sandbox dir is the working copy, the DB row is the
+    remote, and this block is the tracking ref — each side is compared only
+    against its own recorded base, so no cross-environment hash is needed.
+    """
+
+    linkedSkillId: str  # noqa: N815 — user_skills row UUID
+    syncedTreeHash: str  # noqa: N815 — sandbox tree hash at last sync
+    syncedDbHash: str  # noqa: N815 — row content_hash at last sync
+    lastFailedSync: dict[str, Any]  # noqa: N815 — {treeHash, dbHash, kind}
+    statCache: dict[str, list]  # noqa: N815 — relpath → [mtime_ns, size, ctime_ns, sha256]
 
 
 class SkillLockEntry(TypedDict):
@@ -52,6 +78,7 @@ class SkillLockEntry(TypedDict):
     allowed_tools: list[str]
     installedAt: str  # noqa: N815 — ISO 8601
     updatedAt: str  # noqa: N815 — ISO 8601
+    sync: NotRequired[SkillSyncState]
 
 
 class SkillsLockFile(TypedDict):
@@ -167,7 +194,10 @@ def merge_lock_files(
     Rules:
     - Authoritative entries (platform + server-managed user tier) overwrite
       their existing counterparts.
-    - Agent-installed entries are always preserved.
+    - Agent-installed and linked (two-way synced workspace) entries are always
+      preserved — the reconciler is the sole writer of linked entries, and the
+      physical delivery view keeps workspace names out of the authoritative
+      set, so the two can never collide.
     - Stale authoritative entries (present in existing lock but not in
       ``authoritative_entries``) are purged — for a managed user skill this is
       exactly when its row was deleted or disabled in the DB.
@@ -181,10 +211,10 @@ def merge_lock_files(
     """
     merged: dict[str, SkillLockEntry] = {}
 
-    # Preserve agent-installed skills from existing lock
+    # Preserve agent-installed and reconciler-owned skills from existing lock
     if existing_lock:
         for name, entry in existing_lock.items():
-            if is_agent_installed(entry):
+            if is_agent_installed(entry) or is_linked(entry):
                 merged[name] = entry
 
     # Add/overwrite all current authoritative entries

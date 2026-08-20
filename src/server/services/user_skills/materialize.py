@@ -192,6 +192,12 @@ async def load_user_skill_bundle(
     platform skill they name drops from the registry and the sandbox upload;
     a user-tier name in the set is a no-op there (platform-only consumers)
     and takes effect through the row filter here.
+
+    The physical delivery view (``dir``) carries the USER tier only:
+    workspace-tier rows are two-way synced by the reconciler, which is the
+    sole writer of their sandbox dirs — uploading them through the generic
+    managed path would fight it. ``skills`` (prompt manifest + slash menu)
+    still spans the full effective union.
     """
     rows = await list_enabled_user_skills(user_id, workspace_id=workspace_id)
     disabled = await get_disabled_builtin_skills(user_id)
@@ -208,13 +214,21 @@ async def load_user_skill_bundle(
             if r["workspace_id"]
             or (r["name"] not in ws_names and r["name"] not in ws_disabled)
         ]
-        # Reuse the plain user view (and its GC namespace) when the workspace
-        # changes nothing — most workspaces bring no rows or disables.
-        if ws_names or len(effective) != len(rows):
+        physical = [r for r in effective if not r["workspace_id"]]
+        # Reuse the plain user view (and its GC namespace) when the physical
+        # view is identical to it — workspace rows never enter the physical
+        # view, so only shadowing or a disable of a user-tier name forks it.
+        if len(physical) != len(rows) - len(ws_names):
             scope = _scope_key(workspace_id)
-        rows = effective
+    else:
+        effective = rows
+        physical = rows
 
-    skill_dir, ok_rows = await resolve_user_skill_dir(user_id, rows, scope=scope)
+    skill_dir, ok_rows = await resolve_user_skill_dir(user_id, physical, scope=scope)
+    ok_names = {r["name"] for r in ok_rows}
+    spec_rows = [
+        r for r in effective if r["workspace_id"] or r["name"] in ok_names
+    ]
     return UserSkillBundle(
         dir=skill_dir,
         skills=tuple(
@@ -224,7 +238,7 @@ async def load_user_skill_bundle(
                 command=r["name"],
                 confirmed=bool(r["confirmed"]),
             )
-            for r in ok_rows
+            for r in spec_rows
         ),
         disabled_builtins=disabled,
     )

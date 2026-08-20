@@ -773,18 +773,37 @@ async def astream_ptc_workflow(
             # no longer drop the dispatch. This callback keeps only
             # best-effort sandbox housekeeping.
 
-            # Post-completion sandbox housekeeping (parallel)
+            # Post-completion sandbox housekeeping. Reconcile BEFORE the
+            # backup — the reconcile mutates the skills ledger and dirs, and
+            # the file backup should capture the converged state.
             ws_manager = WorkspaceManager.get_instance()
-            housekeeping = [ws_manager._backup_files_to_db(request.workspace_id)]
             if session and session.sandbox:
-                housekeeping.append(session.sandbox.sync_skills_lock())
-            results = await asyncio.gather(*housekeeping, return_exceptions=True)
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    task_name = "file backup" if i == 0 else "lock sync"
-                    logger.warning(
-                        f"[PTC_COMPLETE] {task_name} failed for {thread_id}: {result}"
+                if user_id:
+                    from src.server.services.user_skills.reconcile import (
+                        reconcile_workspace_skills,
                     )
+
+                    await reconcile_workspace_skills(
+                        session.sandbox,
+                        user_id=user_id,
+                        workspace_id=request.workspace_id,
+                        source="post_turn",
+                    )
+                else:
+                    # Anonymous turns have no skill rows; keep the ledger
+                    # consistent with the filesystem the old way.
+                    try:
+                        await session.sandbox.sync_skills_lock()
+                    except Exception as e:
+                        logger.warning(
+                            f"[PTC_COMPLETE] lock sync failed for {thread_id}: {e}"
+                        )
+            try:
+                await ws_manager._backup_files_to_db(request.workspace_id)
+            except Exception as e:
+                logger.warning(
+                    f"[PTC_COMPLETE] file backup failed for {thread_id}: {e}"
+                )
 
         # Start workflow in background with event buffering
         await manager.start_run(

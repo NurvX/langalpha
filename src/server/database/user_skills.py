@@ -23,6 +23,7 @@ update sees the name un-owned and skips it instead of overwriting).
 """
 
 import logging
+from contextlib import asynccontextmanager
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -31,6 +32,43 @@ from psycopg.types.json import Json
 from src.server.database.pool import get_db_connection
 
 logger = logging.getLogger(__name__)
+
+# Namespace for the per-workspace skill-sync advisory lock (two-arg form).
+# The reconciler holds the session-level variant across a whole pass;
+# workspace-scoped content mutations (upsert/move/delete) take the xact-level
+# variant so they serialize against it. Lock order is always SKILL_SYNC →
+# per-user lock; for cross-workspace moves, both workspace locks sorted by id.
+_SKILL_SYNC_NS = "SKILL_SYNC"
+
+
+async def _lock_skill_sync_xact(cur, workspace_id: str) -> None:
+    await cur.execute(
+        "SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s::text))",
+        (_SKILL_SYNC_NS, workspace_id),
+    )
+
+
+@asynccontextmanager
+async def workspace_skill_sync_lock(workspace_id: str):
+    """Session-level advisory lock held across one full reconcile pass.
+
+    Pins one pooled connection for the duration; released in ``finally`` and
+    by Postgres automatically if the connection dies mid-pass.
+    """
+    async with get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT pg_advisory_lock(hashtext(%s), hashtext(%s::text))",
+                (_SKILL_SYNC_NS, workspace_id),
+            )
+        try:
+            yield conn
+        finally:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT pg_advisory_unlock(hashtext(%s), hashtext(%s::text))",
+                    (_SKILL_SYNC_NS, workspace_id),
+                )
 
 # Hard cap on skills per user, mirroring MAX_CATALOG_SERVERS_PER_USER. Defined
 # here (not in services/user_skills/limits.py, which re-exports them) so the
@@ -196,6 +234,32 @@ async def archive_key_in_use(archive_key: str) -> bool:
             return await cur.fetchone() is not None
 
 
+async def _check_skill_caps(
+    cur, user_id: str, name: str, workspace_id: str | None, archive_bytes: int
+) -> None:
+    """Per-user count/bytes caps; the exact row being replaced is excluded so
+    overwriting an existing skill is always allowed. Caller holds the per-user
+    advisory lock."""
+    await cur.execute(
+        "SELECT COUNT(*) AS cnt, "
+        "COALESCE(SUM(archive_bytes), 0) AS total_bytes "
+        "FROM user_skills WHERE user_id = %s AND NOT "
+        "(name = %s AND workspace_id IS NOT DISTINCT FROM %s)",
+        (user_id, name, workspace_id),
+    )
+    stats = await cur.fetchone()
+    if stats["cnt"] >= MAX_SKILLS_PER_USER:
+        raise ValueError(
+            f"Maximum of {MAX_SKILLS_PER_USER} skills per user reached"
+        )
+    if stats["total_bytes"] + archive_bytes > MAX_SKILL_TOTAL_BYTES_PER_USER:
+        raise ValueError(
+            "Skill storage limit reached "
+            f"({MAX_SKILL_TOTAL_BYTES_PER_USER} bytes per user). "
+            "Delete a skill first."
+        )
+
+
 async def upsert_user_skill(
     user_id: str,
     name: str,
@@ -235,27 +299,12 @@ async def upsert_user_skill(
     async with get_db_connection(conn) as conn:
         async with conn.transaction():
             async with conn.cursor(row_factory=dict_row) as cur:
+                if workspace_id is not None:
+                    await _lock_skill_sync_xact(cur, workspace_id)
                 await cur.execute(
                     "SELECT pg_advisory_xact_lock(hashtext(%s::text))", (user_id,)
                 )
-                await cur.execute(
-                    "SELECT COUNT(*) AS cnt, "
-                    "COALESCE(SUM(archive_bytes), 0) AS total_bytes "
-                    "FROM user_skills WHERE user_id = %s AND NOT "
-                    "(name = %s AND workspace_id IS NOT DISTINCT FROM %s)",
-                    (user_id, name, workspace_id),
-                )
-                stats = await cur.fetchone()
-                if stats["cnt"] >= MAX_SKILLS_PER_USER:
-                    raise ValueError(
-                        f"Maximum of {MAX_SKILLS_PER_USER} skills per user reached"
-                    )
-                if stats["total_bytes"] + archive_bytes > MAX_SKILL_TOTAL_BYTES_PER_USER:
-                    raise ValueError(
-                        "Skill storage limit reached "
-                        f"({MAX_SKILL_TOTAL_BYTES_PER_USER} bytes per user). "
-                        "Delete a skill first."
-                    )
+                await _check_skill_caps(cur, user_id, name, workspace_id, archive_bytes)
 
                 # The row being replaced is excluded from the aggregate above,
                 # so read its archive_key separately to hand back for cleanup.
@@ -278,13 +327,13 @@ async def upsert_user_skill(
                 await cur.execute(
                     f"""
                     INSERT INTO user_skills
-                        (user_id, workspace_id, name, description, license,
-                         frontmatter, allowed_tools, enabled, confirmed,
-                         plugin_id, plugin_skill_dir, content_hash,
+                        (user_id, workspace_id, name, description,
+                         license, frontmatter, allowed_tools, enabled,
+                         confirmed, plugin_id, plugin_skill_dir, content_hash,
                          archive_key, archive_blob, archive_bytes, file_count,
                          created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, NOW(), NOW())
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, NOW(), NOW())
                     ON CONFLICT {conflict_target} DO UPDATE SET
                         description = EXCLUDED.description,
                         license = EXCLUDED.license,
@@ -302,10 +351,11 @@ async def upsert_user_skill(
                     RETURNING {_SKILL_COLUMNS}
                     """,
                     (
-                        user_id, workspace_id, name, description, license,
-                        Json(frontmatter), Json(allowed_tools), enabled,
-                        confirmed, plugin_id, plugin_skill_dir, content_hash,
-                        archive_key, archive_blob, archive_bytes, file_count,
+                        user_id, workspace_id, name, description,
+                        license, Json(frontmatter), Json(allowed_tools),
+                        enabled, confirmed, plugin_id, plugin_skill_dir,
+                        content_hash, archive_key, archive_blob, archive_bytes,
+                        file_count,
                     ),
                 )
                 row = _row_to_dict(await cur.fetchone())
@@ -340,6 +390,10 @@ async def move_user_skill(
     async with get_db_connection() as conn:
         async with conn.transaction():
             async with conn.cursor(row_factory=dict_row) as cur:
+                for ws in sorted(
+                    {w for w in (from_workspace_id, to_workspace_id) if w}
+                ):
+                    await _lock_skill_sync_xact(cur, ws)
                 await cur.execute(
                     "SELECT pg_advisory_xact_lock(hashtext(%s::text))", (user_id,)
                 )
@@ -420,18 +474,180 @@ async def delete_user_skill(
     """Delete a skill row in one scope, returning it so the caller can drop
     its archive object. Returns None when there was nothing to delete."""
     async with get_db_connection(conn) as db:
-        async with db.cursor(row_factory=dict_row) as cur:
+        async with db.transaction():
+            async with db.cursor(row_factory=dict_row) as cur:
+                if workspace_id is not None:
+                    await _lock_skill_sync_xact(cur, workspace_id)
+                await cur.execute(
+                    f"DELETE FROM user_skills WHERE user_id = %s AND name = %s "
+                    f"AND workspace_id IS NOT DISTINCT FROM %s "
+                    f"RETURNING {_SKILL_COLUMNS}",
+                    (user_id, name, workspace_id),
+                )
+                row = _row_to_dict(await cur.fetchone())
+                if row:
+                    logger.info(
+                        "[user_skills] delete user_id=%s workspace_id=%s name=%s",
+                        user_id, workspace_id, name,
+                    )
+                return row
+
+
+async def get_user_skill_by_id(
+    user_id: str, user_skill_id: str
+) -> dict[str, Any] | None:
+    """One skill row by UUID, any scope — how the reconciler tells a moved
+    row (UUID survives ``move_user_skill``) from a deleted one."""
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
-                f"DELETE FROM user_skills WHERE user_id = %s AND name = %s "
-                f"AND workspace_id IS NOT DISTINCT FROM %s "
+                f"SELECT {_SKILL_COLUMNS} FROM user_skills "
+                "WHERE user_id = %s AND user_skill_id = %s",
+                (user_id, user_skill_id),
+            )
+            return _row_to_dict(await cur.fetchone())
+
+
+async def create_user_skill(
+    user_id: str,
+    name: str,
+    *,
+    workspace_id: str,
+    description: str,
+    license: str | None,
+    frontmatter: dict[str, Any],
+    allowed_tools: list[str],
+    confirmed: bool,
+    content_hash: str,
+    archive_key: str | None,
+    archive_blob: bytes | None,
+    archive_bytes: int,
+    file_count: int,
+) -> dict[str, Any] | None:
+    """Create-only insert for auto-import: never replaces an existing row.
+
+    Returns None when the name is already taken in the scope (the reconciler
+    re-decides via the arbiter); raises ValueError on caps.
+    """
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s::text))", (user_id,)
+                )
+                await _check_skill_caps(cur, user_id, name, workspace_id, archive_bytes)
+                await cur.execute(
+                    f"""
+                    INSERT INTO user_skills
+                        (user_id, workspace_id, name, description,
+                         license, frontmatter, allowed_tools, enabled,
+                         confirmed, content_hash, archive_key, archive_blob,
+                         archive_bytes, file_count, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s, %s,
+                            %s, %s, %s, NOW(), NOW())
+                    ON CONFLICT (workspace_id, name) WHERE workspace_id IS NOT NULL
+                        DO NOTHING
+                    RETURNING {_SKILL_COLUMNS}
+                    """,
+                    (
+                        user_id, workspace_id, name, description,
+                        license, Json(frontmatter), Json(allowed_tools),
+                        confirmed, content_hash, archive_key, archive_blob,
+                        archive_bytes, file_count,
+                    ),
+                )
+                row = _row_to_dict(await cur.fetchone())
+                if row:
+                    logger.info(
+                        "[user_skills] auto-import user_id=%s workspace_id=%s name=%s",
+                        user_id, workspace_id, name,
+                    )
+                return row
+
+
+async def update_user_skill_content_cas(
+    user_id: str,
+    user_skill_id: str,
+    expected_content_hash: str,
+    *,
+    description: str,
+    license: str | None,
+    frontmatter: dict[str, Any],
+    allowed_tools: list[str],
+    content_hash: str,
+    archive_key: str | None,
+    archive_blob: bytes | None,
+    archive_bytes: int,
+    file_count: int,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Pull-up write: replace a row's content only if it still carries the
+    hash the reconciler observed. Returns ``(row, superseded_archive_key)``;
+    ``(None, None)`` = CAS lost, the caller re-decides next pass."""
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s::text))", (user_id,)
+                )
+                await cur.execute(
+                    "SELECT name, workspace_id, archive_key FROM user_skills "
+                    "WHERE user_id = %s AND user_skill_id = %s "
+                    "AND content_hash = %s FOR UPDATE",
+                    (user_id, user_skill_id, expected_content_hash),
+                )
+                prior = await cur.fetchone()
+                if prior is None:
+                    return None, None
+                await _check_skill_caps(
+                    cur, user_id, prior["name"], prior["workspace_id"], archive_bytes
+                )
+                await cur.execute(
+                    f"""
+                    UPDATE user_skills SET
+                        description = %s, license = %s, frontmatter = %s,
+                        allowed_tools = %s, content_hash = %s, archive_key = %s,
+                        archive_blob = %s, archive_bytes = %s, file_count = %s,
+                        updated_at = NOW()
+                    WHERE user_id = %s AND user_skill_id = %s
+                    RETURNING {_SKILL_COLUMNS}
+                    """,
+                    (
+                        description, license, Json(frontmatter),
+                        Json(allowed_tools), content_hash, archive_key,
+                        archive_blob, archive_bytes, file_count,
+                        user_id, user_skill_id,
+                    ),
+                )
+                row = _row_to_dict(await cur.fetchone())
+                prior_key = prior["archive_key"]
+                superseded = (
+                    prior_key if prior_key and prior_key != archive_key else None
+                )
+                logger.info(
+                    "[user_skills] pull-up user_id=%s skill_id=%s",
+                    user_id, user_skill_id,
+                )
+                return row, superseded
+
+
+async def delete_user_skill_cas(
+    user_id: str, user_skill_id: str, expected_content_hash: str
+) -> dict[str, Any] | None:
+    """Deletion propagation: drop a row only if its content is still exactly
+    what the ledger last synced (content beats deletion). None = CAS lost."""
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                f"DELETE FROM user_skills WHERE user_id = %s "
+                "AND user_skill_id = %s AND content_hash = %s "
                 f"RETURNING {_SKILL_COLUMNS}",
-                (user_id, name, workspace_id),
+                (user_id, user_skill_id, expected_content_hash),
             )
             row = _row_to_dict(await cur.fetchone())
             if row:
                 logger.info(
-                    "[user_skills] delete user_id=%s workspace_id=%s name=%s",
-                    user_id, workspace_id, name,
+                    "[user_skills] sync-delete user_id=%s skill_id=%s name=%s",
+                    user_id, user_skill_id, row["name"],
                 )
             return row
 

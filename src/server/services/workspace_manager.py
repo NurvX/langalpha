@@ -55,6 +55,7 @@ from src.server.database.workspace import (
 )
 from src.server.services.persistence.file import FilePersistenceService
 from src.server.services.user_skills import sandbox_skill_sync_params
+from src.server.services.user_skills.reconcile import reconcile_workspace_skills
 from src.server.services.workspace_entitlements import WorkspaceEntitlementsMixin
 from src.server.services.workspace_status_pubsub import (
     publish_status_change,
@@ -1023,6 +1024,12 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
 
             await post_init(session)
 
+            # After post_init: recover/duplicate restore files there, and the
+            # reconcile must see the restored skill dirs + ledger.
+            await self._reconcile_skills(
+                workspace_id, user_id, session.sandbox, source="provision"
+            )
+
             sandbox_id = (
                 getattr(session.sandbox, "sandbox_id", None)
                 if session.sandbox
@@ -1657,6 +1664,52 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
         )
         return session.mcp_config_version if session is not None else None
 
+    async def _reconcile_skills(
+        self,
+        workspace_id: str,
+        user_id: str | None,
+        sandbox: Any,
+        *,
+        source: str,
+    ) -> None:
+        """Two-way skill reconcile at a cold-bringup point.
+
+        Runs after asset sync + file restore so the pass sees the sandbox's
+        final state. The service serializes cross-worker via the SKILL_SYNC
+        advisory lock and never raises; anonymous sessions have no skill rows
+        to reconcile against.
+        """
+        if not user_id or sandbox is None:
+            return
+        await reconcile_workspace_skills(
+            sandbox, user_id=user_id, workspace_id=workspace_id, source=source
+        )
+
+    async def reconcile_skills_if_running(
+        self, workspace_id: str, user_id: str, *, source: str
+    ) -> None:
+        """Proactive reconcile after a Plugins-side workspace-skill mutation.
+
+        Only touches a sandbox this worker already holds ready (identity-fenced
+        via ``get_session_if_ready``); a stopped workspace — or one whose ready
+        session lives on another worker — picks the change up on its next cold
+        acquire or post-turn pass. Never wakes a sandbox.
+        """
+        ws = await db_get_workspace(workspace_id)
+        if not ws or not ws.get("sandbox_id"):
+            return
+        session = self.get_session_if_ready(
+            workspace_id, expected_sandbox_id=str(ws["sandbox_id"])
+        )
+        if session is None:
+            return
+        await reconcile_workspace_skills(
+            session.sandbox,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            source=source,
+        )
+
     async def proactively_apply_mcp_config(
         self, workspace_id: str, user_id: str | None = None
     ) -> None:
@@ -1994,6 +2047,12 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
                                             session.sandbox,
                                             reusing_sandbox=True,
                                         )
+                                        await self._reconcile_skills(
+                                            workspace_id,
+                                            workspace_user_id,
+                                            session.sandbox,
+                                            source="stopping_recovery",
+                                        )
                                     self._sessions[workspace_id] = session
                             except SandboxGoneError as e:
                                 logger.warning(
@@ -2285,6 +2344,13 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
                     mark("asset_sync")
                     await self._maybe_restore_files(workspace_id, session.sandbox)
                     mark("file_restore")
+                    await self._reconcile_skills(
+                        workspace_id,
+                        workspace_user_id,
+                        session.sandbox,
+                        source="lazy_phase2",
+                    )
+                    mark("skill_reconcile")
                     # Reseed auto-stop from the always-on flag now that the
                     # sandbox is actually up — the lazy restart deferred this
                     # (an interval write to a still-archived sandbox races the
@@ -2631,6 +2697,14 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
             )
             mark("cold_asset_sync")
 
+            await self._reconcile_skills(
+                workspace_id,
+                workspace_user_id,
+                session.sandbox,
+                source="attach_running",
+            )
+            mark("skill_reconcile")
+
             # Cache the session BEFORE kicking discovery: the background task's
             # liveness gate (``self._sessions.get(workspace_id) is session``)
             # would otherwise see no cached session and exit permanently. If a
@@ -2952,6 +3026,9 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
                 )
                 if session.sandbox:
                     await self._maybe_restore_files(workspace_id, session.sandbox)
+                    await self._reconcile_skills(
+                        workspace_id, user_id, session.sandbox, source="restart"
+                    )
                 self._record_sync(workspace_id)
 
                 # Check if sandbox needs config migration (e.g., working dir change)

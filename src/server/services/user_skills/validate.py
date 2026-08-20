@@ -288,6 +288,30 @@ def validate_skill_archive(raw: bytes) -> ValidatedSkill:
     )
 
 
+def archive_file_pairs(zip_bytes: bytes) -> list[tuple[str, bytes]]:
+    """``(relpath, content)`` pairs from a stored canonical archive, with the
+    same containment guards as extraction; the single top-level skill dir is
+    stripped so the pairs are dir-relative."""
+    pairs: list[tuple[str, bytes]] = []
+    total = 0
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        for info in zf.infolist():
+            path = _clean_member_path(info)
+            if path is None or _ignored(path):
+                continue
+            rel = path.split("/", 1)[1] if "/" in path else path
+            if not rel:
+                continue
+            data = _read_member(zf, info)
+            total += len(data)
+            if total > MAX_SKILL_UNCOMPRESSED_BYTES:
+                raise SkillValidationError(
+                    f"archive exceeds {MAX_SKILL_UNCOMPRESSED_BYTES} bytes uncompressed"
+                )
+            pairs.append((rel, data))
+    return pairs
+
+
 def safe_extract_archive(zip_bytes: bytes, dest: Path) -> None:
     """Extract a stored archive under ``dest`` with the same containment guards
     as validation.

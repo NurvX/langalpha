@@ -18,6 +18,7 @@ menu. The management surface passes ``include_disabled=true`` to render
 re-enable toggles.
 """
 
+import asyncio
 import io
 import logging
 import re
@@ -84,6 +85,40 @@ _NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 def _validate_name_param(name: str) -> None:
     if len(name) > 64 or not _NAME_RE.match(name):
         raise HTTPException(status_code=404, detail="Skill not found")
+
+
+_proactive_reconcile_tasks: set[asyncio.Task] = set()
+
+
+def _schedule_workspace_reconcile(
+    workspace_id: str, user_id: str, *, source: str
+) -> None:
+    """Fire-and-forget sync of a just-mutated workspace skill into a running
+    sandbox, so the change lands before the user's next turn. Best-effort: a
+    stopped workspace — or a ready session held by another worker — picks the
+    change up at its next cold acquire or post-turn pass instead."""
+    from src.server.services.workspace_manager import WorkspaceManager
+
+    try:
+        wm = WorkspaceManager.get_instance()
+    except Exception:
+        return
+
+    async def _run() -> None:
+        try:
+            await wm.reconcile_skills_if_running(
+                workspace_id, user_id, source=source
+            )
+        except Exception as e:
+            logger.warning(
+                "[skill_sync] proactive reconcile failed for %s: %s",
+                workspace_id,
+                e,
+            )
+
+    task = asyncio.create_task(_run())
+    _proactive_reconcile_tasks.add(task)
+    task.add_done_callback(_proactive_reconcile_tasks.discard)
 
 
 class SkillInfo(BaseModel):
@@ -470,6 +505,9 @@ async def move_skill(name: str, body: SkillMoveInput, user_id: CurrentUserId):
         raise HTTPException(status_code=409, detail=str(e))
     if row is None:
         raise HTTPException(status_code=404, detail="Skill not found")
+    for ws in (body.from_workspace_id, body.to_workspace_id):
+        if ws is not None:
+            _schedule_workspace_reconcile(ws, user_id, source="ws_move")
     return _user_row_to_info(row)
 
 
@@ -571,7 +609,9 @@ async def upload_workspace_skill(
     """Upload a skill zip scoped to this workspace; it shadows a same-named
     user-tier skill here. Platform names stay reserved in both scopes."""
     await _require_owned_workspace(workspace_id, user_id)
-    return await _upload_skill_archive(user_id, file, workspace_id=workspace_id)
+    info = await _upload_skill_archive(user_id, file, workspace_id=workspace_id)
+    _schedule_workspace_reconcile(workspace_id, user_id, source="ws_upload")
+    return info
 
 
 @workspace_router.patch("/{workspace_id}/skills/{name}", response_model=SkillInfo)
@@ -650,4 +690,5 @@ async def delete_workspace_skill(
     key = row.get("archive_key")
     if key and not await archive_key_in_use(key):
         await skill_archive_storage.delete_archive(key)
+    _schedule_workspace_reconcile(workspace_id, user_id, source="ws_delete")
     return Response(status_code=204)
