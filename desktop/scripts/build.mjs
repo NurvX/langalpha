@@ -77,7 +77,7 @@ if (feed) {
 // in place it would swallow a certificate the moment one exists and still exit
 // 0, so the presence of CSC_LINK is what takes the line back out.
 if (signing) {
-  replace(/^ {2}identity: null$/m, '  # identity resolved from CSC_LINK by scripts/build.mjs', 'identity: null')
+  replace(/^ {2}identity: null\r?$/m, '  # identity resolved from CSC_LINK by scripts/build.mjs', 'identity: null')
   console.log(`[build] signing enabled (${process.env.CSC_LINK ? 'CSC_LINK' : 'CSC_NAME'})`)
 }
 
@@ -104,27 +104,32 @@ if (edition !== 'oss') {
   replace(/^ {6}- langalpha-oss\r?$/m, `      - ${identity.scheme}`, 'protocol scheme')
 }
 
-// Always resolved, unlike the feed and signing edits: the filename carries the
-// edition on every build, so there is no configuration left that electron-builder
-// can consume as committed.
-// Anchored to the directive, not to the bare placeholder: the comment above it
-// in electron-builder.yml spells ${EDITION} too, and a non-global replace takes
-// the first match, so substituting into that prose left the real line alone and
-// failed at packaging with "macro EDITION is not defined". A function
-// replacement rather than a string keeps `$` in the edition from being read as
-// a capture reference.
-replace(/^(artifactName:.*?)\$\{EDITION\}/m, (_, pre) => pre + edition, 'artifactName ${EDITION} placeholder')
-
-// The precondition above is not enough on its own: it passed while the
-// substitution did nothing, because it matched the placeholder in the prose.
-// Check the postcondition on every line electron-builder will actually read,
-// so a second directive carrying the placeholder cannot slip through either.
-const unresolved = config
+// Always resolved, unlike the feed and signing edits: the artifact filename and
+// the output directory both carry the edition on every build, so there is no
+// configuration left that electron-builder can consume as committed.
+//
+// Every occurrence outside a comment, rather than one anchored to a directive by
+// name. The prose in electron-builder.yml spells ${EDITION} too, and an anchored
+// replace that took the first match once landed in that prose, left the real
+// line alone, and failed at packaging with "macro EDITION is not defined",
+// which is why the old form needed a second pass to check its own work. Covering
+// exactly the lines electron-builder reads leaves nothing for that pass to find,
+// and a new directive carrying the placeholder needs no marker added here.
+let substitutions = 0
+config = config
   .split('\n')
-  .filter((l) => !l.trimStart().startsWith('#') && l.includes('${EDITION}'))
-if (unresolved.length > 0) {
-  console.error('[build] ${EDITION} survived substitution on:')
-  for (const l of unresolved) console.error(`  ${l.trim()}`)
+  .map((line) =>
+    line.trimStart().startsWith('#')
+      ? line
+      // A function replacement, so a `$` in the edition is not read as a
+      // capture reference.
+      : line.replace(/\$\{EDITION\}/g, () => {
+        substitutions++
+        return edition
+      }))
+  .join('\n')
+if (substitutions === 0) {
+  console.error('[build] electron-builder.yml no longer spells ${EDITION} outside its comments')
   process.exit(1)
 }
 
@@ -147,6 +152,32 @@ for (const [line, what] of identityLines) {
 }
 console.log(`[build] identity: ${identity.productName} (${identity.appId}, ${identity.scheme}://)`)
 
+// Read back off the resolved config rather than rebuilt from `edition` here:
+// electron-builder writes wherever this line says, and everything below that
+// goes looking for what it produced has to ask the same line or drift from it
+// in silence. Drift does not announce itself: a sweep, a signing check and a
+// manifest check that all simply find nothing look exactly like a clean build.
+// One regex, so the key and its exact indent are stated once rather than as a
+// find predicate and a slice offset that have to agree. It also has to survive
+// the shapes YAML allows and this script does not write itself: a quoted value,
+// and a trailing comment, both of which a plain slice would carry into the path.
+const outputMatch = /^ {2}output:[ \t]*(?:"([^"]*)"|'([^']*)'|([^#\r\n]*))/m.exec(config)
+const outputDir = outputMatch && (outputMatch[1] ?? outputMatch[2] ?? outputMatch[3] ?? '').trim()
+if (!outputDir) {
+  console.error('[build] electron-builder.yml no longer has a `directories.output` line')
+  process.exit(1)
+}
+// The whole point of the per-edition tree, asserted where it is knowable. The
+// substitution count above is file-wide, so dropping ${EDITION} from this one
+// line while artifactName keeps its own leaves that count non-zero and both
+// editions building into one directory, which is the state this replaced.
+if (!outputDir.includes(edition)) {
+  console.error(`[build] directories.output resolved to '${outputDir}', which is not this edition's tree`)
+  process.exit(1)
+}
+const dist = path.resolve(root, outputDir)
+console.log(`[build] output: ${path.relative(root, dist)}`)
+
 writeFileSync(RESOLVED, config)
 args.push('--config', path.basename(RESOLVED))
 
@@ -167,7 +198,7 @@ const bin = existsSync(local) ? local : 'electron-builder'
 // while every installer already carries the old feed baked in. Those are the
 // artifacts that ship.
 if (!feed) {
-  for (const stale of findStaleFeeds(path.join(root, 'dist'))) {
+  for (const stale of findStaleFeeds(dist)) {
     rmSync(stale, { force: true })
     console.log(`[build] removed a previous build's feed: ${path.relative(root, stale)}`)
   }
@@ -180,8 +211,6 @@ if (result.error) {
   process.exit(1)
 }
 if (result.status !== 0) process.exit(result.status ?? 1)
-
-const dist = path.join(root, 'dist')
 
 // Same shape as the manifest guard: a certificate that produced an unsigned
 // artifact is a green build that Squirrel.Mac will refuse to install from, and
@@ -200,7 +229,7 @@ if (signing && process.platform === 'darwin') {
     if (check.status !== 0) {
       console.error(`[build] signing was requested but ${rel} is not validly signed`)
       console.error((check.stderr || '').trim())
-      console.error('[build] if that path is from an earlier build, clear dist/ and build again')
+      console.error(`[build] if that path is from an earlier build, clear ${path.relative(root, dist)}/ and build again`)
       process.exit(1)
     }
     console.log(`[build] signed and verified: ${rel}`)
