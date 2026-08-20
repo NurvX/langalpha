@@ -1,19 +1,21 @@
-"""User-tier skills: validation, storage limits, and host materialization."""
+"""User-tier skills: validation, storage limits, and host materialization.
+
+Only the turn path's entry points are re-exported here. Everything inside this
+package imports its siblings directly, so a symbol earns a place in this list
+by having a consumer outside the package.
+"""
 
 from src.server.services.user_skills.materialize import (
     EMPTY_USER_SKILL_BUNDLE,
-    UserSkillBundle,
-    UserSkillSpec,
+    drop_archive_if_unused,
     fetch_skill_archive,
     load_user_skill_bundle,
-    resolve_user_skill_dir,
     sandbox_skill_sync_params,
+    skills_delivery_signature,
 )
 from src.server.services.user_skills.validate import (
     SkillValidationError,
-    ValidatedSkill,
     reserved_skill_names,
-    safe_extract_archive,
     valid_command,
     validate_skill_archive,
 )
@@ -21,15 +23,12 @@ from src.server.services.user_skills.validate import (
 __all__ = [
     "EMPTY_USER_SKILL_BUNDLE",
     "SkillValidationError",
-    "UserSkillBundle",
-    "UserSkillSpec",
-    "ValidatedSkill",
+    "drop_archive_if_unused",
     "fetch_skill_archive",
     "load_user_skill_bundle",
     "reserved_skill_names",
-    "resolve_user_skill_dir",
-    "safe_extract_archive",
     "sandbox_skill_sync_params",
+    "skills_delivery_signature",
     "valid_command",
     "validate_skill_archive",
 ]
