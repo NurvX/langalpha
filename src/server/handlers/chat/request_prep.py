@@ -226,6 +226,7 @@ def serialize_context_metadata(
     query_metadata: dict,
     user_input: str,
     mode: str,
+    extra_commands: dict[str, str] | None = None,
 ) -> None:
     """Serialize additional_context into lightweight persistence metadata.
 
@@ -250,7 +251,9 @@ def serialize_context_metadata(
 
     # Detect slash commands from message text when additional_context is absent
     if not request.hitl_response and "additional_context" not in query_metadata:
-        _, early_detected = detect_slash_commands(user_input, mode=mode)
+        _, early_detected = detect_slash_commands(
+            user_input, mode=mode, extra_commands=extra_commands
+        )
         if early_detected:
             query_metadata["additional_context"] = [
                 {"type": "skills", "name": s.name} for s in early_detected
@@ -385,10 +388,23 @@ def _slash_text_target(content: Any) -> tuple[str, dict | None]:
     return "", None
 
 
+def user_skill_commands(config) -> dict[str, str] | None:
+    """Command → skill-name map for the turn user's uploaded skills.
+
+    Read off the resolved ``AgentConfig`` (populated by ``resolve_llm_config``);
+    None when the config is absent or the user has no skills, so slash
+    detection falls back to the builtin map alone.
+    """
+    if config is None or not getattr(config, "user_skills", None):
+        return None
+    return {s.command: s.name for s in config.user_skills}
+
+
 def prepare_skill_contexts(
     messages: list[dict],
     request: ChatRequest,
     mode: str,
+    extra_commands: dict[str, str] | None = None,
 ) -> list[dict]:
     """Resolve which skills this turn activates, for the agent to inject.
 
@@ -408,7 +424,9 @@ def prepare_skill_contexts(
         last_msg = messages[-1]
         msg_text, text_block = _slash_text_target(last_msg.get("content"))
         if msg_text:
-            cleaned_text, detected = detect_slash_commands(msg_text, mode=mode)
+            cleaned_text, detected = detect_slash_commands(
+                msg_text, mode=mode, extra_commands=extra_commands
+            )
             if detected:
                 skill_contexts = detected
                 if cleaned_text != msg_text:

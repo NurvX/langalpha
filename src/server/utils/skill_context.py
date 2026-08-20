@@ -75,6 +75,8 @@ def parse_skill_contexts(
 def detect_slash_commands(
     message_text: str,
     mode: SkillMode | None = None,
+    *,
+    extra_commands: Optional[dict[str, str]] = None,
 ) -> tuple[str, list[SkillContext]]:
     """Detect slash command prefixes in user message text.
 
@@ -88,6 +90,8 @@ def detect_slash_commands(
     Args:
         message_text: Raw user message text
         mode: Optional agent mode filter
+        extra_commands: Additional command → skill-name entries (the caller's
+            user-tier skills) merged over the builtin map.
 
     Returns:
         Tuple of (cleaned_message, detected_skill_contexts)
@@ -96,6 +100,8 @@ def detect_slash_commands(
         return message_text, []
 
     command_map = get_command_to_skill_map(mode)
+    if extra_commands:
+        command_map.update(extra_commands)
     if not command_map:
         return message_text, []
 

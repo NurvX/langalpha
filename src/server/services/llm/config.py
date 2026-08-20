@@ -823,6 +823,16 @@ async def resolve_llm_config(
     _cow()
     config.features = resolved_features
 
+    # Per-user skill tier: uploaded skills materialized to a host dir, plus
+    # builtin disables. One query + a prefs read; a skill-less user costs a
+    # single indexed SELECT and sets nothing.
+    from src.server.services.user_skills import load_user_skill_bundle
+
+    bundle = await load_user_skill_bundle(user_id)
+    config.user_skills = list(bundle.skills)
+    config.disabled_skills = bundle.disabled_builtins
+    config.user_skill_dir = bundle.dir
+
     # Bootstrap LLMConfig when agent_config.yaml has llm: null.
     # The user must have configured a model via the UI or per-request param.
     if config.llm is None:

@@ -122,6 +122,48 @@ async def list_user_features(user_id: str) -> list[FeatureState]:
     return features
 
 
+async def get_disabled_builtin_skills(user_id: str) -> frozenset[str]:
+    """Builtin skills this user has switched off.
+
+    Lives under ``other_preference.skills.disabled_builtins`` — the same
+    server-managed JSONB bag as ``feature_overrides``, so it rides the cached
+    preferences fetch and the agent can never edit it.
+    """
+    prefs = await get_user_preferences(user_id)
+    other = (prefs or {}).get("other_preference") or {}
+    skills = other.get("skills")
+    disabled = skills.get("disabled_builtins") if isinstance(skills, dict) else None
+    if not isinstance(disabled, list):
+        return frozenset()
+    return frozenset(str(name) for name in disabled)
+
+
+async def set_builtin_skill_disabled(
+    user_id: str, name: str, disabled: bool
+) -> frozenset[str]:
+    """Set or clear one builtin skill's per-user disable; return the new set.
+
+    The whole ``skills`` sub-dict is rewritten because the JSONB merge in
+    ``upsert_user_preferences`` is shallow; an emptied set deletes the key
+    outright (``None`` value = per-key delete in the DB layer). Same
+    last-writer-wins posture as ``set_feature_override``.
+    """
+    current = set(await get_disabled_builtin_skills(user_id))
+    if disabled:
+        current.add(name)
+    else:
+        current.discard(name)
+
+    await upsert_user_preferences(
+        user_id,
+        other_preference={
+            "skills": {"disabled_builtins": sorted(current)} if current else None
+        },
+    )
+    await invalidate_user_prefs_cache(user_id)
+    return frozenset(current)
+
+
 async def set_feature_override(
     user_id: str, key: str, enabled: bool | None
 ) -> list[FeatureState]:

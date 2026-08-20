@@ -78,6 +78,7 @@ from .request_prep import (
     process_hitl_response,
     serialize_context_metadata,
     setup_steering_tracking,
+    user_skill_commands,
 )
 from src.server.services.runs.admission import (
     RunScope,
@@ -287,7 +288,10 @@ async def astream_ptc_workflow(
         # (serialize_context_metadata's slash-command branch already guards
         # on `not request.hitl_response`, so this is safe to call always.)
         if not request.hitl_response:
-            serialize_context_metadata(request, query_metadata, user_input, mode="ptc")
+            serialize_context_metadata(
+                request, query_metadata, user_input, mode="ptc",
+                extra_commands=user_skill_commands(config),
+            )
 
         if request.hitl_response:
             feedback_action, query_content, hitl_answers, interrupt_ids = (
@@ -520,11 +524,15 @@ async def astream_ptc_workflow(
         # Only set on normal turns: HITL resumes and checkpoint replays carry no new
         # user message, so the middleware must not inject (mirrors the prior guard).
         if not request.hitl_response and not is_checkpoint_replay:
-            skill_contexts = prepare_skill_contexts(messages, request, mode="ptc")
+            skill_contexts = prepare_skill_contexts(
+                messages, request, mode="ptc",
+                extra_commands=user_skill_commands(config),
+            )
         else:
             skill_contexts = None
         skill_dirs = (
             [local_dir for local_dir, _ in config.skills.local_skill_dirs_with_sandbox()]
+            + ([config.user_skill_dir] if config.user_skill_dir else [])
             if skill_contexts
             else None
         )
