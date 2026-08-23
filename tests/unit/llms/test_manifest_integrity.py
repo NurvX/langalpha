@@ -13,7 +13,13 @@ from src.llms.llm import ModelConfig
 from src.llms.pricing_utils import find_model_pricing
 
 
-_SCHEDULE_KEYS = {"peak_utc", "off_peak", "schedule_anchor"}
+_SCHEDULE_KEYS = {
+    "peak_utc",
+    "off_peak",
+    "schedule_anchor",
+    "peak_days",
+    "peak_days_utc_offset",
+}
 
 
 def _peak_hour_cards(manifest: dict) -> list[tuple[str, str, dict]]:
@@ -239,6 +245,42 @@ class TestTimeOfDayPricing:
                     failures.append(f"{where}: window {window!r} is not 0 <= start < end <= 24")
 
         assert not failures, "Malformed peak_utc:\n" + "\n".join(f"  - {f}" for f in failures)
+
+    def test_peak_day_restrictions_are_well_formed(self, manifest):
+        """A day list the engine cannot read is dropped, and the card then bills
+        peak on the days it meant to exclude -- the same silent overcharge the
+        window checks above guard, one axis over.
+        """
+        failures: list[str] = []
+
+        for provider, model_id, pricing in _peak_hour_cards(manifest):
+            where = f"{provider}/{model_id}"
+            days = pricing.get("peak_days")
+
+            if days is not None:
+                if not isinstance(days, list) or not days:
+                    failures.append(f"{where}: peak_days is {days!r}, want a non-empty list")
+                # ``type is int`` rather than isinstance, matching the engine: a
+                # JSON ``true`` would install Monday and ``false`` nothing at all.
+                elif not all(type(d) is int and 1 <= d <= 7 for d in days):
+                    failures.append(f"{where}: peak_days {days!r} are not ISO weekdays 1-7")
+                elif len(set(days)) != len(days):
+                    failures.append(f"{where}: peak_days {days!r} repeats a day")
+
+            offset = pricing.get("peak_days_utc_offset")
+            if offset is not None and (type(offset) is not int or not -14 <= offset <= 14):
+                failures.append(
+                    f"{where}: peak_days_utc_offset {offset!r} is not an hour offset in -14..14"
+                )
+            if offset is not None and days is None:
+                # The offset only ever shifts the clock the days are read on, so
+                # on its own it changes nothing and reads as a restriction that
+                # is not there.
+                failures.append(f"{where}: peak_days_utc_offset without peak_days")
+
+        assert not failures, "Malformed peak day rule:\n" + "\n".join(
+            f"  - {f}" for f in failures
+        )
 
     def test_peak_windows_do_not_overlap(self, manifest):
         """Overlapping blocks make the schedule ambiguous to read, even though

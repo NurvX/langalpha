@@ -2,7 +2,7 @@
 Pricing calculation utilities for LLM token usage with support for both flat and tiered pricing.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List, Tuple
 import logging
 import re
@@ -12,7 +12,13 @@ logger = logging.getLogger(__name__)
 # Keys describing *when* a card applies rather than what it charges. Stripped
 # from the card handed to the engine so what gets priced, logged and snapshotted
 # is only the rates in force.
-_SCHEDULE_KEYS = ("peak_utc", "off_peak", "schedule_anchor")
+_SCHEDULE_KEYS = (
+    "peak_utc",
+    "off_peak",
+    "schedule_anchor",
+    "peak_days",
+    "peak_days_utc_offset",
+)
 
 # An unstamped record's model name is the vendor's string; bound it before it
 # reaches a log line.
@@ -772,6 +778,54 @@ def _usable_windows(pricing: Dict[str, Any]) -> List[Tuple[int, int]]:
     return windows
 
 
+def _usable_days(pricing: Dict[str, Any]) -> List[int]:
+    """The ISO weekdays this card's peak windows apply on, if it names any.
+
+    An empty list means the card places no day restriction, which is also where
+    every malformed value lands. That direction is deliberate and matches
+    ``_usable_windows``: no restriction leaves the hour windows charging peak,
+    and the rule here is to fail toward the higher rate rather than hand out a
+    discount off a card we just found unreadable.
+    """
+    declared = pricing.get("peak_days")
+    if declared is None:
+        return []
+    if not isinstance(declared, (list, tuple)) or not declared:
+        logger.warning(f"Ignoring unusable peak_days container {declared!r}")
+        return []
+    days: List[int] = []
+    for day in declared:
+        # ``type is int`` rather than isinstance, for the same reason as the
+        # window bounds: bool subclasses int, so a JSON ``true`` would install
+        # Monday and ``false`` would install nothing at all.
+        if type(day) is int and 1 <= day <= 7:
+            days.append(day)
+        else:
+            logger.warning(f"Ignoring unusable peak_days entry {day!r}")
+            return []
+    return days
+
+
+def _days_offset(pricing: Dict[str, Any]) -> int:
+    """Hours to shift UTC by before reading the weekday off the clock.
+
+    A vendor writes its schedule in one local calendar and publishes the hours
+    converted to UTC, which loses the day: DeepSeek's peak windows are Monday to
+    Friday *Beijing* time, and Beijing is eight hours ahead, so from 16:00Z
+    Friday it is already Saturday there and from 16:00Z Sunday it is already
+    Monday. Reading the day off UTC gets those sixteen hours a week wrong.
+
+    Zero -- read the day off UTC -- is the default and the landing place for a
+    malformed value, so a card that names days without naming a calendar still
+    restricts them rather than silently dropping the restriction.
+    """
+    declared = pricing.get("peak_days_utc_offset", 0)
+    if type(declared) is not int or not -14 <= declared <= 14:
+        logger.warning(f"Ignoring unusable peak_days_utc_offset {declared!r}")
+        return 0
+    return declared
+
+
 def schedule_anchor(pricing: Optional[Dict[str, Any]]) -> str:
     """Which end of the call picks the rate window: ``completion`` or ``request``.
 
@@ -832,8 +886,15 @@ def resolve_schedule(
         logger.warning("No usable peak_utc window on a scheduled card, charging peak")
         return card, "peak"
 
-    hour = at.astimezone(timezone.utc).hour
-    if any(start <= hour < end for start, end in windows):
+    # The windows are declared in UTC and read in UTC. Only the *day* is read
+    # on the vendor's own clock -- see ``_days_offset`` for why the two differ.
+    at_utc = at.astimezone(timezone.utc)
+    days = _usable_days(pricing)
+    on_a_peak_day = not days or (
+        at_utc.astimezone(timezone(timedelta(hours=_days_offset(pricing)))).isoweekday()
+        in days
+    )
+    if on_a_peak_day and any(start <= at_utc.hour < end for start, end in windows):
         return card, "peak"
 
     off_peak = pricing.get("off_peak")
