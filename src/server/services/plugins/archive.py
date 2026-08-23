@@ -1,10 +1,15 @@
 """Hardened plugin-package extraction (zip and tar, fully in memory).
 
 Nothing else in src/ extracts archives, so the bomb/traversal posture lives
-here in one place: member count, uncompressed size, and compression ratio are
-capped before any bytes are inflated; devices, absolute paths, and ``..``
-members are rejected outright. Extraction never touches the filesystem — the
-result is a path→bytes map the validators consume.
+here in one place. Every cap is applied twice: once from the header, so an
+honest bomb is refused without inflating a byte, and again on the bytes that
+actually came out, because a header is written by whoever built the archive —
+a member can declare twenty bytes and carry a stream that expands to
+gigabytes. The second half is what makes the caps real, so every inflation on
+either path goes through a reader bounded by the budget it is spending.
+Devices, absolute paths, and ``..`` members are rejected outright. Extraction
+never touches the filesystem — the result is a path→bytes map the validators
+consume.
 
 A link member contributes the *content* of whatever it points at inside the
 archive, and is skipped with a diagnostic when it points anywhere else. It is
@@ -20,7 +25,10 @@ Forge tarballs (and zips exported the same way) wrap the repo in a single
 entry and ``plugin.json`` is not already at the root.
 """
 
+import bz2
+import gzip
 import io
+import lzma
 import stat
 import tarfile
 import zipfile
@@ -38,6 +46,10 @@ MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 200
 # A link may point at another link; the cap is what stops a cycle.
 MAX_LINK_HOPS = 8
+# A zip stores a link's target as the member's content, so finding out where
+# one points means inflating bytes chosen by whoever built the archive. The
+# target is a path, so it answers to a path-sized cap of its own.
+MAX_LINK_TARGET_BYTES = 4096
 
 _SPEC_ARCHIVE = "https://agent-plugins.org/specification"
 
@@ -145,6 +157,34 @@ def _resolve_links(
     return unresolved
 
 
+def _inflate(zf: zipfile.ZipFile, info: zipfile.ZipInfo, limit: int) -> bytes:
+    """Inflate one member, stopping just past ``limit`` however big it claims.
+
+    Every guard the caller applies first reads the central directory, which is
+    written by whoever built the archive. ``ZipFile.read`` inflates the whole
+    DEFLATE stream before noticing the CRC disagrees with the size that was
+    declared, so a member claiming twenty bytes still costs whatever its
+    stream really expands to. Reading through an open handle bounds the
+    inflation itself, which is the only cap a dishonest header cannot walk
+    past. Returns up to ``limit + 1`` bytes so the caller can tell the
+    difference between a member that fits and one that does not.
+    """
+    try:
+        with zf.open(info) as handle:
+            return handle.read(limit + 1)
+    except Exception as e:
+        # A corrupt deflate payload raises zlib.error, and a size that does
+        # not match its own CRC raises BadZipFile; only the ZipFile
+        # constructor is wrapped. An interrupted upload is the ordinary way
+        # to get here, so it owes the same 422 as any unreadable archive
+        # rather than a 500.
+        raise _fatal(
+            f"member {info.filename!r} could not be decompressed: {e}",
+            code="unreadable",
+            target=info.filename,
+        ) from e
+
+
 def _extract_zip(raw: bytes) -> tuple[dict[str, bytes], dict[str, str]]:
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw))
@@ -174,14 +214,19 @@ def _extract_zip(raw: bytes) -> tuple[dict[str, bytes], dict[str, str]]:
             # Only the type nibble matters; many writers store bare permission
             # bits (or nothing), which is a regular file.
             mode = info.external_attr >> 16
+            path = "/".join(segments)
             if stat.S_ISLNK(mode):
-                # A zip symlink stores its target as the member's content.
-                path = "/".join(segments)
+                target = _inflate(zf, info, MAX_LINK_TARGET_BYTES)
+                if len(target) > MAX_LINK_TARGET_BYTES:
+                    raise _fatal(
+                        f"link {info.filename!r} has a target longer than "
+                        f"{MAX_LINK_TARGET_BYTES} bytes",
+                        code="link_target_too_long",
+                        target=info.filename,
+                    )
                 links[path] = (
                     _link_target(
-                        path,
-                        zf.read(info).decode("utf-8", "replace"),
-                        hard=False,
+                        path, target.decode("utf-8", "replace"), hard=False
                     )
                     or ""
                 )
@@ -192,35 +237,37 @@ def _extract_zip(raw: bytes) -> tuple[dict[str, bytes], dict[str, str]]:
                     code="special_member",
                     target=info.filename,
                 )
-            total += info.file_size
-            if total > MAX_UNCOMPRESSED_BYTES:
-                raise _fatal(
-                    "archive exceeds the uncompressed size limit "
-                    f"({MAX_UNCOMPRESSED_BYTES // (1024 * 1024)} MiB)",
-                    code="too_large",
-                )
-            if info.file_size > MAX_COMPRESSION_RATIO * max(
-                info.compress_size, 1
-            ):
+            # Both caps are read off the header first so an honest bomb is
+            # refused without inflating a byte, and then enforced again on
+            # what actually came out, which is the half a lying header cannot
+            # walk past. Whichever cap is nearer bounds the read, so no member
+            # ever costs more than the budget it is about to be refused for.
+            ratio_cap = MAX_COMPRESSION_RATIO * max(info.compress_size, 1)
+            if info.file_size > ratio_cap:
                 raise _fatal(
                     f"member {info.filename!r} exceeds the compression-ratio "
                     f"limit ({MAX_COMPRESSION_RATIO}:1)",
                     code="compression_ratio",
                     target=info.filename,
                 )
-            try:
-                files["/".join(segments)] = zf.read(info)
-            except Exception as e:
-                # A corrupt deflate payload raises zlib.error, not a zipfile
-                # error, and only the constructor above is wrapped. An
-                # interrupted upload is the ordinary way to get here, so it
-                # owes the same 422 as any other unreadable archive rather
-                # than a 500.
+            data = _inflate(
+                zf, info, min(MAX_UNCOMPRESSED_BYTES - total, ratio_cap)
+            )
+            if len(data) > ratio_cap:
                 raise _fatal(
-                    f"member {info.filename!r} could not be decompressed: {e}",
-                    code="unreadable",
+                    f"member {info.filename!r} exceeds the compression-ratio "
+                    f"limit ({MAX_COMPRESSION_RATIO}:1)",
+                    code="compression_ratio",
                     target=info.filename,
-                ) from e
+                )
+            total += len(data)
+            if total > MAX_UNCOMPRESSED_BYTES:
+                raise _fatal(
+                    "archive exceeds the uncompressed size limit "
+                    f"({MAX_UNCOMPRESSED_BYTES // (1024 * 1024)} MiB)",
+                    code="too_large",
+                )
+            files[path] = data
     return files, links
 
 
@@ -244,14 +291,64 @@ def _members(tf: tarfile.TarFile) -> Iterator[tarfile.TarInfo]:
             ) from e
 
 
+class _CappedReader:
+    """A read-only view of a decompressed tar stream, bounded by the budget.
+
+    tarfile inflates a GNU long-name or pax header's payload while *parsing
+    the header*, before that member ever reaches the loop below, so a member
+    declaring a 400 MiB name costs 400 MiB whatever the loop checks
+    afterwards. Unwrapping the outer stream here rather than letting
+    ``tarfile`` do it puts every read tarfile makes through this cap, which is
+    the only place a size the archive wrote can be disbelieved.
+    """
+
+    def __init__(self, inner, limit: int) -> None:
+        self._inner = inner
+        self._limit = limit
+
+    def read(self, size: int = -1) -> bytes:
+        remaining = self._limit - self._inner.tell()
+        if remaining <= 0:
+            raise _fatal(
+                "archive exceeds the uncompressed size limit "
+                f"({self._limit // (1024 * 1024)} MiB)",
+                code="too_large",
+            )
+        return self._inner.read(
+            remaining if size is None or size < 0 else min(size, remaining)
+        )
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return self._inner.seek(offset, whence)
+
+    def tell(self) -> int:
+        return self._inner.tell()
+
+
+_DECOMPRESSORS = (
+    (b"\x1f\x8b", lambda f: gzip.GzipFile(fileobj=f)),
+    (b"BZh", bz2.BZ2File),
+    (b"\xfd7zXZ\x00", lzma.LZMAFile),
+)
+
+
+def _tar_stream(raw: bytes) -> _CappedReader:
+    inner = io.BytesIO(raw)
+    for magic, opener in _DECOMPRESSORS:
+        if raw.startswith(magic):
+            inner = opener(inner)
+            break
+    return _CappedReader(inner, MAX_UNCOMPRESSED_BYTES)
+
+
 def _extract_tar(raw: bytes) -> tuple[dict[str, bytes], dict[str, str]]:
     try:
-        tf = tarfile.open(fileobj=io.BytesIO(raw), mode="r:*")
+        tf = tarfile.open(fileobj=_tar_stream(raw), mode="r:")
     except (tarfile.TarError, EOFError) as e:
         # EOFError, not just TarError: an upload cut short in its first bytes
-        # ends the gzip stream before any header, and open's r:* probe only
-        # retries on ReadError/CompressionError. Left uncaught it reaches the
-        # router's bare handler as a 500, for what is a client-side fault.
+        # leaves too little for a header, and open raises it rather than a
+        # TarError. Left uncaught it reaches the router's bare handler as a
+        # 500, for what is a client-side fault.
         raise _fatal(f"not a valid tar archive: {e}", code="unreadable") from e
 
     files: dict[str, bytes] = {}
@@ -304,6 +401,10 @@ def _extract_tar(raw: bytes) -> tuple[dict[str, bytes], dict[str, str]]:
                     continue
                 with fobj:
                     files["/".join(segments)] = fobj.read()
+            except PluginFatal:
+                # The capped reader's own verdict, which already says exactly
+                # what it refused and why.
+                raise
             except Exception as e:
                 # A truncated .tar.gz raises EOFError here rather than at open:
                 # the stream only discovers the missing end-of-stream marker

@@ -12,11 +12,13 @@ import io
 import json
 import stat
 import tarfile
+import tracemalloc
 import zipfile
 from pathlib import Path
 
 import pytest
 
+from src.server.services.plugins import archive
 from src.server.services.plugins.errors import PluginAmbiguous, PluginFatal
 from src.server.services.plugins.fetch import (
     compose_subdir_url,
@@ -853,6 +855,82 @@ class TestArchiveHardening:
         with pytest.raises(PluginFatal) as exc:
             validate_package(b"\x00\x01not-an-archive")
         assert any(d.code == "unreadable" for d in exc.value.diagnostics)
+
+    @staticmethod
+    def _bomb(*, symlink: bool, lie: bool, payload: int = 16 * 1024 * 1024):
+        """A ~16 KiB zip carrying a member that inflates to ``payload``."""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("plugin.json", TestArchiveHardening.MANIFEST)
+            info = zipfile.ZipInfo("payload.bin")
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3  # Unix, so the mode bits are read at all
+            info.external_attr = (
+                (stat.S_IFLNK | 0o777) << 16 if symlink else (0o644 << 16)
+            )
+            zf.writestr(info, b"\0" * payload)
+        raw = bytearray(buf.getvalue())
+        if lie:
+            # The uncompressed-size field, in the local header at offset 22 and
+            # in the central directory at 24. Every header guard reads it, and
+            # nothing makes it true.
+            for sig, size_off, name_off in (
+                (b"PK\x03\x04", 22, 30), (b"PK\x01\x02", 24, 46)
+            ):
+                idx = raw.find(sig)
+                while idx != -1:
+                    if raw[idx + name_off:idx + name_off + 11] == b"payload.bin":
+                        raw[idx + size_off:idx + size_off + 4] = (
+                            (20).to_bytes(4, "little")
+                        )
+                        break
+                    idx = raw.find(sig, idx + 4)
+        return bytes(raw)
+
+    def test_a_link_target_is_inflated_under_a_cap_of_its_own(self):
+        """A link's target is its member's content, so reading one means
+        inflating attacker-chosen bytes. The ratio guard sits on the
+        regular-file path, and this member never reaches it: the same bomb
+        refused for free as a file was inflated in full once it was marked a
+        link."""
+        with pytest.raises(PluginFatal) as exc:
+            validate_package(self._bomb(symlink=True, lie=False))
+        assert any(
+            d.code == "link_target_too_long" for d in exc.value.diagnostics
+        )
+
+    def test_a_lying_size_field_does_not_buy_an_unbounded_read(self):
+        """Both header guards are computed from a number the archive wrote.
+        ``ZipFile.read`` inflates the whole stream before noticing it
+        disagrees with the CRC, so a member declaring twenty bytes still cost
+        whatever it really expanded to; the refusal came after the damage."""
+        payload = 16 * 1024 * 1024
+        raw = self._bomb(symlink=False, lie=True, payload=payload)
+        tracemalloc.start()
+        try:
+            with pytest.raises(PluginFatal):
+                validate_package(raw)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert peak < payload // 2
+
+    def test_a_tar_header_extension_cannot_outgrow_the_budget(
+        self, monkeypatch
+    ):
+        """tarfile inflates a GNU long name while parsing the header, before
+        the member reaches the loop that checks sizes. Unbounded, a 400 MiB
+        name cost 2 GB and escaped as an OSError, which is a 500 for what is a
+        malformed upload."""
+        monkeypatch.setattr(archive, "MAX_UNCOMPRESSED_BYTES", 1024 * 1024)
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz", format=tarfile.GNU_FORMAT) as tf:
+            info = tarfile.TarInfo("plugin.json")
+            info.size = len(self.MANIFEST)
+            tf.addfile(info, io.BytesIO(self.MANIFEST))
+            tf.addfile(tarfile.TarInfo("a" * (4 * 1024 * 1024)))
+        with pytest.raises(PluginFatal):
+            validate_package(buf.getvalue())
 
     def test_single_root_dir_is_stripped(self):
         """Forge tarballs wrap everything in <repo>-<sha>/ — install must
