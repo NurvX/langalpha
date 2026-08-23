@@ -386,6 +386,14 @@
               10
             ]
           ],
+          "peak_days": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "peak_days_utc_offset": 8,
           "off_peak": {
             "input": 0.66,
             "cached_input": 0.022,
@@ -415,6 +423,14 @@
               10
             ]
           ],
+          "peak_days": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "peak_days_utc_offset": 8,
           "off_peak": {
             "input": 0.22,
             "cached_input": 0.007,

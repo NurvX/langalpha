@@ -224,3 +224,82 @@ class TestAnUnreadableScheduleCannotDiscount:
         card, window = resolve_schedule(no_discount, _at(12))
         assert window == "off_peak"
         assert card["input"] == 10.0
+
+
+# A card whose peak block reaches past 16:00 UTC, which is the only stretch of
+# the week where the UTC and Beijing calendars name different days. DeepSeek's
+# real windows both close before it, so a card built from the shipped manifest
+# cannot tell a UTC weekday from a Beijing one -- the two price identically at
+# all 168 hours. Synthetic, like every card in this file, so the contract is
+# pinned where it is visible rather than where today's rates happen to hide it.
+LATE_CARD = {
+    "input": 10.0,
+    "output": 40.0,
+    "unit": "per_1m_tokens",
+    "peak_utc": [[15, 20]],
+    "peak_days": [1, 2, 3, 4, 5],
+    "peak_days_utc_offset": 8,
+    "off_peak": {"input": 5.0, "output": 20.0},
+}
+
+WEEKDAY_CARD = {**CARD, "peak_days": [1, 2, 3, 4, 5], "peak_days_utc_offset": 8}
+
+
+def _on(year, month, day, hour, minute=0):
+    return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+
+
+class TestPeakDays:
+    """A vendor that runs its peak windows on weekdays only.
+
+    Without a day axis the discount is billed at the peak rate for two days a
+    week, and every hour-based assertion above still passes.
+    """
+
+    def test_a_weekend_hour_inside_a_window_is_off_peak(self):
+        # 2026-01-03 is a Saturday, 02:00 UTC is inside the first block.
+        assert resolve_schedule(WEEKDAY_CARD, _on(2026, 1, 3, 2))[1] == "off_peak"
+        assert resolve_schedule(WEEKDAY_CARD, _on(2026, 1, 4, 7))[1] == "off_peak"
+
+    def test_the_same_hour_on_a_weekday_is_still_peak(self):
+        """The day rule must not leak into the days the windows do apply on."""
+        assert resolve_schedule(WEEKDAY_CARD, _on(2026, 1, 5, 2))[1] == "peak"
+        assert resolve_schedule(WEEKDAY_CARD, _on(2026, 1, 1, 7))[1] == "peak"
+
+    def test_a_card_without_peak_days_is_unrestricted(self):
+        """The overwhelming majority of scheduled cards name no days, and they
+        must keep billing peak on a Saturday inside a window."""
+        assert resolve_schedule(CARD, _on(2026, 1, 3, 2))[1] == "peak"
+
+    def test_the_day_is_read_on_the_vendors_clock_not_utc(self):
+        """16:00Z Friday is already Saturday in Beijing, and 16:00Z Sunday is
+        already Monday. Read off UTC, both land on the wrong rate."""
+        assert resolve_schedule(LATE_CARD, _on(2026, 1, 2, 15, 59))[1] == "peak"
+        assert resolve_schedule(LATE_CARD, _on(2026, 1, 2, 16, 0))[1] == "off_peak"
+        assert resolve_schedule(LATE_CARD, _on(2026, 1, 4, 15, 59))[1] == "off_peak"
+        assert resolve_schedule(LATE_CARD, _on(2026, 1, 4, 16, 0))[1] == "peak"
+
+    def test_days_without_an_offset_are_counted_in_utc(self):
+        """Zero is the default, so a card that names days without naming a
+        calendar still restricts them -- it does not lose the restriction."""
+        utc_card = {**CARD, "peak_days": [1, 2, 3, 4, 5]}
+        assert resolve_schedule(utc_card, _on(2026, 1, 3, 2))[1] == "off_peak"
+        assert resolve_schedule(utc_card, _on(2026, 1, 5, 2))[1] == "peak"
+
+    def test_an_unreadable_day_list_charges_peak_rather_than_discounting(self):
+        """Same direction as an unreadable window: never guess downward off a
+        card that was just found malformed."""
+        for broken in ([], "1-5", [0], [8], [True], [1, "2"], 5):
+            card = {**CARD, "peak_days": broken}
+            assert resolve_schedule(card, _on(2026, 1, 3, 2))[1] == "peak", broken
+
+    def test_an_unreadable_offset_falls_back_to_utc(self):
+        for broken in ("8", 99, True, None):
+            card = {**WEEKDAY_CARD, "peak_days_utc_offset": broken}
+            assert resolve_schedule(card, _on(2026, 1, 3, 2))[1] == "off_peak", broken
+
+    def test_the_day_keys_never_reach_the_rate_card(self):
+        """They describe when the card applies, not what it charges, so a
+        snapshot of the priced card must not carry them."""
+        card, _ = resolve_schedule(WEEKDAY_CARD, _on(2026, 1, 5, 2))
+        assert "peak_days" not in card and "peak_days_utc_offset" not in card
