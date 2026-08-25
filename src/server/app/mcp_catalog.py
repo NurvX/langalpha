@@ -18,6 +18,8 @@ Endpoints (user-scoped):
 - DELETE /api/v1/mcp/servers/{name}
 - GET    /api/v1/mcp/builtin-servers
 - PATCH  /api/v1/mcp/builtin-servers/{name}/enabled
+- GET    /api/v1/mcp/brokerages
+- PATCH  /api/v1/mcp/brokerages/{name}/enabled
 """
 
 from __future__ import annotations
@@ -32,7 +34,12 @@ from src.server.database.mcp_oauth import (
     get_connection,
     list_connections,
 )
-from src.server.services.mcp_config import builtin_names
+from src.server.services.brokerages import (
+    BROKERAGES,
+    Brokerage,
+    brokerage_by_name,
+)
+from src.server.services.mcp_config import builtin_names, reserved_catalog_names
 from src.server.database.mcp_servers import (
     MAX_CATALOG_SERVERS_PER_USER,
     create_catalog_server,
@@ -51,6 +58,7 @@ from src.server.database.user_vault_secrets import (
     get_user_secret_names,
 )
 from src.server.models.mcp_server import (
+    BrokerageList,
     BuiltinServer,
     BuiltinServerList,
     CatalogServer,
@@ -59,11 +67,16 @@ from src.server.models.mcp_server import (
     McpServerInput,
     WorkspaceScopedServer,
     _format_validation_error,
+    brokerage_to_response,
     catalog_row_to_response,
     isolation_warnings,
     parse_mcp_servers_payload,
 )
-from src.server.services.mcp_catalog import apply_catalog_edit, detach_warning
+from src.server.services.mcp_catalog import (
+    apply_catalog_edit,
+    detach_warning,
+    reject_reserved_catalog_name,
+)
 from src.server.services.mcp_import import ImportScope, run_mcp_import
 from src.server.services.vault_invalidation import USER_TIER, after_secret_change
 from src.server.utils.api import CurrentUserId, handle_api_exceptions
@@ -71,6 +84,25 @@ from src.server.utils.api import CurrentUserId, handle_api_exceptions
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/mcp", tags=["MCP Catalog"])
+
+
+async def _oauth_status_for_server(
+    user_id: str, name: str
+) -> ConnectionStatus | None:
+    """One row's status, for a response that is only ever about one row.
+
+    Same swallow as the map above -- a status is decoration, and losing it must
+    not fail the write that just succeeded.
+    """
+    try:
+        conn = await get_connection(user_id, name)
+        return ConnectionStatus(conn.status) if conn else None
+    except Exception:
+        logger.warning(
+            "[mcp_catalog] OAuth connection lookup failed for %s/%s", user_id, name,
+            exc_info=True,
+        )
+        return None
 
 
 async def _oauth_status_by_server(user_id: str) -> dict[str, ConnectionStatus]:
@@ -213,11 +245,7 @@ async def create_server(
         server = McpServerInput(**body)
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=_format_validation_error(e))
-    if server.name in builtin_names():
-        raise HTTPException(
-            status_code=409,
-            detail=f"{server.name!r} collides with a built-in server name",
-        )
+    reject_reserved_catalog_name(server.name)
     try:
         row = await create_catalog_server(
             user_id, server.name, **server.to_catalog_fields()
@@ -354,7 +382,7 @@ async def import_servers(
     report = await run_mcp_import(
         parsed,
         scope=ImportScope(
-            reserved_names=builtin_names(),
+            reserved_names=reserved_catalog_names(),
             existing_names=existing_names,
             current_count=len(existing_names),
             cap=MAX_CATALOG_SERVERS_PER_USER,
@@ -408,25 +436,46 @@ async def _relay_execution_warning(user_id: str, name: str) -> str | None:
     return relay_reachability_warning(provider, effective_relay_base_url(provider))
 
 
+async def _apply_catalog_enabled(
+    user_id: str, name: str, enabled: bool
+) -> tuple[dict | None, str | None]:
+    """The one place a *switch* flips a catalog row. Returns the row and
+    whatever the user is owed about it, or ``(None, None)`` if it is gone.
+
+    Every switch routes through here so no caller can end up with half of what
+    another does: the DB layer bumps every workspace's ``mcp_config_version``
+    in the same transaction (next-acquire convergence), and disable also has to
+    bite now rather than at next acquire, which ``revoke_live_grants`` carries
+    the reasoning for.
+
+    The column itself has other writers — promoting a workspace fork, and the
+    disable an edit does before rewriting a row. They reach the DB toggle
+    directly and mean to: neither is a user flipping a switch, so neither owes
+    a relay warning, and the edit path is mid-transaction when it runs.
+    """
+    from src.server.services.mcp_oauth.lifecycle import revoke_live_grants
+
+    row = await set_catalog_server_enabled(user_id, name, enabled)
+    if row is None:
+        return None, None
+    if enabled:
+        return row, await _relay_execution_warning(user_id, name)
+    await revoke_live_grants(user_id, [name])
+    return row, None
+
+
 @router.patch("/servers/{name}/enabled")
 @handle_api_exceptions("toggle MCP catalog server", logger)
 async def set_enabled(
     name: str, body: EnabledInput, user_id: CurrentUserId
 ) -> dict:
-    """Flip a user server live/inert. The DB layer bumps every workspace's
-    ``mcp_config_version`` in the same transaction (next-acquire convergence)."""
-    from src.server.services.mcp_oauth.lifecycle import revoke_live_grants
-
-    found = await set_catalog_server_enabled(user_id, name, body.enabled)
-    if not found:
+    """Flip a user server live/inert."""
+    row, warning = await _apply_catalog_enabled(user_id, name, body.enabled)
+    if row is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     out: dict = {"name": name, "enabled": body.enabled}
-    if body.enabled:
-        warning = await _relay_execution_warning(user_id, name)
-        if warning:
-            out["warnings"] = [warning]
-    else:
-        await revoke_live_grants(user_id, [name])
+    if warning:
+        out["warnings"] = [warning]
     return out
 
 
@@ -498,3 +547,117 @@ async def set_builtin_enabled(
         raise HTTPException(status_code=404, detail="Unknown builtin server")
     await set_user_builtin_disable(user_id, name, disabled=not body.enabled)
     return {"name": name, "enabled": body.enabled}
+
+
+# ---------------------------------------------------------------------------
+# Brokerages — shipped connectors, off until the user turns one on
+# ---------------------------------------------------------------------------
+
+
+@router.get("/brokerages")
+@handle_api_exceptions("list brokerage connectors", logger)
+async def list_brokerages(user_id: CurrentUserId) -> BrokerageList:
+    """The brokerage connectors this build ships.
+
+    Static and user-independent: whether one is configured is answered by the
+    catalog list, which the page already holds and joins on ``name``. Behind
+    the same auth as everything else here regardless — the one open route on a
+    router reads as an oversight long before it reads as a decision.
+    """
+    return BrokerageList(brokerages=[brokerage_to_response(b) for b in BROKERAGES])
+
+
+async def _create_brokerage_row(user_id: str, brokerage: Brokerage) -> None:
+    """Bring a shipped brokerage into the user's catalog, inert.
+
+    Inert and then toggled, never created live: the switch is the only thing
+    that should decide a row's enabled state, and it is the one that already
+    knows what each direction owes an OAuth connection.
+    """
+    if brokerage.name in builtin_names():
+        raise HTTPException(
+            status_code=409,
+            detail=f"{brokerage.name!r} collides with a built-in server name",
+        )
+    try:
+        # Through the same validator every user-written row passes, so our own
+        # definition cannot be the one payload that skips the URL policy. Its
+        # ValidationError is a ValueError, so it answers here rather than
+        # escaping the decorator as an untyped 500.
+        server = McpServerInput(
+            name=brokerage.name,
+            transport="http",
+            url=brokerage.url,
+            description=brokerage.description,
+        )
+        await create_catalog_server(user_id, server.name, **server.to_catalog_fields())
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    logger.info(
+        "[mcp_catalog] brokerage %s configured for user %s", brokerage.name, user_id
+    )
+
+
+@router.patch("/brokerages/{name}/enabled")
+@handle_api_exceptions("toggle brokerage connector", logger)
+async def set_brokerage_enabled(
+    name: str, body: EnabledInput, user_id: CurrentUserId
+) -> CatalogServer:
+    """Turn a shipped brokerage on or off, creating its row the first time.
+
+    One route for both, so the page never has to know whether a row exists yet
+    — which also keeps it from being the thing that chooses the endpoint URL.
+
+    An existing row is toggled and never rewritten. Once it is the user's, its
+    URL is theirs to edit, and a row they built themselves under this name is
+    still theirs; silently restoring our address on every enable would undo a
+    deliberate edit at the moment they were only reaching for the switch.
+    """
+    brokerage = brokerage_by_name(name)
+    if brokerage is None:
+        raise HTTPException(status_code=404, detail="Unknown brokerage")
+
+    existing = await get_catalog_server(user_id, name)
+    # A plugin-owned row under a brokerage name is not the user's own edit, and
+    # this route would adopt it and hand it the vendor's identity: the tab joins
+    # by name, so it would be presented as this broker while Connect went to
+    # whatever address the plugin chose. New installs cannot claim these names
+    # any more; one installed before they were reserved still can, so refuse it
+    # here rather than trusting that no such row exists. The row stays usable
+    # on the Connectors tab, under the plugin that owns it.
+    if existing and existing.get("plugin_id"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{name!r} is a server installed by a plugin, so it cannot be "
+                "managed as a brokerage connector. Open it on the Connectors tab."
+            ),
+        )
+
+    if existing is None:
+        if not body.enabled:
+            raise HTTPException(
+                status_code=404,
+                detail=f"{name!r} is not configured, so there is nothing to disable",
+            )
+        await _create_brokerage_row(user_id, brokerage)
+
+    # The same apply every other switch on this page goes through. These are the
+    # rows that can place orders, so a weaker disable than the server beside them
+    # is the last thing they should have.
+    row, warning = await _apply_catalog_enabled(user_id, name, body.enabled)
+    if row is None:
+        # Deleted between the read and the write.
+        raise HTTPException(status_code=404, detail="MCP server not found")
+
+    # A recreate over a name whose OAuth connection outlived the old row is
+    # already connected, so read the status rather than assuming none. One row,
+    # so one lookup: listing every connection to decorate a single response is
+    # a second round trip that answers the same question.
+    response = catalog_row_to_response(
+        row, oauth_status=await _oauth_status_for_server(user_id, name)
+    )
+    if warning:
+        response.warnings = [warning]
+    return response
+
