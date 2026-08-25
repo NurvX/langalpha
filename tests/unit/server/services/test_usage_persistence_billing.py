@@ -79,7 +79,7 @@ class TestTrackLlmUsageBilling:
         assert svc._has_platform_calls is True
 
     @pytest.mark.asyncio
-    async def test_has_platform_calls_false_when_no_platform_cost(self):
+    async def test_has_platform_calls_false_when_every_call_is_own_key(self):
         svc = _make_service()
 
         mock_result = {
@@ -94,7 +94,7 @@ class TestTrackLlmUsageBilling:
             f"{CORE_MODULE}.calculate_cost_from_per_call_records",
             return_value=mock_result,
         ):
-            await svc.track_llm_usage([{"dummy": "record"}])
+            await svc.track_llm_usage([{"billing_type": "byok"}])
 
         assert svc._has_platform_calls is False
 

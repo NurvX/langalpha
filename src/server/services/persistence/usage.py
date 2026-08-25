@@ -142,8 +142,14 @@ class UsagePersistenceService:
             total_cost_usd = token_usage_with_cost.get("total_cost", 0.0)
             self._token_credits = Decimal(str(platform_cost_usd)) * Decimal(str(self.credit_conversion_rate))
 
-            # Determine if any platform calls occurred (for is_byok flag)
-            self._has_platform_calls = platform_cost_usd > 0
+            # Whether the platform's key did the work, not whether that work
+            # priced to something. A call can price to zero and still have run
+            # on the platform's key, so deriving this from cost files the turn
+            # under the user's own key instead. billing_type is set from the
+            # absence of a user key override, which is the fact being asked here.
+            self._has_platform_calls = any(
+                r.get("billing_type", "platform") == "platform" for r in per_call_records
+            )
 
             # OTel counters (langalpha.llm.tokens, langalpha.credits) are
             # sourced from conversation_usages via ObservableCounter — see
