@@ -102,13 +102,18 @@ const DropdownMenuSubTrigger = React.forwardRef<
 ))
 DropdownMenuSubTrigger.displayName = DropdownMenuPrimitive.SubTrigger.displayName
 
+// Radix anchors a submenu to its trigger *row*, which the parent panel's
+// border + p-1 inset 5px from the panel edge — so the stock offset of 0 opens
+// the submenu 5px on top of the panel. Clear that, then add the same 4px gap
+// DropdownMenuContent leaves against its own trigger.
 const DropdownMenuSubContent = React.forwardRef<
   React.ComponentRef<typeof DropdownMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
->(({ className, collisionPadding = 8, ...props }, ref) => (
+>(({ className, sideOffset = 9, collisionPadding = 8, ...props }, ref) => (
   <DropdownMenuPrimitive.Portal>
     <DropdownMenuPrimitive.SubContent
       ref={ref}
+      sideOffset={sideOffset}
       collisionPadding={collisionPadding}
       className={cn(
         "z-[1030] min-w-[8rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto overflow-x-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg",
