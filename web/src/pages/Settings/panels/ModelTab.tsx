@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Pin, Settings2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Select } from '@/components/ui/select';
@@ -24,7 +24,33 @@ export function ModelTab() {
   const { user: authUser } = useUser();
   const { preferences: prefsData } = usePreferences();
   const updatePrefsMutation = useUpdatePreferences();
-  const { models: visibleModels, modelAccessMap, systemDefaults: hookSystemDefaults, validModelNames, compactionProfiles, searchProviders, isLoading: isModelsLoading } = useAllModels();
+  const { models: visibleModels, modelAccessMap, systemDefaults: hookSystemDefaults, validModelNames, rawModels, compactionProfiles, searchProviders, isLoading: isModelsLoading, rawApiResponse } = useAllModels();
+
+  // Gate cleanup on the catalog itself, not on validModelNames: useAllModels
+  // folds the user's custom models into that set, so one custom model makes it
+  // non-empty while the server catalog is still unavailable, and every saved
+  // built-in would read as stale.
+  const catalogLoaded = useMemo(() => {
+    if (!rawApiResponse) return false;
+    const groups = (rawApiResponse.models ?? rawApiResponse) as Record<string, { models?: string[] } | undefined>;
+    return Object.values(groups).some(g => (g?.models?.length ?? 0) > 0);
+  }, [rawApiResponse]);
+
+  // Clean against existence, not access. validModelNames is what the user can
+  // reach right now: buildVisibleModels falls back to the configured-provider
+  // filter whenever the platform response is null, so a slow or failed
+  // /api/auth/models leaves it empty for a user with no BYOK keys, and its
+  // query is not part of useAllModels' isLoading. Cleaning against it would
+  // also delete a preference the moment a tier lapses or a key is removed, for
+  // a model that never went anywhere. rawModels is the pre-filter catalog plus
+  // the user's custom models, which is the question being asked.
+  const knownModelNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const group of Object.values(rawModels)) {
+      for (const m of group.models ?? []) names.add(m);
+    }
+    return names;
+  }, [rawModels]);
   const { t } = useTranslation();
 
   // Model tab state
@@ -151,12 +177,19 @@ export function ModelTab() {
         if (p.use_response_api) entry.use_response_api = true;
         return entry;
       });
-    const cleanStarred = s.starredModels.filter(m => validModelNames.has(m));
-    const cleanFallback = s.fallbackModels.filter(m => validModelNames.has(m));
+    // An unloaded catalog is not a catalog of zero models. Validating against
+    // it would null preferred, flash, compaction, fetch, starred and fallback
+    // in a single write, with no undo. Keep the names untouched instead and let
+    // a later save do the cleanup once the catalog is in. Unrelated keys on
+    // this payload still save either way.
+    const known = (m: string) => !catalogLoaded || knownModelNames.has(m);
+
+    const cleanStarred = s.starredModels.filter(known);
+    const cleanFallback = s.fallbackModels.filter(known);
     const activeProviderKeys = new Set(s.byokProviders.filter(p => p.has_key).map(p => p.provider));
     const cleanCustomProviders = customProvidersList.filter(cp => activeProviderKeys.has(cp.name as string));
-    const cleanCustomModels = s.customModels.filter(cm => activeProviderKeys.has(cm.provider) || validModelNames.has(cm.name));
-    const cleanModelRef = (val: string) => validModelNames.has(val) ? val : null;
+    const cleanCustomModels = s.customModels.filter(cm => activeProviderKeys.has(cm.provider) || known(cm.name));
+    const cleanModelRef = (val: string) => known(val) ? val : null;
 
     await updatePrefsMutation.mutateAsync({
       other_preference: {
@@ -179,7 +212,7 @@ export function ModelTab() {
         ...(s.canCustomizeSearchDepth ? { search_depth: s.searchDepth || null } : {}),
       },
     });
-  }, [validModelNames, updatePrefsMutation]);
+  }, [knownModelNames, catalogLoaded, updatePrefsMutation]);
 
   const { trigger: triggerModelSaveRaw, flush: flushModelSave, status: modelSaveStatus } = useDebouncedSave(saveModelPrefs, 500);
   const triggerModelSave = useCallback(() => { dirtyRef.current = true; triggerModelSaveRaw(); }, [triggerModelSaveRaw]);
@@ -188,15 +221,19 @@ export function ModelTab() {
   // on unmount — flush a pending edit so it isn't silently lost.
   useEffect(() => () => { if (dirtyRef.current) flushModelSave(); }, [flushModelSave]);
 
-  // Auto-clean stale starred/fallback models on load
+  // Auto-clean stale starred/fallback models on load. starredModels and
+  // fallbackModels are in the deps because loadModelTabData sets them after an
+  // await: without them this only ran before the stored values arrived, and the
+  // fallback chips render straight from state (ModelTierConfig's
+  // FallbackModelsPicker maps `selected` unfiltered), so a model that no longer
+  // exists stayed on screen until the models query happened to refetch.
   useEffect(() => {
-    if (validModelNames.size === 0) return;
-    const cleanS = starredModels.filter(m => validModelNames.has(m));
+    if (!catalogLoaded) return;
+    const cleanS = starredModels.filter(m => knownModelNames.has(m));
     if (cleanS.length !== starredModels.length) setStarredModels(cleanS);
-    const cleanF = fallbackModels.filter(m => validModelNames.has(m));
+    const cleanF = fallbackModels.filter(m => knownModelNames.has(m));
     if (cleanF.length !== fallbackModels.length) setFallbackModels(cleanF);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [validModelNames]);
+  }, [knownModelNames, catalogLoaded, starredModels, fallbackModels]);
 
   return (
       <div className="space-y-6">
