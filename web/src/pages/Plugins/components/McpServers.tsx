@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AnimatePresence } from 'framer-motion';
-import { Blocks, Folder, Plus, Server } from 'lucide-react';
+import { AlertTriangle, Blocks, Folder, Plus, Server } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 import {
+  useBrokerages,
   useMcpCatalog,
   useBuiltinMcpServers,
   useToggleBuiltinMcpServer,
@@ -50,6 +51,9 @@ import { EmptyState } from './EmptyState';
 import { GroupDeck } from './GroupDeck';
 import { ListControls } from './ListControls';
 import { McpCatalogRow } from './McpCatalogRow';
+import { REGISTRY_NOTE_ID } from './OauthRowParts';
+import { RowNote } from './RowNote';
+import { brokerageForUrl } from '../brokerages';
 import { McpWorkspaceRow } from './McpWorkspaceRow';
 import { PluginSuppressedBadge } from './PluginBadges';
 import { ServerDetail, type ServerDetailData } from './ServerDetail';
@@ -129,6 +133,17 @@ export function McpServers() {
   });
 
   const oauth = useMcpOauthActions();
+  // One observer for the whole list. The registry is static and identical for
+  // every row, so asking per row bought nothing and cost an observer per server.
+  const {
+    data: brokerages,
+    error: brokeragesError,
+    refetch: refetchBrokerages,
+  } = useBrokerages();
+  // An error only speaks for the rows when there is nothing to fall back on. A
+  // refetch that fails still leaves the answer the query already has, and this
+  // registry is what the build ships, so that answer is as good as it was.
+  const registryUnavailable = !brokerages && !!brokeragesError;
   const [movingName, setMovingName] = useState<string | null>(null);
   const [builtinTogglingName, setBuiltinTogglingName] = useState<string | null>(null);
   // Two busy identities for the same endpoint, because two different rows can
@@ -311,6 +326,17 @@ export function McpServers() {
       <McpCatalogRow
         key={server.name}
         server={server}
+        // Resolved off the address rather than the row's identity: a brokerage
+        // row is the user's to edit once it exists, so the vendor's constraints
+        // follow wherever the URL still points. `undefined` is the registry
+        // unanswered -- in flight, or asked and failed -- which is a different
+        // thing from resolving to no vendor. Both have to read as unknown: an
+        // empty registry says every row here is an ordinary server, and a row
+        // that is actually a broker then loses the warning that costs the user a
+        // connection elsewhere. Unknown holds the button; wrong spends something
+        // on the user's behalf.
+        vendor={brokerages ? brokerageForUrl(server.url, brokerages) : undefined}
+        registryUnavailable={registryUnavailable}
         workspaces={wsOptions}
         selection={selection}
         connecting={oauth.connectingName === server.name}
@@ -318,11 +344,19 @@ export function McpServers() {
         toggling={togglingName === server.name}
         scopeBusy={movingName === server.name || denyBusyName === server.name}
         onOpen={() => detail.open(server.name)}
-        onConnect={() => oauth.connect(server.name)}
+        onConnect={(vendor) => {
+          // One strip at a time: a delete question already on screen belongs to
+          // a different row and its Yes is not this one's.
+          cancelDelete();
+          oauth.connect({ name: server.name, vendor, url: server.url ?? null });
+        }}
         onDisconnect={() => oauth.disconnect(server.name)}
         onRefreshSchemas={() => oauth.refreshSchemas(server.name)}
         onEdit={() => openEdit(server)}
-        onRequestDelete={() => requestDelete(server)}
+        onRequestDelete={() => {
+          oauth.cancelPending();
+          requestDelete(server);
+        }}
         onToggle={(enabled) => toggle(server, enabled)}
         onSetWorkspaceDisabled={(wsId, disabled) =>
           handleSetWorkspaceDisabled(server.name, wsId, disabled)
@@ -359,6 +393,24 @@ export function McpServers() {
 
       {surface.noMatches(visibleTotal) && (
         <ListEmpty>{t('plugins.filter.noMatches')}</ListEmpty>
+      )}
+
+      {/* Above every list rather than inside one, because the rows it holds are
+          spread across all of them: a plugin-owned server connects through the
+          same button as one the user typed. Held rather than let through, since
+          a broker the page cannot recognise gets the plain Connect and, for a
+          vendor whose consent screen this build cannot reach, a dead end. */}
+      {registryUnavailable && (
+        <RowNote icon={AlertTriangle} id={REGISTRY_NOTE_ID}>
+          {t('plugins.oauth.registryUnavailableNote')}{' '}
+          <button
+            type="button"
+            onClick={() => void refetchBrokerages()}
+            className="underline underline-offset-2 hover:text-[var(--color-text-secondary)]"
+          >
+            {t('common.retry')}
+          </button>
+        </RowNote>
       )}
 
       <BuiltinMcpSection
@@ -487,6 +539,29 @@ export function McpServers() {
           </AnimatePresence>
         </GroupDeck>
       ))}
+
+      {/* The vendor's terms, asked here as well as on the Brokerages tab: the
+          same row is reachable from both, and a connect that drops the account's
+          other AI connection must not be one click quieter for having been
+          reached through the MCP list. The hook holds the request until this is
+          answered, so nothing has happened yet either way. */}
+      {oauth.pendingConfirm && (
+        <ConfirmStrip
+          message={t('plugins.brokerages.exclusiveConfirm', {
+            server: oauth.pendingConfirm.vendor?.label ?? oauth.pendingConfirm.name,
+          })}
+          confirmVariant="primary"
+          confirmLabel={
+            oauth.connectingName === oauth.pendingConfirm.name
+              ? t('common.loading')
+              : t('plugins.oauth.connect')
+          }
+          cancelLabel={t('plugins.servers.deleteConfirmNo')}
+          pending={oauth.connectingName === oauth.pendingConfirm.name}
+          onConfirm={oauth.confirmPending}
+          onCancel={oauth.cancelPending}
+        />
+      )}
 
       {deletingName && (
         <ConfirmStrip
