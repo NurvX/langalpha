@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useScrollMemory } from '@/lib/scrollMemory';
 import { toast } from '@/components/ui/use-toast';
+import { Brokerages } from './components/Brokerages';
 import { McpServers } from './components/McpServers';
 import { SkillsList } from './components/SkillsList';
 import { PluginSecrets } from './components/PluginSecrets';
@@ -18,6 +19,10 @@ import { PluginsList } from './components/PluginsList';
 import { ADD_INTENT_TAB, ADD_PARAM, type AddIntent } from './utils/addParam';
 import { DETAIL_KIND_TAB, parseDetail } from './utils/detailParam';
 import './Plugins.css';
+import { useToggleBrokerage } from '@/hooks/useMcpServers';
+import { canBeginMcpOAuth } from '@/lib/desktop';
+import { readConnectOutcome } from './connectOutcome';
+import { useConnectReturn } from './connectReturn';
 
 /**
  * /plugins — user-level MCP servers, skills and the user vault. An enabled
@@ -30,13 +35,15 @@ import './Plugins.css';
  * — surfaced as a toast, then stripped from the URL.
  */
 
-const TABS = ['plugins', 'mcp', 'skills', 'secrets'] as const;
+const TABS = ['plugins', 'brokerages', 'mcp', 'skills', 'secrets'] as const;
 type Tab = (typeof TABS)[number];
 
 // Explicit key map (not a template literal) so the i18n parity test can see
-// every tab label.
+// every tab label -- it reads bare `plugins.` literals, and a template would
+// leave five tab labels free to drift out of one catalog unnoticed.
 const TAB_LABEL_KEYS: Record<Tab, string> = {
   plugins: 'plugins.tabs.plugins',
+  brokerages: 'plugins.tabs.brokerages',
   mcp: 'plugins.tabs.mcp',
   skills: 'plugins.tabs.skills',
   secrets: 'plugins.tabs.secrets',
@@ -77,26 +84,55 @@ function Plugins() {
     );
   };
 
+  // Reached only from the return path, where the lifecycle's own rollback can
+  // no longer run. Held here rather than in the brokerages tab because this is
+  // where the landing is read, and the tab may not even be the one on screen.
+  const standDownMutation = useToggleBrokerage();
+
+  // The other way back from a vendor's sign-in page: no callback at all. A
+  // provider that refuses our redirect_uri renders its own page and never
+  // redirects, so the only return is the Back button — and the toast below is
+  // the only thing that explains why nothing happened.
+  useConnectReturn({
+    onAbandoned: (server) => {
+      toast({
+        variant: 'destructive',
+        title: t('plugins.oauth.abandonedTitle'),
+        description: canBeginMcpOAuth()
+          ? t('plugins.oauth.abandonedDesc', { server })
+          : t('plugins.oauth.abandonedDescNeedsDesktop', { server }),
+      });
+    },
+    // Silent on purpose, the same way the in-page rollback is: the refusal is
+    // already on screen and is the one thing the user can act on, and a second
+    // toast about the tidying would bury it. A failure here leaves the row
+    // switched on and visible, with its own switch.
+    onStandDown: (server) => {
+      void standDownMutation.mutateAsync({ name: server, enabled: false }).catch(() => {});
+    },
+  });
+
   // OAuth callback landing: toast the outcome once, then strip the params so a
   // refresh doesn't re-announce it.
   const callbackHandled = useRef(false);
   useEffect(() => {
     if (callbackHandled.current) return;
-    const connected = searchParams.get('mcp_connected');
-    const errorReason = searchParams.get('mcp_error');
-    if (!connected && !errorReason) return;
+    const outcome = readConnectOutcome(searchParams);
+    if (!outcome) return;
     callbackHandled.current = true;
-    if (connected) {
+    if (outcome.kind === 'connected') {
       toast({
         title: t('plugins.oauth.connectedTitle'),
-        description: t('plugins.oauth.connectedDesc', { server: connected }),
+        description: outcome.server
+          ? t('plugins.oauth.connectedDesc', { server: outcome.server })
+          : t('plugins.oauth.connectedDescAnon'),
       });
     } else {
-      const server = searchParams.get('server');
+      const reason = t(outcome.reasonKey);
       toast({
         variant: 'destructive',
         title: t('plugins.oauth.callbackErrorTitle'),
-        description: server ? `${server}: ${errorReason}` : String(errorReason),
+        description: outcome.server ? `${outcome.server}: ${reason}` : reason,
       });
     }
     const next = new URLSearchParams(searchParams);
@@ -181,6 +217,7 @@ function Plugins() {
 
         <div className="plugins-content">
           {activeTab === 'plugins' && <PluginsList />}
+          {activeTab === 'brokerages' && <Brokerages />}
           {activeTab === 'mcp' && <McpServers />}
           {activeTab === 'skills' && <SkillsList />}
           {activeTab === 'secrets' && <PluginSecrets />}
