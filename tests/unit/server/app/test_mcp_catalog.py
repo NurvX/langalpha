@@ -798,12 +798,12 @@ async def test_delete_happy_and_404(client):
 
 
 @asynccontextmanager
-async def _toggle_patches(*, connection):
+async def _toggle_patches(*, connection, row=True):
     revoke = AsyncMock()
     with (
         patch(
             "src.server.app.mcp_catalog.set_catalog_server_enabled",
-            new=AsyncMock(return_value=True),
+            new=AsyncMock(return_value=row),
         ),
         # Patched at the source modules: the revoke lives in
         # mcp_oauth.lifecycle.revoke_live_grants, which both this route and the
@@ -965,3 +965,279 @@ def test_catalog_fields_match_the_writable_column_set():
         name="remote_server", transport="http", url="https://api.example.com/mcp"
     )
     assert set(server.to_catalog_fields()) == set(CATALOG_COLUMNS)
+
+
+# ---------------------------------------------------------------------------
+# Brokerages — shipped connectors, off until the user turns one on
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_brokerages_are_offered_without_touching_the_database(client):
+    """The list is what this build ships, so it is the same for everybody.
+
+    Nothing per-user belongs in it: whether one is configured is the catalog's
+    answer, and mixing the two would give the page two places to disagree with
+    itself about the same row.
+    """
+    resp = await client.get("/api/v1/mcp/brokerages")
+    assert resp.status_code == 200
+    by_name = {b["name"]: b for b in resp.json()["brokerages"]}
+    assert set(by_name) == {"robinhood", "ibkr"}
+    assert by_name["robinhood"]["native_callback_only"] is True
+    assert by_name["ibkr"]["exclusive_connection"] is True
+    assert by_name["ibkr"]["label"] == "Interactive Brokers"
+
+
+@pytest.mark.asyncio
+async def test_enabling_an_unconfigured_brokerage_creates_it_and_switches_it_on(client):
+    """First enable writes the row at OUR address, then goes through the switch.
+
+    Created inert and then toggled, never created live: one thing decides a
+    row's enabled state, and it is the one that already knows what each
+    direction owes an OAuth connection. The user still sees it land on.
+    """
+    created = AsyncMock(return_value=_row(name="robinhood"))
+    live = _row(name="robinhood", enabled=True)
+    async with _toggle_patches(connection=None, row=live):
+        with (
+            patch(
+                "src.server.app.mcp_catalog.get_catalog_server",
+                new=AsyncMock(return_value=None),
+            ),
+            patch("src.server.app.mcp_catalog.create_catalog_server", new=created),
+        ):
+            resp = await client.patch(
+                "/api/v1/mcp/brokerages/robinhood/enabled", json={"enabled": True}
+            )
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is True
+    kwargs = created.await_args.kwargs
+    assert kwargs["url"] == "https://agent.robinhood.com/mcp/trading"
+    assert kwargs["transport"] == "http"
+    # Not created live: the switch below is what turns it on.
+    assert "enabled" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_enabling_a_configured_brokerage_never_rewrites_it(client):
+    """An existing row is toggled and left alone.
+
+    Once it is the user's, its URL is theirs to edit — including a row they
+    built themselves under this name. Restoring our address on every enable
+    would undo a deliberate edit at the moment they were only reaching for the
+    switch.
+    """
+    stored = _row(name="robinhood", url="https://edited.example.com/mcp")
+    toggled = AsyncMock(return_value={**stored, "enabled": True})
+    created = AsyncMock()
+    with (
+        patch(
+            "src.server.app.mcp_catalog.get_catalog_server",
+            new=AsyncMock(return_value=stored),
+        ),
+        patch("src.server.app.mcp_catalog.set_catalog_server_enabled", new=toggled),
+        patch("src.server.app.mcp_catalog.create_catalog_server", new=created),
+    ):
+        resp = await client.patch(
+            "/api/v1/mcp/brokerages/robinhood/enabled", json={"enabled": True}
+        )
+    assert resp.status_code == 200
+    assert resp.json()["url"] == "https://edited.example.com/mcp"
+    created.assert_not_awaited()
+    assert toggled.await_args.args[1:] == ("robinhood", True)
+
+
+@pytest.mark.asyncio
+async def test_disabling_a_configured_brokerage_goes_through_the_same_route(client):
+    """One route for both directions, so the page never has to know which."""
+    stored = _row(name="ibkr")
+    async with _toggle_patches(connection=None, row={**stored, "enabled": False}):
+        with patch(
+            "src.server.app.mcp_catalog.get_catalog_server",
+            new=AsyncMock(return_value=stored),
+        ):
+            resp = await client.patch(
+                "/api/v1/mcp/brokerages/ibkr/enabled", json={"enabled": False}
+            )
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_disabling_a_brokerage_revokes_its_grants(client):
+    """The same bite as every other switch, and here it is the only one there is.
+
+    A brokerage is listed under its own header and so never appears among the
+    servers the user added — this route is the whole of how one gets turned
+    off. A disable that only flipped the row would leave an idle sandbox
+    trading through a relay JWT for hours, on the rows that can place orders.
+    """
+    stored = _row(name="robinhood")
+    connection = MagicMock(connection_id="c-1")
+    async with _toggle_patches(
+        connection=connection, row={**stored, "enabled": False}
+    ) as revoke:
+        with patch(
+            "src.server.app.mcp_catalog.get_catalog_server",
+            new=AsyncMock(return_value=stored),
+        ):
+            resp = await client.patch(
+                "/api/v1/mcp/brokerages/robinhood/enabled", json={"enabled": False}
+            )
+    assert resp.status_code == 200
+    revoke.assert_awaited_once_with("c-1")
+
+
+@pytest.mark.asyncio
+async def test_disabling_one_that_was_never_configured_creates_nothing(client):
+    """There is nothing to turn off, and inventing a row to turn off would
+    consume a catalog slot to reach the state it already had."""
+    created = AsyncMock()
+    with (
+        patch(
+            "src.server.app.mcp_catalog.get_catalog_server",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("src.server.app.mcp_catalog.create_catalog_server", new=created),
+    ):
+        resp = await client.patch(
+            "/api/v1/mcp/brokerages/ibkr/enabled", json={"enabled": False}
+        )
+    assert resp.status_code == 404
+    created.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_brokerage_name_cannot_be_claimed_by_a_hand_written_row(client):
+    """Reserved the way a builtin's name is, and for a sharper reason.
+
+    A row under one of these names is joined to the shipped definition by name
+    and shown wearing it: the vendor's label, its tile, its description and its
+    warnings. Whoever owns the row owns where Connect sends the user, so leaving
+    the name free let anything at all be presented as Robinhood.
+    """
+    created = AsyncMock()
+    with patch("src.server.app.mcp_catalog.create_catalog_server", new=created):
+        resp = await client.post(
+            "/api/v1/mcp/servers",
+            json={
+                "name": "robinhood",
+                "transport": "http",
+                "url": "https://not-robinhood.example.com/mcp",
+            },
+        )
+    assert resp.status_code == 409
+    assert "reserved" in resp.json()["detail"]
+    created.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_brokerage_name_cannot_be_claimed_through_import_either(client, _import_txn):
+    """The reservation belongs to the catalog, not to the door it was built at.
+
+    Import mints exactly the same row the create route does, and it was still
+    reserving builtins only: a file naming ``robinhood`` was accepted, pointed
+    anywhere the author liked, and then presented under the vendor's identity by
+    a page that joins on name. The entry is skipped rather than failing the
+    whole import, which is what every other collision on this path does.
+    """
+    async with _import_patches() as mocks:
+        resp = await client.post(
+            "/api/v1/mcp/servers/import",
+            json={
+                "mcpServers": {
+                    "robinhood": {
+                        "type": "http",
+                        "url": "https://not-robinhood.example.com/mcp",
+                    },
+                    "srv_ok": {"type": "http", "url": "https://api.example.com/a"},
+                }
+            },
+        )
+
+    assert resp.status_code == 200
+    by_name = {r["name"]: r for r in resp.json()["results"]}
+    assert by_name["robinhood"]["status"] == "skipped"
+    assert "reserves" in by_name["robinhood"]["reason"]
+    # The rest of the file still lands: one bad name is not a failed import.
+    assert by_name["srv_ok"]["status"] == "created"
+    created = [c.args[1] for c in mocks["create_catalog_server"].await_args_list]
+    assert "robinhood" not in created
+
+
+@pytest.mark.asyncio
+async def test_a_plugins_row_is_not_adopted_as_a_brokerage(client):
+    """A plugin's row under a brokerage name is not the user's own edit.
+
+    New installs cannot claim these names any more, but one installed before
+    they were reserved still holds it, and adopting it here would hand it the
+    vendor's identity while Connect went to whatever address the plugin chose.
+    """
+    stored = _row(name="robinhood", url="https://plugin-chose-this.example.com/mcp")
+    stored["plugin_id"] = "user-plugin-7"
+    toggled = AsyncMock()
+    with (
+        patch(
+            "src.server.app.mcp_catalog.get_catalog_server",
+            new=AsyncMock(return_value=stored),
+        ),
+        patch("src.server.app.mcp_catalog.set_catalog_server_enabled", new=toggled),
+    ):
+        resp = await client.patch(
+            "/api/v1/mcp/brokerages/robinhood/enabled", json={"enabled": True}
+        )
+    assert resp.status_code == 409
+    assert "plugin" in resp.json()["detail"]
+    toggled.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unknown_brokerage_is_not_a_way_to_create_a_row(client):
+    """The name is looked up in the shipped registry before anything else, so
+    the route cannot be used to write an arbitrary server."""
+    created = AsyncMock()
+    with patch("src.server.app.mcp_catalog.create_catalog_server", new=created):
+        resp = await client.patch(
+            "/api/v1/mcp/brokerages/not_a_broker/enabled", json={"enabled": True}
+        )
+    assert resp.status_code == 404
+    created.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_brokerage_create_reports_the_catalog_cap(client):
+    """The cap is the DB layer's to enforce; this route must not swallow it."""
+    with (
+        patch(
+            "src.server.app.mcp_catalog.get_catalog_server",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "src.server.app.mcp_catalog.create_catalog_server",
+            new=AsyncMock(side_effect=ValueError("Maximum of 50 ... reached")),
+        ),
+    ):
+        resp = await client.patch(
+            "/api/v1/mcp/brokerages/robinhood/enabled", json={"enabled": True}
+        )
+    assert resp.status_code == 409
+    assert "Maximum" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_every_shipped_brokerage_survives_the_user_url_policy():
+    """Our own definitions go through the validator every user row passes.
+
+    A shipped address is the one payload nobody reviews at write time, so it
+    must not also be the one that skips the https/SSRF policy — a definition
+    that could not be typed in by hand should not be shippable either.
+    """
+    from src.server.models.mcp_server import McpServerInput
+    from src.server.services.brokerages import BROKERAGES
+
+    for b in BROKERAGES:
+        server = McpServerInput(
+            name=b.name, transport="http", url=b.url, description=b.description
+        )
+        assert server.url == b.url

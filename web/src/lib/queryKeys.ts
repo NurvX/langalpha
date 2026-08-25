@@ -87,6 +87,15 @@ export const queryKeys = {
     // Discovered tool snapshot for one catalog server (the detail view).
     serverTools: (name: string) => [...queryKeys.mcp.all, 'serverTools', name],
   },
+  // The brokerage connectors this build ships. Deliberately its own family
+  // rather than a child of `mcp`: it is static and user-independent, so the
+  // MCP fan-out has nothing to tell it, and sitting under that prefix meant
+  // every server toggle refetched a list whose `staleTime: Infinity` says it
+  // can never have changed.
+  brokerages: {
+    all:  ['brokerages'],
+    list: () => [...queryKeys.brokerages.all, 'list'],
+  },
   // Skills are per-user and mutable; the mode variant is what the slash menu
   // reads, the manage variant is the full list including disabled rows. A
   // workspace id keys the workspace-effective view (shadowing + disables).

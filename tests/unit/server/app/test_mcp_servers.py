@@ -606,6 +606,33 @@ async def test_add_server_409_on_builtin_collision(client):
 
 
 @pytest.mark.asyncio
+async def test_add_server_409_on_a_shipped_brokerage_name(client):
+    """The workspace tier owes the reservation too, for a different reason.
+
+    A workspace row shadows the inherited catalog row of the same name whether it
+    is enabled or not, so a local ``robinhood`` silently replaces the broker the
+    user actually connected: inside that workspace the agent's trade-shaped tools
+    come from wherever the local row points, with its description reaching the
+    prompt, while the Plugins page still reports the real one connected.
+    """
+    ws = _ws()
+    insert = AsyncMock()
+    with (
+        patch("src.server.app.mcp_servers.db_get_workspace", new=AsyncMock(return_value=ws)),
+        patch("src.server.app.setup.agent_config", _agent_config([])),
+        patch("src.server.app.mcp_servers.list_workspace_servers", new=AsyncMock(return_value=[])),
+        patch("src.server.app.mcp_servers.insert_workspace_server", new=insert),
+    ):
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['workspace_id']}/mcp/servers",
+            json={"name": "robinhood", "transport": "http", "url": "https://not-rh.example.com/mcp"},
+        )
+    assert resp.status_code == 409
+    assert "reserved" in resp.json()["detail"]
+    insert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_add_server_409_when_over_cap(client):
     ws = _ws()
     base = _agent_config([])
@@ -1124,6 +1151,37 @@ async def test_promote_creates_template(client):
 
 
 @pytest.mark.asyncio
+async def test_promote_cannot_mint_a_reserved_catalog_name(client):
+    """The third door onto the catalog, and it owed the same reservation.
+
+    Before the workspace tier reserved these names too, a workspace server called
+    ``robinhood`` was legal down there, and promoting it minted a user-tier row
+    under a name the Plugins page joins a shipped brokerage on, pointing wherever
+    the workspace row pointed. Both doors are shut now; this one still owes its
+    own check, because a row can predate the other.
+    """
+    ws = _ws()
+    create = AsyncMock()
+    with (
+        patch("src.server.app.mcp_servers.db_get_workspace", new=AsyncMock(return_value=ws)),
+        patch("src.server.app.setup.agent_config", _agent_config([])),
+        patch(
+            "src.server.app.mcp_servers.list_workspace_servers",
+            new=AsyncMock(return_value=[_promotable_row(name="robinhood")]),
+        ),
+        patch("src.server.app.mcp_servers.get_catalog_server", new=AsyncMock(return_value=None)),
+        patch("src.server.app.mcp_servers.create_catalog_server", new=create),
+    ):
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['workspace_id']}/mcp/servers/robinhood/promote",
+            json={"overwrite": False},
+        )
+    assert resp.status_code == 409
+    assert "reserved" in resp.json()["detail"]
+    create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_promote_409_when_template_exists_without_overwrite(client):
     ws = _ws()
     base = _agent_config([])
@@ -1501,6 +1559,39 @@ async def test_adopt_refuses_a_plugin_owned_server(client):
     assert resp.status_code == 409
     assert "acme-research" in resp.json()["detail"]
     # Refused before either half of the move ran, so no shadow state is left.
+    insert.assert_not_awaited()
+    drop.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_adopt_refuses_a_brokerage_connector(client):
+    """A brokerage lives at the user tier, where its connection is and where
+    every surface joins it to the shipped vendor. Moved down it would land under
+    a name the workspace resolver skips and the edit path refuses to rename, so
+    it would sit there inert with deleting it as the only way out. The other
+    workspace writers already refuse the name; this one has to as well."""
+    ws = _ws()
+    insert = AsyncMock()
+    drop = AsyncMock()
+    with (
+        patch(
+            "src.server.app.mcp_servers.db_get_workspace",
+            new=AsyncMock(return_value=ws),
+        ),
+        patch(
+            "src.server.app.mcp_servers.get_catalog_server",
+            new=AsyncMock(return_value=_catalog_row(name="robinhood")),
+        ),
+        patch("src.server.app.mcp_servers.insert_workspace_server", new=insert),
+        patch("src.server.app.mcp_servers.delete_catalog_server", new=drop),
+    ):
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['workspace_id']}/mcp/servers/robinhood/adopt"
+        )
+    assert resp.status_code == 409
+    assert "reserved" in resp.json()["detail"]
+    # An unconnected row reaches this, so the refusal has to land before the
+    # move rather than behind the connection test.
     insert.assert_not_awaited()
     drop.assert_not_awaited()
 

@@ -206,6 +206,19 @@ def builtin_names() -> set[str]:
     return {s.name for s in setup.agent_config.mcp.servers}
 
 
+def reserved_catalog_names() -> set[str]:
+    """Names a catalog row may not claim, whichever door it arrives through.
+
+    Both sets are joined to a shipped definition by name and then shown wearing
+    it, so the reservation has to hold at every writer rather than at the one
+    the feature was built against — create, import and promote each mint a
+    catalog row, and a name is only reserved if all three agree it is.
+    """
+    from src.server.services.brokerages import brokerage_names
+
+    return builtin_names() | brokerage_names()
+
+
 def workspace_row_to_server_config(row: dict) -> MCPServerConfig:
     """Convert a ``workspace_mcp_servers`` row into an ``MCPServerConfig``.
 
@@ -311,6 +324,7 @@ async def resolve_mcp_config(
         list_enabled_user_servers,
         list_user_builtin_disables,
     )
+    from src.server.services.brokerages import brokerage_names
 
     # Built-ins from the global config, enabled only, in declaration order.
     builtin_servers = [
@@ -318,6 +332,18 @@ async def resolve_mcp_config(
         if getattr(s, "enabled", True)
     ]
     builtin_name_set = {s.name for s in builtin_servers}
+    # Reserved at the WORKSPACE tier only, and deliberately not at the user tier
+    # below: at the user tier this name IS the brokerage, and skipping it would
+    # unplug the connector the reservation exists to protect.
+    #
+    # A local row shadows the inherited catalog row of the same name whether it
+    # is enabled or not, so a workspace `robinhood` silently replaces the broker
+    # the user actually connected: inside that workspace the agent's trade-shaped
+    # tools come from wherever the local row points, with its description
+    # reaching the prompt, while the Plugins page still reports it connected.
+    # The write paths refuse the name now; this is the backstop for a row that
+    # predates them, which a write-time rule can never reach.
+    brokerage_name_set = brokerage_names()
 
     # Version is read BEFORE the rows (READ COMMITTED, not a snapshot) so a
     # concurrent mutation can only skew toward (older version, newer rows) —
@@ -376,6 +402,14 @@ async def resolve_mcp_config(
             logger.warning(
                 "[MCP] Skipping workspace server %r in workspace %s: name "
                 "collides with a built-in (API should reject at write).",
+                row["name"], workspace_id,
+            )
+            continue
+        if row["name"] in brokerage_name_set:
+            logger.warning(
+                "[MCP] Skipping workspace server %r in workspace %s: the name is "
+                "reserved for a shipped brokerage connector and a local row would "
+                "shadow it (API should reject at write).",
                 row["name"], workspace_id,
             )
             continue

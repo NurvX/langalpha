@@ -24,6 +24,8 @@ import {
   importMcpCatalogServers,
   disconnectMcpOauth,
   refreshMcpOauthSchemas,
+  getBrokerages,
+  setBrokerageEnabled,
   type CatalogServerList,
   type EffectiveServerList,
   type McpServerInput,
@@ -509,5 +511,27 @@ export function useRefreshMcpOauthSchemas() {
     onSuccess: () => {
       invalidateMcpFanout(queryClient);
     },
+  });
+}
+
+// --- Brokerage connectors ---
+
+export function useBrokerages() {
+  return useQuery({
+    queryKey: queryKeys.brokerages.list(),
+    queryFn: getBrokerages,
+    // What this build ships cannot change under a running page.
+    staleTime: Infinity,
+  });
+}
+
+export function useToggleBrokerage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
+      setBrokerageEnabled(name, enabled),
+    // The shared catalog radius, not just the MCP keys: this writes a catalog
+    // row, and a plugin card lists the rows it still owns.
+    onSuccess: () => invalidateMcpFanout(queryClient),
   });
 }

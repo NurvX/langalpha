@@ -48,13 +48,19 @@ from src.server.database.vault_secrets import (
     get_workspace_secret_names,
 )
 from src.server.database.workspace import get_workspace as db_get_workspace
-from src.server.services.mcp_catalog import apply_catalog_edit, detach_warning
+from src.server.services.mcp_catalog import (
+    apply_catalog_edit,
+    detach_warning,
+    reject_reserved_brokerage_name,
+    reject_reserved_catalog_name,
+)
 from src.server.services.mcp_config import (
     Origin,
     ResolvedServer,
     State,
     builtin_names,
     classify_server_name,
+    reserved_catalog_names,
     resolve_mcp_config,
 )
 from src.server.services.mcp_discovery import ToolSnapshotIndex
@@ -382,6 +388,9 @@ async def add_server(
             status_code=409,
             detail=f"{server.name!r} collides with a built-in server name",
         )
+    # A workspace row shadows the inherited catalog row of the same name whether
+    # it is enabled or not, so this name is spoken for here too.
+    reject_reserved_brokerage_name(server.name)
 
     try:
         row = await _insert_local_fork(workspace_id, server)
@@ -431,6 +440,10 @@ async def promote_server(
             detail="Built-in servers are global; only workspace servers can be "
             "saved as templates",
         )
+    # Promoting mints a catalog row, so it owes the same reservation the create
+    # and import doors owe: the name is what the Plugins page joins a shipped
+    # brokerage on, and a template is free to point anywhere.
+    reject_reserved_catalog_name(name)
 
     rows = {r["name"]: r for r in await list_workspace_servers(workspace_id)}
     existing = rows.get(name)
@@ -528,6 +541,15 @@ async def adopt_server(
     row = await get_catalog_server(user_id, name)
     if row is None:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
+    # Asked before the connection test below, which would otherwise answer a
+    # connected brokerage with "disconnect it first, then move the server" --
+    # true of the connection and useless here, because disconnecting does not
+    # make this move possible. A brokerage row that moved down would land under
+    # a name the workspace resolver skips, and the edit path that could rename
+    # it refuses the same name, so it would be inert with no way back but
+    # deleting it. The tier is the point: the connection lives at the user tier,
+    # and every surface joins the row to the shipped vendor there.
+    reject_reserved_brokerage_name(name)
     if row["plugin_id"] is not None:
         # Plugin-level disable acts through ONE predicate, on
         # list_enabled_user_servers, and that predicate only reaches the user
@@ -643,7 +665,7 @@ async def import_servers(
     report = await run_mcp_import(
         parsed,
         scope=ImportScope(
-            reserved_names=builtin_names(),
+            reserved_names=reserved_catalog_names(),
             existing_names={r["name"] for r in existing_rows},
             # Only the workspace's OWN servers count against the cap; builtin
             # markers and inherited tombstones are not servers.
@@ -705,6 +727,7 @@ async def edit_server(
 
     if name in builtin_names():
         raise HTTPException(status_code=409, detail=_BUILTIN_EDIT)
+    reject_reserved_brokerage_name(name)
     if body.name != name:
         raise HTTPException(
             status_code=409, detail="name in body must match the path name"

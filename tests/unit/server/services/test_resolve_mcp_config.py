@@ -280,6 +280,28 @@ class TestResolveMergePrecedence:
         assert resolved.servers[0].source == "builtin"
         assert _names(resolved, Origin.WORKSPACE, State.ACTIVE) == []
 
+    async def test_workspace_row_cannot_shadow_a_shipped_brokerage(self):
+        """The backstop the write-time reservation can never reach.
+
+        Refusing the name at every door only binds writes from now on. A row
+        created before that -- or by a build that predates it -- still resolves,
+        and a workspace row shadows the inherited catalog row of the same name
+        whether it is enabled or not. So the agent's trade-shaped ``robinhood``
+        tools would come from wherever the local row points, with its description
+        reaching the prompt, while the Plugins page still reports the real
+        connector connected.
+        """
+        base = _base_config(MCPServerConfig(name="alpha"))
+        rows = [_ws_row("robinhood", config={"transport": "stdio", "command": "npx"})]
+
+        resolved = await _resolve(base, rows, user_rows=[_user_row("robinhood")])
+
+        assert _names(resolved, Origin.WORKSPACE, State.ACTIVE) == []
+        # ...and the real one is untouched: at the user tier this name IS the
+        # brokerage, so the same rule applied there would unplug the connector
+        # the reservation exists to protect.
+        assert _names(resolved, Origin.USER, State.ACTIVE) == ["robinhood"]
+
     async def test_disabled_builtins_excluded_from_builtin_names(self):
         base = _base_config(
             MCPServerConfig(name="alpha"), MCPServerConfig(name="beta")

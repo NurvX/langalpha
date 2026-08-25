@@ -22,7 +22,7 @@ from __future__ import annotations
 import ipaddress
 import re
 import socket
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import asdict, dataclass, field as dataclass_field
 from typing import Any, Literal, Optional
 from urllib.parse import urlsplit
 
@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from ptc_agent.core.mcp_sanitize import VAULT_REF_RE
 from src.server.database.mcp_oauth import ConnectionStatus
+from src.server.services.brokerages import Brokerage
 from src.server.services.mcp_config import Origin
 
 
@@ -678,6 +679,41 @@ class BuiltinServerList(BaseModel):
     """GET /api/v1/mcp/builtin-servers payload."""
 
     servers: list[BuiltinServer]
+
+
+class BrokerageOption(BaseModel):
+    """One shipped brokerage connector, as offered on the Plugins page.
+
+    A catalog row does not exist for it until the user turns it on, so this
+    carries no per-user state at all: the page joins it to the catalog by
+    ``name``. The two behavioural flags travel as booleans rather than prose
+    because the sentence that explains each one is translated client-side.
+    """
+
+    name: str
+    label: str
+    url: str
+    description: str = ""
+    native_callback_only: bool = False
+    exclusive_connection: bool = False
+
+
+class BrokerageList(BaseModel):
+    """GET /api/v1/mcp/brokerages payload."""
+
+    brokerages: list[BrokerageOption]
+
+
+def brokerage_to_response(brokerage: Brokerage) -> BrokerageOption:
+    """Shape a shipped brokerage definition for the API.
+
+    A wire model of its own rather than the registry entry itself, because the
+    two are allowed to diverge: a field the registry needs is not automatically
+    one the API should carry. Extra keys are ignored on the way through, so
+    adding one to :class:`Brokerage` keeps it off the wire until it is named
+    above — and nobody has to maintain a copy to keep that true.
+    """
+    return BrokerageOption.model_validate(asdict(brokerage))
 
 
 # ---------------------------------------------------------------------------
