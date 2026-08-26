@@ -67,6 +67,16 @@ async def _cleanup_stale_model_preferences(user_id: str) -> list[tuple[str, str]
     pref = await get_model_preference(user_id)
 
     mc = LLMFactory.get_model_config()
+    # An empty manifest is a load failure, not a catalog of zero models. Every
+    # name would then read as stale and this function would delete the user's
+    # entire model preference set — irreversibly, since the deletes go straight
+    # to the merge-upsert with no copy kept.
+    if not mc.llm_config:
+        logger.warning(
+            f"[CHAT] Skipping stale-pref scrub for user={user_id}: model manifest is empty"
+        )
+        return []
+
     custom_models = {cm.get("name") for cm in (pref.get("custom_models") or [])}
     custom_providers = {cp.get("name") for cp in (pref.get("custom_providers") or [])}
 
@@ -125,14 +135,21 @@ def _raise_model_removed(
 
     other = sorted({name for _, name in removed if name != model_name})
     extra = f" Also cleared: {', '.join(other)}." if other else ""
+    # Only claim a clear when one happened. The caller passes an empty list for
+    # a model named in the request rather than saved, and the scrub also returns
+    # empty when it declines to run, so asserting the clear unconditionally
+    # tells the user their preference is gone while it is still stored.
+    cleared = (
+        "Your saved preference has been cleared — open Settings to pick a current model."
+        if removed
+        else "Open Settings to pick a current model."
+    )
 
     raise HTTPException(
         status_code=400,
         detail={
             "message": (
-                f"Model '{model_name}' is no longer available. "
-                "Your saved preference has been cleared — open Settings to pick a current model."
-                + extra
+                f"Model '{model_name}' is no longer available. " + cleared + extra
             ),
             "type": "model_removed",
             "link": {"url": "/settings?tab=model", "label": "Open Settings"},

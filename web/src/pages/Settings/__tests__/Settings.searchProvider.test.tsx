@@ -50,6 +50,12 @@ const h = vi.hoisted(() => {
     user: null as Record<string, unknown> | null,
     preferences: null as Record<string, unknown> | null,
     validModelNames: new Set<string>(),
+    // The untouched GET /api/v1/models payload. Distinct from validModelNames,
+    // which has the user's custom models folded in.
+    rawApiResponse: null as Record<string, unknown> | null,
+    // Pre-filter catalog + custom models — what exists, as opposed to what the
+    // user can currently reach.
+    rawModels: {} as Record<string, { models?: string[] }>,
     searchProviderCatalog: searchProviderCatalog as typeof searchProviderCatalog | null,
     fullCatalog: searchProviderCatalog,
   };
@@ -103,6 +109,8 @@ vi.mock('@/hooks/useAllModels', () => ({
     systemDefaults: { fallback_models: [] },
     // Stable Set ref — the stale-model cleanup effect keys on its identity.
     validModelNames: h.validModelNames,
+    rawModels: h.rawModels,
+    rawApiResponse: h.rawApiResponse,
     compactionProfiles: null,
     searchProviders: h.searchProviderCatalog,
     isLoading: false,
@@ -131,9 +139,17 @@ vi.mock('@/hooks/useDebouncedSave', () => ({
 // select lives outside this component, so a stub is safe. The button exposes
 // onPrimaryModelChange so tests can fire an unrelated model-pref save.
 vi.mock('@/components/model/ModelTierConfig', () => ({
-  ModelTierConfig: (props: { onPrimaryModelChange?: (v: string) => void }) => (
+  ModelTierConfig: (props: {
+    onPrimaryModelChange?: (v: string) => void;
+    advancedModels?: { fallbackModels?: string[] };
+  }) => (
     <div data-testid="model-tier-config-stub">
       <button onClick={() => props.onPrimaryModelChange?.('')}>stub-change-primary</button>
+      {/* Mirrors FallbackModelsPicker, which maps `selected` with no catalog
+          filter — so this shows the fallback list the panel actually holds. */}
+      <ul data-testid="fallback-chips">
+        {(props.advancedModels?.fallbackModels ?? []).map((m) => <li key={m}>{m}</li>)}
+      </ul>
     </div>
   ),
 }));
@@ -194,6 +210,8 @@ beforeEach(() => {
   h.accessTier = 1;
   h.otherPreference = {};
   h.validModelNames = new Set<string>();
+  h.rawModels = {};
+  h.rawApiResponse = null;
   h.searchProviderCatalog = h.fullCatalog;
   h.mutateAsync.mockClear();
   h.mutateAsync.mockResolvedValue({});
@@ -478,5 +496,150 @@ describe('Settings — Search Depth', () => {
     };
     expect(payload.other_preference).toMatchObject({ search_provider: 'serper' });
     expect('search_depth' in payload.other_preference).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: an unloaded model catalog must not erase saved model preferences
+// ---------------------------------------------------------------------------
+
+describe('Settings — model prefs survive an unloaded catalog', () => {
+  const STORED = {
+    preferred_model: 'some-model',
+    preferred_flash_model: 'some-flash',
+    compaction_model: 'some-compaction',
+    fetch_model: 'some-fetch',
+    fallback_models: ['fallback-a', 'fallback-b'],
+  };
+
+  it('keeps every model reference when validModelNames is empty', async () => {
+    // Every model field is filtered against the catalog. Empty used to mean
+    // "nothing is valid", so one unrelated save nulled the whole set at once.
+    h.platformMode = false;
+    h.otherPreference = { ...STORED };
+    h.validModelNames = new Set<string>();
+
+    setupAndRenderModelTab();
+
+    const select = await screen.findByRole('combobox', { name: 'Web Search Provider' });
+    await waitFor(() => expect(select).toHaveValue(''));
+    fireEvent.change(select, { target: { value: 'serper' } });
+
+    await waitFor(() => expect(h.mutateAsync).toHaveBeenCalled());
+    const payload = h.mutateAsync.mock.calls.at(-1)![0] as {
+      other_preference: Record<string, unknown>;
+    };
+    expect(payload.other_preference).toMatchObject({
+      preferred_model: 'some-model',
+      preferred_flash_model: 'some-flash',
+      compaction_model: 'some-compaction',
+      fetch_model: 'some-fetch',
+      fallback_models: ['fallback-a', 'fallback-b'],
+    });
+  });
+
+  it('still drops a genuinely stale model once the catalog has loaded', async () => {
+    h.platformMode = false;
+    h.otherPreference = { ...STORED };
+    h.validModelNames = new Set(['some-flash', 'fallback-a']);
+    h.rawModels = { anthropic: { models: ['some-flash', 'fallback-a'] } };
+    h.rawApiResponse = { models: { anthropic: { models: ['some-flash', 'fallback-a'] } } };
+
+    setupAndRenderModelTab();
+
+    const select = await screen.findByRole('combobox', { name: 'Web Search Provider' });
+    await waitFor(() => expect(select).toHaveValue(''));
+    fireEvent.change(select, { target: { value: 'serper' } });
+
+    await waitFor(() => expect(h.mutateAsync).toHaveBeenCalled());
+    const payload = h.mutateAsync.mock.calls.at(-1)![0] as {
+      other_preference: Record<string, unknown>;
+    };
+    expect(payload.other_preference).toMatchObject({
+      preferred_model: null,
+      preferred_flash_model: 'some-flash',
+      fallback_models: ['fallback-a'],
+    });
+  });
+
+  it('keeps them when only a custom model makes the model set non-empty', async () => {
+    // useAllModels folds custom models into validModelNames, so a user with one
+    // custom model has a non-empty set even while the server catalog is down.
+    // Gating on that set would let this exact case wipe every built-in.
+    h.platformMode = false;
+    h.otherPreference = { ...STORED };
+    h.validModelNames = new Set(['my-custom-model']);
+    h.rawModels = { 'my-provider': { models: ['my-custom-model'] } };
+    h.rawApiResponse = { models: {} };
+
+    setupAndRenderModelTab();
+
+    const select = await screen.findByRole('combobox', { name: 'Web Search Provider' });
+    await waitFor(() => expect(select).toHaveValue(''));
+    fireEvent.change(select, { target: { value: 'serper' } });
+
+    await waitFor(() => expect(h.mutateAsync).toHaveBeenCalled());
+    const payload = h.mutateAsync.mock.calls.at(-1)![0] as {
+      other_preference: Record<string, unknown>;
+    };
+    expect(payload.other_preference).toMatchObject({
+      preferred_model: 'some-model',
+      preferred_flash_model: 'some-flash',
+      compaction_model: 'some-compaction',
+      fetch_model: 'some-fetch',
+      fallback_models: ['fallback-a', 'fallback-b'],
+    });
+  });
+
+  it('keeps them when the catalog is loaded but access data is not', async () => {
+    // Platform mode with /api/auth/models slow or failed: buildVisibleModels
+    // falls back to the configured-provider filter, which admits nothing for a
+    // user with no BYOK keys, so validModelNames is empty while the catalog is
+    // fully loaded. That query is not in useAllModels' isLoading either, so
+    // there is no "still loading" signal to wait on.
+    h.platformMode = true;
+    h.otherPreference = { ...STORED };
+    h.validModelNames = new Set<string>();
+    h.rawModels = {
+      anthropic: { models: ['some-model', 'some-flash', 'some-compaction', 'some-fetch', 'fallback-a', 'fallback-b'] },
+    };
+    h.rawApiResponse = { models: { anthropic: { models: ['some-model', 'some-flash'] } } };
+
+    setupAndRenderModelTab();
+
+    const select = await screen.findByRole('combobox', { name: 'Web Search Provider' });
+    await waitFor(() => expect(select).toHaveValue(''));
+    fireEvent.change(select, { target: { value: 'serper' } });
+
+    await waitFor(() => expect(h.mutateAsync).toHaveBeenCalled());
+    const payload = h.mutateAsync.mock.calls.at(-1)![0] as {
+      other_preference: Record<string, unknown>;
+    };
+    expect(payload.other_preference).toMatchObject({
+      preferred_model: 'some-model',
+      preferred_flash_model: 'some-flash',
+      compaction_model: 'some-compaction',
+      fetch_model: 'some-fetch',
+      fallback_models: ['fallback-a', 'fallback-b'],
+    });
+  });
+
+  it('clears a stale fallback chip once the catalog has loaded', async () => {
+    // The fallback chips render straight from state — FallbackModelsPicker maps
+    // `selected` with no catalog filter, unlike the starred list. The load-time
+    // cleanup effect is the only thing that removes one, and it used to miss
+    // them entirely: loadModelTabData sets fallbackModels after an await, and
+    // the effect did not list it as a dependency.
+    h.platformMode = false;
+    h.otherPreference = { ...STORED, fallback_models: ['fallback-a', 'ghost-model'] };
+    h.validModelNames = new Set(['fallback-a']);
+    h.rawModels = { anthropic: { models: ['fallback-a'] } };
+    h.rawApiResponse = { models: { anthropic: { models: ['fallback-a'] } } };
+
+    setupAndRenderModelTab();
+
+    const chips = await screen.findByTestId('fallback-chips');
+    await waitFor(() => expect(chips).toHaveTextContent('fallback-a'));
+    await waitFor(() => expect(chips).not.toHaveTextContent('ghost-model'));
   });
 });
