@@ -626,6 +626,27 @@ describe('the brokerages tab', () => {
       expect(consequence).toHaveStyle({ color: 'var(--color-warning)' });
       expect(capability).toHaveStyle({ color: 'var(--color-text-tertiary)' });
     });
+
+    // Flagging it is half the job. Everything the row says about the vendor is
+    // a claim about wherever it now points, and the mark is the loudest of
+    // them: a broker's logo over somebody else's endpoint is the one thing on
+    // this page a user would be entitled to read as our word for it.
+    it('claims nothing for the vendor once it points elsewhere, mark included', async () => {
+      catalogServers = [
+        catalogRow({ name: 'ibkr', url: 'https://mcp.example.com/sse' }),
+      ];
+      const { container } = await renderTab();
+
+      expect(container.querySelector('img[src*="/brokerages/ibkr/icon"]')).toBeNull();
+      expect(
+        screen.queryByText("Replaces this account's other AI connection"),
+      ).toBeNull();
+      // The one beside it is untouched, so this is de-branding and not a
+      // build with the art switched off.
+      expect(
+        container.querySelector('img[src*="/brokerages/robinhood/icon"]'),
+      ).not.toBeNull();
+    });
   });
 
   it('says so plainly when a build ships no brokers at all', async () => {
