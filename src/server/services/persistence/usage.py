@@ -174,9 +174,10 @@ class UsagePersistenceService:
                 f"[UsagePersistence] Failed to track LLM usage: {e}",
                 exc_info=True
             )
-            # Leave _token_usage as None so persist_usage falls back to caller's
-            # is_byok hint instead of deriving from _has_platform_calls (which
-            # was never updated).
+            # _has_per_call_data stays False so persist_usage falls back to the
+            # caller's is_byok hint. _token_usage cannot carry that signal: it is
+            # assigned as soon as pricing returns, so a raise anywhere after that
+            # leaves it set while _has_platform_calls is still the default.
             self._token_credits = Decimal("0.0")
             # Same shape as every other exit, built without touching the pricing
             # pass that just raised.
