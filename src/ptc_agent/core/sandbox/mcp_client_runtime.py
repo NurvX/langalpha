@@ -38,6 +38,11 @@ _message_id_lock = threading.Lock()
 # process), so a silent server pays one bounded probe per interpreter.
 _PROTO: dict[str, dict] = {}
 
+# Where a 2026-era server stamps its identity on a discover result. The legacy
+# handshake returns the same object under `serverInfo`, so both eras answer the
+# same question and `_server_identity` reads whichever one applies.
+_SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo"
+
 _CLIENT_INFO = {"name": "open-ptc-client", "version": "2.0.0"}
 # Modern spec revisions this client speaks, newest first.
 _MODERN_VERSIONS = ("2026-07-28",)
@@ -816,6 +821,21 @@ def _spawn_mcp_process(server_name: str, discovery: bool = False) -> subprocess.
     return proc
 
 
+def _server_identity(result: dict, *, modern: bool) -> dict | None:
+    """What the server said it is, from either era's handshake result.
+
+    Display-only per the spec, which is why every malformed shape reads as
+    absent: a server that stamps nonsense here still serves tools, and refusing
+    the connection over its business card would be the wrong trade.
+    """
+    if modern:
+        meta = result.get("_meta")
+        raw = meta.get(_SERVER_INFO_META_KEY) if isinstance(meta, dict) else None
+    else:
+        raw = result.get("serverInfo")
+    return raw if isinstance(raw, dict) else None
+
+
 def _legacy_initialize(server_name: str, proc: subprocess.Popen) -> dict:
     """Pre-2026 handshake; offer the newest legacy revision, adopt the reply's."""
     request = _legacy_init_request()
@@ -830,7 +850,12 @@ def _legacy_initialize(server_name: str, proc: subprocess.Popen) -> dict:
         "jsonrpc": "2.0",
         "method": "notifications/initialized",
     })
-    return {"mode": "legacy", "version": version, "session_id": None}
+    return {
+        "mode": "legacy",
+        "version": version,
+        "session_id": None,
+        "server_info": _server_identity(response.get("result") or {}, modern=False),
+    }
 
 
 def _negotiate_stdio(server_name: str, proc: subprocess.Popen, discovery: bool = False) -> tuple:
@@ -860,7 +885,12 @@ def _negotiate_stdio(server_name: str, proc: subprocess.Popen, discovery: bool =
             supported = result.get("supportedVersions") or []
             mutual = [v for v in _MODERN_VERSIONS if v in supported]
             if mutual:
-                return proc, {"mode": "modern", "version": mutual[0], "session_id": None}
+                return proc, {
+                    "mode": "modern",
+                    "version": mutual[0],
+                    "session_id": None,
+                    "server_info": _server_identity(result, modern=True),
+                }
             _kill_server(server_name, proc)
             proc = _spawn_mcp_process(server_name, discovery=discovery)
             return proc, _legacy_initialize(server_name, proc)
@@ -1187,7 +1217,14 @@ def _ensure_http_server(server_name: str, discovery: bool = False) -> dict:
                 supported = (reply["result"] or {}).get("supportedVersions") or []
                 mutual = [v for v in _MODERN_VERSIONS if v in supported]
                 if mutual:
-                    proto = {"mode": "modern", "version": mutual[0], "session_id": None}
+                    proto = {
+                        "mode": "modern",
+                        "version": mutual[0],
+                        "session_id": None,
+                        "server_info": _server_identity(
+                            reply["result"] or {}, modern=True
+                        ),
+                    }
                     _PROTO[server_name] = proto
                     return proto
 
@@ -1225,7 +1262,14 @@ def _ensure_http_server(server_name: str, discovery: bool = False) -> dict:
                 msg = f"MCP HTTP initialization failed: {reply['error']}"
                 raise RuntimeError(msg)
             adopted = (reply.get("result") or {}).get("protocolVersion") or _LEGACY_OFFER
-            proto = {"mode": "legacy", "version": adopted, "session_id": session_id}
+            proto = {
+                "mode": "legacy",
+                "version": adopted,
+                "session_id": session_id,
+                "server_info": _server_identity(
+                    reply.get("result") or {}, modern=False
+                ),
+            }
             notif_headers = _mcp_headers("notifications/initialized", "", proto, _headers)
             # Streamed and never read: the reply is discarded either way, and
             # buffering it would hand an unbounded body to the interpreter.
@@ -1378,7 +1422,8 @@ def discover(server_name: str) -> dict:
     """List a server's tools without requiring the vault (file-IPC caller writes JSON).
 
     Returns {"server", "status", "error", "tools": [{name, description,
-    input_schema}]}. Never raises — failures are captured in ``status``/``error``.
+    input_schema}], "server_info"}. Never raises — failures are captured in
+    ``status``/``error``.
     """
     cfg = _SERVER_CONFIGS.get(server_name)
     if cfg is None:
@@ -1406,7 +1451,15 @@ def discover(server_name: str) -> dict:
             "description": t.get("description", "") or "",
             "input_schema": t.get("inputSchema") or t.get("input_schema") or {},
         })
-    return {"server": server_name, "status": "ok", "error": "", "tools": tools}
+    return {
+        "server": server_name,
+        "status": "ok",
+        "error": "",
+        "tools": tools,
+        # Read from the published proto rather than re-handshaking: the
+        # negotiation above already has it and this runs once per interpreter.
+        "server_info": (_PROTO.get(server_name) or {}).get("server_info"),
+    }
 
 
 def _discover_stdio(server_name: str) -> list:

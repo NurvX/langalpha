@@ -353,7 +353,11 @@ class TestManifestRegression:
                     "price",
                     transport="stdio",
                     command="uv",
-                    args=["run", "python", "mcp_servers/price_data_mcp_server.py"],
+                    args=[
+                        "run",
+                        "python",
+                        "plugins/langalpha_market_data/price_data_mcp_server.py",
+                    ],
                 )
             ]
         )
@@ -380,16 +384,19 @@ class TestManifestRegression:
 
         from ptc_agent.core.sandbox._shared import _MCP_SHARED_RUNTIME_FILES
 
-        root = Path(__file__).resolve().parents[4] / "mcp_servers"
+        repo = Path(__file__).resolve().parents[4]
+        root = repo / "mcp_servers"
         pattern = re.compile(
             r"^\s*(?:from (_[a-z]\w*) import|from mcp_servers\.(_[a-z]\w*) import"
             r"|from mcp_servers import (_[a-z]\w*)|import (_[a-z]\w*))",
             re.MULTILINE,
         )
         shipped = set(_MCP_SHARED_RUNTIME_FILES)
-        importers = sorted(root.glob("*_mcp_server.py")) + [
-            root / name for name in _MCP_SHARED_RUNTIME_FILES
-        ]
+        # Entrypoints live in their bundles now; the siblings they import are
+        # still shipped from mcp_servers/, which is what this gate is about.
+        entrypoints = sorted(repo.glob("plugins/*/*_mcp_server.py"))
+        assert entrypoints, "no bundled entrypoints found; this gate would pass vacuously"
+        importers = entrypoints + [root / name for name in _MCP_SHARED_RUNTIME_FILES]
         for source_file in importers:
             for match in pattern.finditer(source_file.read_text()):
                 module = next(g for g in match.groups() if g)
