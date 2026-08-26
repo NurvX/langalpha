@@ -83,6 +83,10 @@ class UsagePersistenceService:
         self._infrastructure_credits: Decimal = Decimal("0.0")
         self._token_credits: Decimal = Decimal("0.0")
         self._has_platform_calls: bool = False
+        # Whether _has_platform_calls was actually computed. _token_usage cannot
+        # stand in for this: the no-records exit stores a zeroed payload, which
+        # is truthy, so a turn with no per-call data read as though it had some.
+        self._has_per_call_data: bool = False
 
         logger.debug(
             f"[UsagePersistence] Initialized service for thread_id={thread_id}, "
@@ -150,6 +154,7 @@ class UsagePersistenceService:
             self._has_platform_calls = any(
                 r.get("billing_type", "platform") == "platform" for r in per_call_records
             )
+            self._has_per_call_data = True
 
             # OTel counters (langalpha.llm.tokens, langalpha.credits) are
             # sourced from conversation_usages via ObservableCounter — see
@@ -296,7 +301,7 @@ class UsagePersistenceService:
             # If we tracked any LLM calls, use real billing data: BYOK only
             # when no call used the platform key.  Otherwise fall back to the
             # flag from the auth layer.
-            if self._token_usage:
+            if self._has_per_call_data:
                 effective_is_byok = not self._has_platform_calls
             else:
                 effective_is_byok = is_byok
@@ -413,6 +418,7 @@ class UsagePersistenceService:
         self._infrastructure_credits = Decimal("0.0")
         self._token_credits = Decimal("0.0")
         self._has_platform_calls = False
+        self._has_per_call_data = False
 
         logger.debug(f"[UsagePersistence] Reset usage tracking for thread_id={self.thread_id}")
 

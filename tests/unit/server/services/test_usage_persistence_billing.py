@@ -126,8 +126,10 @@ class TestPersistUsageEffectiveByok:
         """Run persist_usage and return the usage_data dict passed to create_usage_record."""
         if has_token_usage:
             svc._token_usage = {"by_model": {}, "total_cost": 0.0}
+            svc._has_per_call_data = True
         else:
             svc._token_usage = None
+            svc._has_per_call_data = False
 
         mock_create = AsyncMock()
 
@@ -178,6 +180,34 @@ class TestPersistUsageEffectiveByok:
 
         data2 = await self._persist_and_capture(svc2, is_byok=False, has_token_usage=False)
         assert data2["is_byok"] is False
+
+    @pytest.mark.asyncio
+    async def test_caller_byok_used_when_records_were_empty(self):
+        """A zeroed payload is not per-call data, so the caller's hint still wins.
+
+        track_llm_usage([]) stores empty_usage_payload() and returns before
+        _has_platform_calls is computed. That payload is truthy, so keying the
+        decision on _token_usage read it as real billing data and discarded the
+        hint -- the same fallback the error path documents relying on.
+        """
+        svc = _make_service()
+        await svc.track_llm_usage([])
+        assert svc._token_usage, "the zeroed payload is truthy -- that is the trap"
+
+        mock_create = AsyncMock()
+
+        @asynccontextmanager
+        async def mock_get_conn():
+            yield MagicMock()
+
+        with patch(
+            f"{DB_MODULE}.create_usage_record", mock_create
+        ), patch(
+            "src.server.database.pool.get_db_connection", mock_get_conn
+        ):
+            await svc.persist_usage(response_id="resp-1", is_byok=False)
+
+        assert mock_create.call_args[0][0]["is_byok"] is False
 
 
 class TestTrackLlmUsageErrorPath:
