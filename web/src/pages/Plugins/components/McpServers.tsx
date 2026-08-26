@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AnimatePresence } from 'framer-motion';
@@ -34,10 +34,11 @@ import {
 } from '@/pages/ChatAgent/components/mcp/McpPrimitives';
 import {
   formatApiErrorDetail,
+  type BuiltinMcpServer,
   type CatalogServer,
 } from '@/pages/ChatAgent/utils/api';
 import { groupBy, matchesFilter } from '../utils/groupOrigins';
-import { isPluginSuppressed } from '../utils/provenance';
+import { isEffectivelyEnabled, isPluginSuppressed } from '../utils/provenance';
 import { withDetail } from '../utils/detailParam';
 import { useAddIntent } from '../hooks/useAddIntent';
 import { useDetailParam } from '../hooks/useDetailParam';
@@ -45,7 +46,7 @@ import { useMcpBulkActions } from '../hooks/useMcpBulkActions';
 import { useMcpOauthActions } from '../hooks/useMcpOauthActions';
 import { usePluginListSurface } from '../hooks/usePluginListSurface';
 import { useWorkspaceOptions } from '../hooks/useWorkspaceOptions';
-import { BuiltinMcpSection } from './BuiltinMcpSection';
+import { BuiltinMcpRow } from './BuiltinMcpRow';
 import { BulkActionBar } from './BulkActionBar';
 import { EmptyState } from './EmptyState';
 import { GroupDeck } from './GroupDeck';
@@ -59,9 +60,10 @@ import { PluginSuppressedBadge } from './PluginBadges';
 import { ServerDetail, type ServerDetailData } from './ServerDetail';
 
 /**
- * The Plugins → MCP tab, grouped by origin: the Platform deck (builtins),
- * `Your servers` (hand-made rows), one deck per plugin's servers, then one
- * deck per workspace. An enabled user-tier row is inherited by EVERY
+ * The Plugins → MCP tab, grouped by the package a row came from: one deck per
+ * shipped bundle, `Your servers` (hand-made rows), one deck per installed
+ * plugin, then one deck per workspace. A builtin no bundle declares keeps the
+ * `Platform servers` deck. An enabled user-tier row is inherited by EVERY
  * workspace of the user; a disabled row is an inert template. Remote (http)
  * servers carry the OAuth connect lifecycle — the vendor bearer never leaves
  * the host, so "Connect" here is all a sandbox needs for the server to work.
@@ -75,7 +77,11 @@ export function McpServers() {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: catalog, isLoading, error } = useMcpCatalog();
-  const { data: builtinData } = useBuiltinMcpServers();
+  const {
+    data: builtinData,
+    error: builtinError,
+    refetch: refetchBuiltins,
+  } = useBuiltinMcpServers();
   const builtinToggleMutation = useToggleBuiltinMcpServer();
   const { data: vault } = useUserVaultSecrets();
   const createMutation = useCreateMcpCatalogServer();
@@ -168,8 +174,8 @@ export function McpServers() {
 
   const visibleBuiltins = builtinServers.filter(
     (s) =>
-      matchesFilter(surface.filter, s.name, s.description) &&
-      surface.matchesState(s.enabled),
+      matchesFilter(surface.filter, s.name, s.description, s.plugin_name) &&
+      surface.matchesState(s.enabled, isPluginSuppressed(s)),
   );
   const visibleServers = servers.filter(
     (s) =>
@@ -190,6 +196,17 @@ export function McpServers() {
     visibleBuiltins.length + visibleServers.length + visibleWorkspaceServers.length;
 
   const ownServers = visibleServers.filter((s) => !s.plugin_name);
+  // Builtins group by the bundle that declares them, the same way catalog
+  // rows group by the plugin that installed them: one deck per package,
+  // whether it arrived in the image or in a zip. What is left over is a
+  // server an operator added to agent_config.yaml, which no package claims.
+  const bundleSections = [
+    ...groupBy(
+      visibleBuiltins.filter((s) => s.plugin_name),
+      (s) => s.plugin_name as string,
+    ).entries(),
+  ].sort(([a], [b]) => a.localeCompare(b));
+  const unownedBuiltins = visibleBuiltins.filter((s) => !s.plugin_name);
   const pluginSections = [
     ...groupBy(
       visibleServers.filter((s) => s.plugin_name),
@@ -366,13 +383,76 @@ export function McpServers() {
     );
   }
 
-  /** Jump to the plugin's card. The overlay open here belongs to this tab, so
-   *  it goes; every other param travels. */
-  function openPluginsTab() {
-    const next = withDetail(searchParams, null);
+  function renderBuiltinDeck(
+    id: string,
+    title: string,
+    rows: BuiltinMcpServer[],
+    extras: { badge?: ReactNode; action?: ReactNode } = {},
+  ) {
+    return (
+      <GroupDeck
+        key={id}
+        id={id}
+        title={title}
+        icon={Server}
+        count={rows.length}
+        enabledCount={rows.filter(isEffectivelyEnabled).length}
+        badge={extras.badge}
+        action={extras.action}
+        forceExpanded={surface.forceExpanded}
+        selection={selection}
+        selectionKeys={rows.map((s) => `builtin:${s.name}`)}
+      >
+        <AnimatePresence initial={false}>
+          {rows.map((server) => (
+            <BuiltinMcpRow
+              key={server.name}
+              server={server}
+              workspaces={wsOptions}
+              busy={
+                builtinTogglingName === server.name ||
+                denyBusyName === server.name
+              }
+              selection={selection}
+              onOpen={() => detail.open(server.name)}
+              onToggle={(enabled) => handleToggleBuiltin(server.name, enabled)}
+              onSetWorkspaceDisabled={(wsId, disabled) =>
+                handleSetWorkspaceDisabled(server.name, wsId, disabled)
+              }
+            />
+          ))}
+        </AnimatePresence>
+      </GroupDeck>
+    );
+  }
+
+  /** Open the package's own card. The deck already knows which one it is, so
+   *  the detail ref carries that name -- landing on the bare list instead
+   *  leaves the reader to find it again, and there is usually more than one.
+   *  The overlay open here belongs to this tab, so it goes; every other param
+   *  travels. */
+  function openPluginDetail(name: string) {
+    const next = withDetail(searchParams, {
+      kind: 'plugin',
+      name,
+      workspaceId: null,
+    });
     next.set('tab', 'plugins');
     setSearchParams(next, { replace: true });
   }
+
+  const openPluginButton = (name: string) => (
+    <button
+      type="button"
+      title={t('plugins.groups.openPlugin')}
+      aria-label={t('plugins.groups.openPlugin')}
+      onClick={() => openPluginDetail(name)}
+      className="p-1 rounded transition-colors hover:bg-foreground/10"
+      style={{ color: 'var(--color-text-tertiary)' }}
+    >
+      <Blocks className="h-3.5 w-3.5" />
+    </button>
+  );
 
   return (
     <div className="flex flex-col gap-3">
@@ -413,16 +493,37 @@ export function McpServers() {
         </RowNote>
       )}
 
-      <BuiltinMcpSection
-        servers={visibleBuiltins}
-        workspaces={wsOptions}
-        busyName={builtinTogglingName ?? denyBusyName}
-        forceExpanded={surface.forceExpanded}
-        selection={selection}
-        onOpen={(server) => detail.open(server.name)}
-        onToggle={handleToggleBuiltin}
-        onSetWorkspaceDisabled={handleSetWorkspaceDisabled}
-      />
+      {/* The shipped decks are the only thing this query feeds, so without a
+          notice a failed load reads as "this build ships nothing" -- and the
+          user's own section renders fine beside it, which makes the page look
+          healthy. Same shape as the registry note above: say it, offer the
+          retry, leave the rest of the tab alone. */}
+      {!!builtinError && (
+        <RowNote icon={AlertTriangle}>
+          {t('plugins.mcp.builtinLoadFailed')}{' '}
+          <button
+            type="button"
+            onClick={() => void refetchBuiltins()}
+            className="underline underline-offset-2 hover:text-[var(--color-text-secondary)]"
+          >
+            {t('common.retry')}
+          </button>
+        </RowNote>
+      )}
+
+      {bundleSections.map(([bundleName, rows]) =>
+        renderBuiltinDeck(`mcp:bundle:${bundleName}`, bundleName, rows, {
+          badge: <PluginSuppressedBadge row={rows[0]} />,
+          action: openPluginButton(bundleName),
+        }),
+      )}
+
+      {unownedBuiltins.length > 0 &&
+        renderBuiltinDeck(
+          'mcp:platform',
+          t('plugins.mcp.platform'),
+          unownedBuiltins,
+        )}
 
       {/* Filtered-empty drops the whole section: the notice above already says
           why, and a bare header over nothing reads as a glitch. Loading and
@@ -481,20 +582,9 @@ export function McpServers() {
           title={pluginName}
           icon={Blocks}
           count={rows.length}
-          enabledCount={rows.filter((s) => !!s.enabled).length}
+          enabledCount={rows.filter(isEffectivelyEnabled).length}
           badge={<PluginSuppressedBadge row={rows[0]} />}
-          action={
-            <button
-              type="button"
-              title={t('plugins.groups.openPlugin')}
-              aria-label={t('plugins.groups.openPlugin')}
-              onClick={openPluginsTab}
-              className="p-1 rounded transition-colors hover:bg-foreground/10"
-              style={{ color: 'var(--color-text-tertiary)' }}
-            >
-              <Blocks className="h-3.5 w-3.5" />
-            </button>
-          }
+          action={openPluginButton(pluginName)}
           forceExpanded={surface.forceExpanded}
           selection={selection}
           selectionKeys={rows.map((s) => `catalog:${s.name}`)}

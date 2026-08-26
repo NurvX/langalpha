@@ -2820,7 +2820,8 @@
     "mcp": {
       "platform": "Platform servers",
       "platformBadge": "Platform",
-      "yours": "Your servers"
+      "yours": "Your servers",
+      "builtinLoadFailed": "Couldn't load the servers that ship with the app."
     },
     "skills": {
       "platform": "Platform skills",
@@ -2866,7 +2867,7 @@
       "inWorkspace": "Workspace: {{name}}",
       "unknownWorkspace": "Unknown workspace",
       "triggerAria": "Scope: {{scope}}",
-      "movePluginBlocked": "Installed by {{plugin}}; plugin components stay at the account level"
+      "movePluginBlocked": "Owned by {{plugin}}; its components stay at the account level"
     },
     "list": {
       "title": "Installed plugins",
@@ -2896,7 +2897,8 @@
       "uninstallFailed": "Uninstall failed",
       "uninstallConfirm": "Uninstall {{plugin}}? Its servers and skills will be removed from every workspace. Customized components are kept.",
       "uninstallConfirmYes": "Uninstall",
-      "uninstallConfirmNo": "Keep"
+      "uninstallConfirmNo": "Keep",
+      "sourceBundled": "Ships with LangAlpha"
     },
     "component": {
       "fromPlugin": "Provided by {{plugin}}",
@@ -2954,7 +2956,8 @@
       "collapseAria": "Collapse {{title}}",
       "selectAllAria": "Select all in {{title}}",
       "uploaded": "Uploaded",
-      "openPlugin": "View plugin"
+      "openPlugin": "View plugin",
+      "bundled": "Built in"
     },
     "bulk": {
       "select": "Select",
@@ -3027,7 +3030,10 @@
       "sourceLabel": "Source",
       "installed": "Installed",
       "openComponentAria": "Open {{name}}",
-      "toolsFailed": "Could not load tools. The request failed, try again."
+      "toolsFailed": "Could not load tools. The request failed, try again.",
+      "toolsUnavailable": "Not available from this server process. A restart usually restores it.",
+      "repository": "Repository",
+      "license": "License"
     }
   }
 }

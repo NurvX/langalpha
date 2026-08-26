@@ -16,6 +16,7 @@ import {
   getMcpCatalog,
   getMcpCatalogServerTools,
   getBuiltinMcpServers,
+  getBuiltinMcpServerTools,
   setBuiltinMcpServerEnabled,
   createMcpCatalogServer,
   updateMcpCatalogServer,
@@ -199,6 +200,24 @@ export function useMcpCatalogServerTools(name: string | null) {
     queryFn: () => getMcpCatalogServerTools(name!),
     enabled: !!name,
     staleTime: 60_000,
+  });
+}
+
+/** A builtin's tools, cached for as long as the answer can be trusted.
+ *
+ *  A connected builtin really is frozen: its tool list is fixed when the
+ *  worker connects it and only a restart moves it. `connected: false` is a
+ *  different kind of answer -- the worker that replied is one of several, and
+ *  a builtin it failed to connect at startup stays dropped for that process
+ *  alone. Freezing that reply is what turns one worker's gap into a permanent
+ *  "tools unavailable" for the session, so it is left stale and the next
+ *  remount or refocus gets another draw. */
+export function useBuiltinMcpServerTools(name: string | null) {
+  return useQuery({
+    queryKey: queryKeys.mcp.builtinServerTools(name ?? ''),
+    queryFn: () => getBuiltinMcpServerTools(name!),
+    enabled: !!name,
+    staleTime: (query) => (query.state.data?.connected ? Infinity : 0),
   });
 }
 

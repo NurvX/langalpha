@@ -6,7 +6,13 @@ import {
   TagBadge,
 } from '@/pages/ChatAgent/components/mcp/McpPrimitives';
 import { oauthLabelKey } from '@/pages/ChatAgent/components/mcp/McpStatusPill';
-import { useMcpCatalogServerTools } from '@/hooks/useMcpServers';
+import {
+  useBrokerages,
+  useBuiltinMcpServerTools,
+  useMcpCatalogServerTools,
+} from '@/hooks/useMcpServers';
+import { brokerageArt, mcpServerArt } from '@/lib/brandArt';
+import { brokerageForUrl } from '../brokerages';
 import { createDateFormatter } from '@/lib/format';
 import type {
   BuiltinMcpServer,
@@ -54,10 +60,23 @@ export function ServerDetail({
   const { t } = useTranslation();
   const labelId = useId();
   const { server, origin } = data;
-  // Only catalog rows have a host-side discovery snapshot to show.
-  const toolsQuery = useMcpCatalogServerTools(origin === 'user' ? server.name : null);
+  // Two sources for the same section, because a server's tools are discovered
+  // by whoever owns the server: the user's rows carry the snapshot taken when
+  // they added or refreshed one, and a builtin's schemas are what this process
+  // froze at startup. Only one of the two ever runs.
+  const catalogTools = useMcpCatalogServerTools(origin === 'user' ? server.name : null);
+  const builtinTools = useBuiltinMcpServerTools(
+    origin === 'builtin' ? server.name : null,
+  );
+  const toolsQuery = origin === 'builtin' ? builtinTools : catalogTools;
 
   const catalog = origin === 'user' ? (data.server as CatalogServer) : null;
+  // Resolved the same way the row that opened this overlay resolves it, off the
+  // address rather than the name: the two surfaces have to agree about which
+  // vendor a row still points at, and a row edited elsewhere drops the mark
+  // here for the same reason it drops it there.
+  const { data: brokerages } = useBrokerages();
+  const vendor = brokerages ? brokerageForUrl(catalog?.url, brokerages) : null;
   // Off the pill's own exhaustive table: a status added later is a compile
   // error there rather than a label that silently goes missing here.
   const oauthLabel = oauthLabelKey(catalog?.oauth_status);
@@ -70,7 +89,9 @@ export function ServerDetail({
         <DetailHeader
           name={server.name}
           labelId={labelId}
-          kind={t('plugins.detail.kindServer')}
+          kind="server"
+          kindLabel={t('plugins.detail.kindServer')}
+          art={brokerageArt(vendor) ?? (catalog ? mcpServerArt(catalog) : undefined)}
           meta={
             <>
               <span>{server.transport}</span>
@@ -112,7 +133,7 @@ export function ServerDetail({
         </p>
       )}
 
-      {origin === 'user' && (
+      {(origin === 'user' || origin === 'builtin') && (
         <DetailSection
           title={t('plugins.detail.tools')}
           count={toolsQuery.data?.tools.length}
@@ -130,6 +151,14 @@ export function ServerDetail({
             // the truth is that the request failed and wants a retry.
             <p className="text-xs" style={{ color: 'var(--color-loss)' }}>
               {t('plugins.detail.toolsFailed')}
+            </p>
+          ) : builtinTools.data?.connected === false ? (
+            // Third state, distinct from both above: the request succeeded and
+            // this worker simply has no snapshot, because its startup connect
+            // failed and a frozen registry is never repaired. Saying "no tools"
+            // here would report one process's gap as the server's shape.
+            <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+              {t('plugins.detail.toolsUnavailable')}
             </p>
           ) : !toolsQuery.data || toolsQuery.data.tools.length === 0 ? (
             <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>

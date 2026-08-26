@@ -86,6 +86,14 @@ export const queryKeys = {
     workspace: (wsId: string) => [...queryKeys.mcp.all, 'workspace', wsId],
     // Discovered tool snapshot for one catalog server (the detail view).
     serverTools: (name: string) => [...queryKeys.mcp.all, 'serverTools', name],
+    // A builtin's tools, read from the frozen process registry. Its own family
+    // rather than a child of `builtins()`: schemas are fixed for the process
+    // lifetime, so a toggle there has nothing to tell this.
+    builtinServerTools: (name: string) => [
+      ...queryKeys.mcp.all,
+      'builtinServerTools',
+      name,
+    ],
   },
   // The brokerage connectors this build ships. Deliberately its own family
   // rather than a child of `mcp`: it is static and user-independent, so the

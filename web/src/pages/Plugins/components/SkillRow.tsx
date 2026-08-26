@@ -7,7 +7,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
-import { IdentityTile } from '@/pages/ChatAgent/components/mcp/IdentityTile';
+import { BrandMark } from '@/pages/ChatAgent/components/mcp/BrandMark';
 import {
   EnabledToggle,
   KebabTrigger,
@@ -122,7 +122,7 @@ export function SkillRow({
     <ServerRowShell
       testid={`skill-row-${skill.name}`}
       {...(selection ?? {})}
-      tile={<IdentityTile name={skill.name} />}
+      tile={<BrandMark name={skill.name} kind="skill" />}
       onOpen={onOpen}
       main={
         <>
@@ -144,7 +144,7 @@ export function SkillRow({
             {lockedByUserTier && (
               <TagBadge soft>{t('plugins.skills.userDisabledBadge')}</TagBadge>
             )}
-            <PluginSuppressedBadge row={skill} />
+            {!inDeck && <PluginSuppressedBadge row={skill} />}
           </ServerNameLine>
           {skill.description && (
             <p
