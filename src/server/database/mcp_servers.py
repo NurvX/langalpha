@@ -253,7 +253,7 @@ async def update_catalog_server(
                 # A live (enabled) server changed shape — every workspace of the
                 # user must re-resolve on next acquire.
                 if row["enabled"]:
-                    await _bump_user_versions(cur, user_id)
+                    await bump_user_versions(cur, user_id)
                 logger.info(f"[mcp_db] update_catalog_server user_id={user_id} name={name}")
                 return _catalog_row_to_dict(row)
 
@@ -304,7 +304,7 @@ async def delete_catalog_server(
                     (user_id, name),
                 )
                 if row["enabled"]:
-                    await _bump_user_versions(cur, user_id)
+                    await bump_user_versions(cur, user_id)
                 logger.info(f"[mcp_db] delete_catalog_server user_id={user_id} name={name}")
                 return True
 
@@ -332,7 +332,7 @@ async def set_catalog_server_enabled(
                 if not await cur.fetchone():
                     return None
                 row = await _read_catalog_row(cur, user_id, name)
-                await _bump_user_versions(cur, user_id)
+                await bump_user_versions(cur, user_id)
                 logger.info(
                     f"[mcp_db] set_catalog_server_enabled user_id={user_id} "
                     f"name={name} enabled={enabled}"
@@ -369,52 +369,8 @@ async def bump_user_workspaces_mcp_version(user_id: str) -> int:
     """
     async with get_db_connection() as conn:
         async with conn.cursor() as cur:
-            await _bump_user_versions(cur, user_id)
+            await bump_user_versions(cur, user_id)
             return cur.rowcount
-
-
-async def list_user_builtin_disables(user_id: str) -> set[str]:
-    """Builtin server names this user disabled account-wide."""
-    async with get_db_connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(
-                "SELECT name FROM user_mcp_builtin_disables WHERE user_id = %s",
-                (user_id,),
-            )
-            return {r["name"] for r in await cur.fetchall()}
-
-
-async def set_user_builtin_disable(user_id: str, name: str, disabled: bool) -> None:
-    """Write/clear an account-wide builtin disable.
-
-    Both directions change every workspace's effective set, so the fan-out
-    bump runs in the same transaction (next-acquire convergence).
-    """
-    async with get_db_connection() as conn:
-        async with conn.transaction():
-            async with conn.cursor() as cur:
-                if disabled:
-                    await cur.execute(
-                        """
-                        INSERT INTO user_mcp_builtin_disables (user_id, name)
-                        VALUES (%s, %s)
-                        ON CONFLICT (user_id, name) DO NOTHING
-                        """,
-                        (user_id, name),
-                    )
-                else:
-                    await cur.execute(
-                        """
-                        DELETE FROM user_mcp_builtin_disables
-                        WHERE user_id = %s AND name = %s
-                        """,
-                        (user_id, name),
-                    )
-                await _bump_user_versions(cur, user_id)
-                logger.info(
-                    f"[mcp_db] set_user_builtin_disable user_id={user_id} "
-                    f"name={name} disabled={disabled}"
-                )
 
 
 # ---------------------------------------------------------------------------
@@ -746,7 +702,7 @@ async def _bump_version(cur, workspace_id: str) -> None:
     )
 
 
-async def _bump_user_versions(cur, user_id: str) -> None:
+async def bump_user_versions(cur, user_id: str) -> None:
     """Increment mcp_config_version on every workspace of a user (same txn).
 
     One statement, unpaginated on purpose: a user-level change must never

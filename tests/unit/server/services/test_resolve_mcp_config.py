@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ptc_agent.config.core import MCPConfig, MCPServerConfig
+from src.server.database.account_disables import AccountDisables
 from src.server.services.mcp_config import (
     Origin,
     ResolvedMCP,
@@ -21,6 +22,7 @@ from src.server.services.mcp_config import (
     resolve_mcp_config,
     workspace_row_to_server_config,
 )
+from src.server.services.plugins.bundled import ComponentOwners
 
 
 def _entries(resolved, origin, state):
@@ -62,9 +64,28 @@ def _user_row(name, **overrides):
 
 
 async def _resolve(
-    base, rows, version=0, user_rows=None, connections=None, user_disabled=None
+    base,
+    rows,
+    version=0,
+    user_rows=None,
+    connections=None,
+    user_disabled=None,
+    disabled_bundles=None,
+    bundle_owns=None,
 ):
-    """Run resolve_mcp_config with all four DB reads mocked."""
+    """Run resolve_mcp_config with all five DB reads mocked.
+
+    ``bundle_owns`` maps a bundle name to the built-in names it ships, which
+    is the only thing the resolver asks the bundle reader for.
+    """
+    owners = ComponentOwners(
+        servers={
+            name: bundle
+            for bundle, names in (bundle_owns or {}).items()
+            for name in names
+        },
+        skills={},
+    )
     with (
         patch(
             "src.server.database.mcp_servers.get_workspace_servers_and_version",
@@ -79,8 +100,17 @@ async def _resolve(
             new=AsyncMock(return_value=list(connections or [])),
         ),
         patch(
-            "src.server.database.mcp_servers.list_user_builtin_disables",
-            new=AsyncMock(return_value=set(user_disabled or ())),
+            "src.server.database.account_disables.list_account_disables",
+            new=AsyncMock(
+                return_value=AccountDisables(
+                    servers=frozenset(user_disabled or ()),
+                    bundles=frozenset(disabled_bundles or ()),
+                )
+            ),
+        ),
+        patch(
+            "src.server.services.plugins.bundled.component_owners",
+            return_value=owners,
         ),
     ):
         return await resolve_mcp_config(base, "user-1", "ws-1")
@@ -509,8 +539,8 @@ class TestResolveInheritedLayer:
                 new=AsyncMock(return_value=[]),
             ),
             patch(
-                "src.server.database.mcp_servers.list_user_builtin_disables",
-                new=AsyncMock(return_value=set()),
+                "src.server.database.account_disables.list_account_disables",
+                new=AsyncMock(return_value=AccountDisables(frozenset(), frozenset())),
             ),
         ):
             resolved = await resolve_mcp_config(base, "user-1", "ws-1")

@@ -607,6 +607,11 @@ class CatalogServer(BaseModel):
     # servers only today — that's the only user-level discovery path). None =
     # no current snapshot; the UI omits the count rather than showing 0.
     tool_count: Optional[int] = None
+    # Set only when the server's handshake named a mark we can reach. A path on
+    # this origin, never the server's own URL: resolving it here means one fetch
+    # for everyone instead of every settings-page render telling a third party
+    # who is looking, which is the same reason the brokerage marks are proxied.
+    icon_url: Optional[str] = None
     command: Optional[str] = None
     args: list[str] = Field(default_factory=list)
     url: Optional[str] = None
@@ -671,6 +676,16 @@ class BuiltinServer(BaseModel):
     description: str = ""
     transport: str = "stdio"
     enabled: bool
+    # As on ``CatalogServer``: a path on this origin, present only when the
+    # server's handshake named a mark. Ours draw their bundle's mark instead,
+    # so in practice this fills in for a self-hoster's own additions.
+    icon_url: Optional[str] = None
+    # The bundle that ships this server, and whether that bundle is switched
+    # on — the same provenance pair a catalog row carries for its plugin, so
+    # the list groups and explains both kinds the same way. Only a server
+    # declared outside ``plugins/`` (an operator's own YAML entry) has none.
+    plugin_name: Optional[str] = None
+    plugin_enabled: Optional[bool] = None
     # Workspaces with a disable-marker for this builtin — all-scopes view only.
     disabled_workspace_ids: list[str] = Field(default_factory=list)
 
@@ -735,6 +750,7 @@ def catalog_row_to_response(
     *,
     oauth_status: ConnectionStatus | None = None,
     tool_count: int | None = None,
+    icon_url: str | None = None,
 ) -> CatalogServer:
     """Shape a DB catalog row for the owner-scoped API.
 
@@ -748,6 +764,7 @@ def catalog_row_to_response(
         enabled=bool(row.get("enabled", False)),
         oauth_status=oauth_status,
         tool_count=tool_count,
+        icon_url=icon_url,
         command=row.get("command"),
         args=row.get("args") or [],
         url=row.get("url"),

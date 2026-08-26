@@ -35,7 +35,6 @@ from src.server.database.mcp_servers import (
     get_catalog_server,
     get_workspace_servers_and_version,
     insert_workspace_server,
-    list_user_builtin_disables,
     list_workspace_servers,
     set_catalog_server_enabled,
     set_workspace_server_enabled,
@@ -58,6 +57,7 @@ from src.server.services.mcp_config import (
     Origin,
     ResolvedServer,
     State,
+    account_disabled_builtins,
     builtin_names,
     classify_server_name,
     reserved_catalog_names,
@@ -774,9 +774,11 @@ async def set_enabled(
         # Built-ins are toggled by an explicit (source='builtin', enabled=false)
         # disable-marker row; enabling = delete the marker.
         if body.enabled:
-            if name in await list_user_builtin_disables(user_id):
+            if name in await account_disabled_builtins(user_id):
                 # Deleting the marker would report success and change nothing:
-                # the account-level disable outranks every workspace.
+                # the account-level subtraction outranks every workspace,
+                # whether it came from this server's own switch or from the
+                # bundle that ships it.
                 raise HTTPException(
                     status_code=409,
                     detail=(
