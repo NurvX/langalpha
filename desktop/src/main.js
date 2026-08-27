@@ -815,8 +815,9 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// Release the loopback port on the way out. A relaunch that finds 8788 still in
-// TIME_WAIT falls through to 8789, and only three ports are allowlisted.
+// Release the loopback port on the way out, and with it every flow still armed
+// on it. The port itself the OS reclaims either way; what this is for is the
+// flows, which would otherwise sit on timers in a process that is leaving.
 app.on('before-quit', () => {
   oauth.stopCallbackServer()
   updater.stop()

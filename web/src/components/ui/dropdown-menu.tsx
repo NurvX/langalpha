@@ -2,6 +2,7 @@ import * as React from "react"
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu"
 
 import { cn } from "@/lib/utils"
+import { lastInputWasPointer } from "@/lib/inputModality"
 
 const DropdownMenu = DropdownMenuPrimitive.Root
 
@@ -14,12 +15,22 @@ const DropdownMenuContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content> & {
     container?: HTMLElement | null
   }
->(({ className, sideOffset = 4, collisionPadding = 8, container, ...props }, ref) => (
+>(({ className, sideOffset = 4, collisionPadding = 8, container, onCloseAutoFocus, ...props }, ref) => (
   <DropdownMenuPrimitive.Portal container={container ?? undefined}>
     <DropdownMenuPrimitive.Content
       ref={ref}
       sideOffset={sideOffset}
       collisionPadding={collisionPadding}
+      onCloseAutoFocus={(event) => {
+        onCloseAutoFocus?.(event)
+        // Radix hands focus back to the trigger on close so a keyboard user
+        // keeps their place. Chromium carries :focus-visible across that
+        // programmatic move, so a menu opened and dismissed with the mouse
+        // leaves the trigger ringed until the next click. Skip the restore
+        // when no key was pressed: focus falls to <body>, which is where
+        // clicking anywhere else would have put it anyway.
+        if (!event.defaultPrevented && lastInputWasPointer()) event.preventDefault()
+      }}
       className={cn(
         // Radix measures the space left to the collision boundary and publishes
         // it as --radix-…-available-height; capping there is what keeps a long
@@ -49,7 +60,7 @@ const DropdownMenuItem = React.forwardRef<
   <DropdownMenuPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-default select-none items-center gap-2 rounded-sm px-3 py-2 text-sm outline-none transition-colors",
+      "relative flex w-full cursor-default select-none items-center gap-2 rounded-sm px-2.5 py-1.5 text-sm outline-none transition-colors",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       itemVariants[variant],
       className
@@ -65,7 +76,7 @@ const DropdownMenuLabel = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DropdownMenuPrimitive.Label
     ref={ref}
-    className={cn("px-3 py-2 text-sm font-medium", className)}
+    className={cn("px-2.5 py-1.5 text-sm font-medium", className)}
     {...props}
   />
 ))
@@ -92,7 +103,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
   <DropdownMenuPrimitive.SubTrigger
     ref={ref}
     className={cn(
-      "flex cursor-default select-none items-center gap-2 rounded-sm px-3 py-2 text-sm outline-none data-[highlighted]:bg-accent/15 data-[state=open]:bg-accent/15",
+      "flex cursor-default select-none items-center gap-2 rounded-sm px-2.5 py-1.5 text-sm outline-none data-[highlighted]:bg-accent/15 data-[state=open]:bg-accent/15",
       className
     )}
     {...props}
