@@ -503,7 +503,7 @@ describe('interception, and what it refuses', () => {
   })
 
   // The loopback port is reachable from any page on the open web, not just from
-  // this machine: `<img src="http://127.0.0.1:8788/callback?error=x">` needs no
+  // this machine: `<img src="http://127.0.0.1:<port>/callback?error=x">` needs no
   // CORS, because the attacker never has to read the reply. The damage is the
   // side effect — the pending flow is consumed and the window signing in is
   // driven to a failure it never had. What separates that from the provider is
@@ -597,13 +597,25 @@ describe('interception, and what it refuses', () => {
     assert.equal(new URL(landed[1]).searchParams.get('code'), 'xyz')
   })
 
-  // The comment on CALLBACK_PORTS states a constraint that lives in someone
-  // else's dashboard: Supabase matches redirect_to as an exact string, so a port
-  // that is not on the Redirect URLs allowlist fails the exchange in production
-  // and only for the users whose earlier ports were already taken. The hardest
-  // possible thing to reproduce, so the list is pinned here instead.
-  test('the callback ports are the ones the provider allows', () => {
-    assert.deepEqual(oauth.CALLBACK_PORTS, [8788, 8789, 8790])
+  // The port is asked for, never chosen (RFC 8252 7.3), and the allowlist entry
+  // on the provider's side is a wildcard because of it. A hardcoded number would
+  // still pass every test above -- the listener works fine on any port -- and
+  // would fail in production only for the users whose machine already had that
+  // one taken, which is the hardest possible thing to reproduce. So the absence
+  // is asserted at the source, where reintroducing it is visible.
+  test('no callback port is hardcoded', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'oauth.js'), 'utf8')
+    assert.match(source, /\.listen\(EPHEMERAL_PORT, '127\.0\.0\.1'/)
+    assert.equal(/^const EPHEMERAL_PORT = 0$/m.test(source), true)
+    for (const line of source.split('\n')) {
+      assert.doesNotMatch(line, /\.listen\(\s*\d/, `a literal port reached listen(): ${line.trim()}`)
+    }
+  })
+
+  // And what it hands out is the port it actually got, which is the only way a
+  // caller can learn an OS-assigned one.
+  test('the port it reports is the one it bound', () => {
+    assert.ok(port >= 1024 && port <= 65535, `port ${port} is outside the usable range`)
   })
 
   // A code that arrives with nothing waiting is discarded, and the page written
@@ -696,10 +708,8 @@ describe('an MCP connector whose provider allows only a loopback callback', () =
   // degrade every desktop connect to the hosted callback silently, which for
   // the vendors this exists for is a dead end with no error to report.
   test('the URI it mints is one the backend will accept', async () => {
-    for (const p of oauth.CALLBACK_PORTS) {
-      assert.ok(p >= 1024, `port ${p} is below the backend's floor`)
-    }
     const u = new URL((await oauth.beginMcp(RETURN, windowStub([], PLUGINS))).redirectUri)
+    assert.ok(Number(u.port) >= 1024, `port ${u.port} is below the backend's floor`)
     assert.equal(u.protocol, 'http:')
     assert.equal(u.hostname, '127.0.0.1')
     assert.equal(u.pathname, oauth.MCP_CALLBACK_PATH)
@@ -1108,6 +1118,22 @@ describe('an authorize URL with nowhere to come back to', () => {
     assert.equal(landed.length, 1, 'the window has to be told')
     assert.equal(new URL(landed[0]).origin + new URL(landed[0]).pathname, 'https://app.example.com/auth/callback')
     assert.match(new URL(landed[0]).searchParams.get('error'), /port/)
+  })
+
+  // The refusal above is for this attempt, not for the session. Reading the port
+  // without ever starting one is what latched a failed boot bind for the life of
+  // the process: every sign-in refused for a condition that may have cleared in
+  // seconds, while the connector path next door recovered on its first retry.
+  test('and starts the listener the click after it will need', async () => {
+    opened.length = 0
+    // Nothing exposes the listener directly, so wait for the effect instead: a
+    // click that reaches the browser is a click that got a port.
+    for (let i = 0; i < 200 && opened.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      oauth.begin(authorize('https://app.example.com/auth/callback'), windowStub([]))
+    }
+    assert.equal(opened.length > 0, true, 'still refused; the failure is latched for the session')
+    assert.match(new URL(opened[0]).searchParams.get('redirect_to'), /^http:\/\/127\.0\.0\.1:\d+\/callback$/)
   })
 
   // The refusal is for flows that are ours. A crafted redirect_to is still not

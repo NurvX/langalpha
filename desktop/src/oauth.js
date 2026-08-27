@@ -38,11 +38,20 @@ const { forDisplay } = require('./redact')
 // redeemable by nothing on this machine at all.
 // ---------------------------------------------------------------------------
 
-// Every port here must be in the Supabase Redirect URLs allowlist, because
-// Supabase matches redirect_to as an exact string. A connector's AS is the
-// looser of the two, matching loopback as a pattern, so it takes what it is
-// given and adds no constraint of its own.
-const CALLBACK_PORTS = [8788, 8789, 8790]
+// The port is the operating system's to choose (RFC 8252 7.3: an authorization
+// server "MUST allow any port to be specified at the time of the request for
+// loopback IP redirect URIs"). Asking for a free one is what every native OAuth
+// client does, and it is the only way to be sure of getting one: three
+// hand-picked numbers were three chances for something else on the machine to
+// have taken them first, and when all three were gone the shell could not sign
+// anybody in until it was restarted.
+//
+// It costs a wildcard entry on the Supabase side, since sign-in's redirect_to is
+// matched against its Redirect URLs allowlist. A connector's authorization
+// server was never the constraint: it matches loopback as a pattern, and this
+// deployment's own backend allowlists any loopback port at or above 1024
+// (`sanitize_loopback_redirect`).
+const EPHEMERAL_PORT = 0
 // Matched to the backend's own STATE_TTL_SECONDS. A shell that gives up first
 // can only ever lose a flow the server would still have honoured, and brokerage
 // consent behind 2FA or an approval push routinely runs past five minutes.
@@ -145,7 +154,7 @@ function escapeHtml(value) {
  *
  * The provider returns by sending the user's browser to this URL, which every
  * browser labels `document`. Any other value is a page on the open web reaching
- * a loopback port as a subresource, and `<img src="http://127.0.0.1:8788/callback
+ * a loopback port as a subresource, and `<img src="http://127.0.0.1:<port>/callback
  * ?error=x">` is the whole attack: no-cors means the attacker never has to read
  * the reply, because the damage is the side effect. The flow is consumed and the
  * window that was signing in is driven to a failure it never had.
@@ -300,26 +309,41 @@ function connectorFlowFor(state) {
   return null
 }
 
-function startCallbackServer(i = 0) {
+// Bumped by every stop, so a bind that lands afterwards knows it was already
+// asked to go away. `stopCallbackServer` can only close a server it has, and a
+// start still in flight has none to hand it: the listener came up seconds later
+// with nothing waiting on it and nobody left to close it. No caller could reach
+// that until `begin` started one without awaiting it.
+let era = 0
+
+function startCallbackServer() {
+  const mine = era
   return new Promise((resolve) => {
-    if (i >= CALLBACK_PORTS.length) {
-      console.error('[auth] no free callback port in', CALLBACK_PORTS)
-      return resolve(null)
-    }
     const srv = http.createServer(handleCallback)
-    const nextPort = () => resolve(startCallbackServer(i + 1))
-    srv.once('error', nextPort)
-    srv.listen(CALLBACK_PORTS[i], '127.0.0.1', () => {
-      // Only a *bind* failure means "try the next port". Left attached, a later
-      // socket error would open a second listener and repoint `callbackPort`
-      // while the authorize URL already in the browser still names this one, so
-      // the provider's redirect arrives at a port nobody is reading.
-      srv.removeListener('error', nextPort)
+    const failed = (err) => {
+      // No fallback to try in the same attempt: the port is the OS's to pick, so
+      // there is no second number to reach for. The conditions that get here --
+      // no descriptors, no loopback to bind, a sandbox refusing the socket -- are
+      // the machine's rather than ours, which is why the retry belongs to the
+      // next caller (`ensureCallbackServer`) and not to a timer here.
+      console.error(`[auth] could not open a callback listener: ${err.code || err.message}`)
+      resolve(null)
+    }
+    srv.once('error', failed)
+    srv.listen(EPHEMERAL_PORT, '127.0.0.1', () => {
+      // Only a *bind* failure ends the attempt. Left attached, a later socket
+      // error would resolve this promise a second time and report a listener
+      // that is still up as never having opened.
+      srv.removeListener('error', failed)
       // Replaced, never just removed: a listening server with no 'error'
       // listener *throws* on the next socket error, which ends the app.
       srv.on('error', (err) => console.error(`[auth] callback server: ${err.code || err.message}`))
+      if (mine !== era) {
+        srv.close()
+        return resolve(null)
+      }
       server = srv
-      callbackPort = CALLBACK_PORTS[i]
+      callbackPort = srv.address().port
       console.log(`[auth] callback listening on http://127.0.0.1:${callbackPort}/callback`)
       resolve(callbackPort)
     })
@@ -329,11 +353,11 @@ function startCallbackServer(i = 0) {
 /**
  * The listening port, opening one now if the last attempt did not get one.
  *
- * Startup probes the three ports once, at the moment a crashed instance's socket
- * may still be in TIME_WAIT or a second copy may still be shutting down. That is
- * a transient condition, but the result was latched: `callbackPort` stayed null
- * for the life of the process and every connector flow in that session was
- * refused for a port that had since been free for hours.
+ * Startup opens the listener once, and a failure there used to be latched:
+ * `callbackPort` stayed null for the life of the process and every flow in that
+ * session was refused for a condition that may have cleared in seconds. Retrying
+ * on demand is cheap and costs one bind, so no caller has to inherit the state
+ * the app happened to boot into.
  */
 function ensureCallbackServer() {
   if (callbackPort) return Promise.resolve(callbackPort)
@@ -349,6 +373,7 @@ function ensureCallbackServer() {
  * for a code to arrive, so a flow left armed could only ever time out.
  */
 function stopCallbackServer() {
+  era += 1
   if (pending) {
     clearTimeout(pending.timer)
     pending = null
@@ -489,15 +514,24 @@ function begin(rawUrl, win) {
   // 'external', which opens the authorize URL in the system browser: the flow
   // then completes into a browser profile holding none of the PKCE verifier this
   // renderer just minted, so it cannot be redeemed and the window is never told
-  // why. Three ports is not a lot, and a preview plus a packaged app plus one
-  // other local service is enough to take them all. Claim it and say so.
+  // why. Claim it and say so.
+  //
+  // Reads the port rather than awaiting one: `decide` in main answers Electron's
+  // navigation handlers, which take a verdict in the same tick and no promise, so
+  // this flow is refused either way. Start the listener anyway and let it land
+  // after the refusal -- otherwise the boot failure stays latched for the life of
+  // the process exactly as it used to, and a user who only ever signs in never
+  // reaches the one path (`beginMcp`) that retries. What the message owes them is
+  // the way in that needs no listener at all; the click after it may well work.
   if (!callbackPort) {
     console.error('[auth] no loopback listener; refusing the flow rather than sending it somewhere it cannot finish')
+    ensureCallbackServer().catch(() => {})
     // Claimed either way: a window that closed under us still must not have its
     // authorize URL handed to a browser that cannot finish it.
     if (win.isDestroyed()) return true
     navigate(win, withParam(originalRedirect, 'error',
-      'Sign-in could not start: the local callback port is in use. Quit any other copy of LangAlpha and try again.'))
+      'Sign-in with a provider could not start: this machine would not give the app a local port '
+      + 'to listen on. Signing in with your email and password still works.'))
     return true
   }
 
@@ -685,5 +719,5 @@ function cancelMcp(win, flowId) {
 
 module.exports = {
   isAuthorizeUrl, begin, beginMcp, bindMcp, cancelMcp, startCallbackServer, stopCallbackServer,
-  isProviderNavigation, CALLBACK_PORTS, MCP_CALLBACK_PATH,
+  isProviderNavigation, MCP_CALLBACK_PATH,
 }
