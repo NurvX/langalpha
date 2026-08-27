@@ -117,6 +117,10 @@ html {
   --color-accent-overlay: rgba(233, 149, 74, 0.75);
   --color-accent-gradient: linear-gradient(90deg, #E9954A 0%, #E9954A 100%);
 
+  /* Focus ring, for plain CSS files. Derived from --ring so Tailwind's
+     ring-ring and a hand-written box-shadow can never drift apart. */
+  --color-focus-ring: hsl(var(--ring));
+
   --color-slash-icon: rgb(233, 149, 74);
   --color-slash-pill-bg: rgba(233, 149, 74, 0.1);
   --color-slash-pill-border: rgba(233, 149, 74, 0.28);
@@ -199,8 +203,15 @@ html {
   --destructive-foreground: 0 0% 98%;
   --border: 0 0% 100% / 0.08;
   --input: 220 4% 14.5%;
-  /* Focus ring is NEUTRAL — the amber never rings a control (DESIGN.md). */
-  --ring: 0 0% 100% / 0.45;
+  /* Focus ring is the navy this product carried before the amber. Amber is the
+     active/selected language here, so a ring painted in it reads as "selected"
+     rather than "focused" — which is the whole reason the ring is not the brand
+     color (DESIGN.md). Lightness is set by the *lightest* surface a ring can
+     land on, not the page: at 52% it cleared 3:1 (WCAG 1.4.11) against the
+     sidebar and the cards but came to 2.98:1 on --color-bg-elevated, the menus
+     and tooltips. 55% lands at 3.35:1 there and higher everywhere else. Opaque
+     rather than a wash, so that margin does not move with the backdrop. */
+  --ring: 221 43% 55%;
   --radius: 0.5rem;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.25);
 
@@ -363,8 +374,8 @@ html {
   --destructive-foreground: 0 0% 100%;
   --border: 60 2% 12% / 0.09;
   --input: 60 4% 96.5%;
-  /* Focus ring is NEUTRAL — the amber never rings a control (DESIGN.md). */
-  --ring: 60 2% 12% / 0.4;
+  /* Same navy as dark, one step down: on paper the lighter face washes out. */
+  --ring: 221 43% 45%;
   /* Kept tight rather than dropped: floating overlays (AgentEventOverlay,
      SelectionCommentOverlay, JumpToLatestPill) rely on this to separate from
      a now-pure-white page — the workspace cards carry their own border. */
