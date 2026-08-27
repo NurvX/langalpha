@@ -6,7 +6,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
-import { IdentityTile } from '@/pages/ChatAgent/components/mcp/IdentityTile';
+import { BrandMark } from '@/pages/ChatAgent/components/mcp/BrandMark';
 import { McpOauthPill } from '@/pages/ChatAgent/components/mcp/McpStatusPill';
 import { needsOauthConnect } from '@/pages/ChatAgent/components/mcp/mcpState';
 import {
@@ -17,6 +17,7 @@ import {
   ServerRowShell,
 } from '@/pages/ChatAgent/components/mcp/McpPrimitives';
 import type { CatalogServer } from '@/pages/ChatAgent/utils/api';
+import { brokerageArt, mcpServerArt } from '@/lib/brandArt';
 import { type Brokerage } from '../brokerages';
 import { isPluginOwned } from '../utils/provenance';
 import {
@@ -26,7 +27,7 @@ import {
   VendorNotes,
 } from './OauthRowParts';
 import { PluginSuppressedBadge } from './PluginBadges';
-import { ScopeControl, type ScopeWorkspace } from './ScopeControl';
+import { ScopeControl, scopeLocked, type ScopeWorkspace } from './ScopeControl';
 import { rowSelection, type BulkSelection } from './useBulkSelection';
 
 /**
@@ -101,7 +102,13 @@ export function McpCatalogRow({
     <ServerRowShell
       testid={`server-row-${server.name}`}
       {...rowSelection(selection, `catalog:${server.name}`)}
-      tile={<IdentityTile name={server.name} />}
+      tile={
+        <BrandMark
+          name={server.name}
+          kind="server"
+          art={brokerageArt(vendor) ?? mcpServerArt(server)}
+        />
+      }
       onOpen={onOpen}
       main={
         <>
@@ -147,7 +154,7 @@ export function McpCatalogRow({
             workspaces={workspaces}
             scopeWorkspaceId={null}
             disabledWorkspaceIds={server.disabled_workspace_ids ?? []}
-            checklistLocked={!server.enabled}
+            checklistLocked={scopeLocked(server)}
             busy={scopeBusy}
             moveBlockedReason={
               // OAuth connections exist only at the user tier, so a connected

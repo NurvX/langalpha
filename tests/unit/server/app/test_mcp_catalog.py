@@ -8,6 +8,7 @@ env/header maps verbatim so an edit round-trips them.
 from __future__ import annotations
 
 from contextlib import ExitStack, asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -1241,3 +1242,77 @@ async def test_every_shipped_brokerage_survives_the_user_url_policy():
             name=b.name, transport="http", url=b.url, description=b.description
         )
         assert server.url == b.url
+
+
+class TestBuiltinToolsSeparateEmptyFromUnknown:
+    """One worker's gap must not be reported as the server's shape.
+
+    ``connect_all`` drops a builtin whose startup connect failed and the
+    registry is then frozen, so that worker has no snapshot for it and never
+    retries while its siblings answer normally. The route reads process-local
+    state, which is the one thing it can honestly report, so it reports which
+    of the two it is rather than flattening both to an empty list.
+    """
+
+    @staticmethod
+    def _registry(**connectors):
+        return SimpleNamespace(connectors=dict(connectors))
+
+    @pytest.mark.asyncio
+    async def test_a_connected_builtin_reports_its_tools(self):
+        from src.server.app.mcp_catalog import get_builtin_server_tools
+
+        tool = SimpleNamespace(name="quote", description="d", input_schema={})
+        registry = self._registry(price=SimpleNamespace(tools=[tool]))
+        with patch("src.server.app.mcp_catalog.builtin_names", return_value={"price"}), \
+             patch("ptc_agent.core.mcp_registry.get_global_registry", return_value=registry):
+            out = await get_builtin_server_tools("price", "u-1")
+        assert out["connected"] is True
+        assert [t["name"] for t in out["tools"]] == ["quote"]
+
+    @pytest.mark.asyncio
+    async def test_a_connected_builtin_with_no_tools_is_still_connected(self):
+        # The genuinely empty case. It has to stay distinguishable from the one
+        # below or the fix is pointless.
+        from src.server.app.mcp_catalog import get_builtin_server_tools
+
+        registry = self._registry(price=SimpleNamespace(tools=[]))
+        with patch("src.server.app.mcp_catalog.builtin_names", return_value={"price"}), \
+             patch("ptc_agent.core.mcp_registry.get_global_registry", return_value=registry):
+            out = await get_builtin_server_tools("price", "u-1")
+        assert out["connected"] is True
+        assert out["tools"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_builtin_this_worker_never_connected_says_so(self):
+        from src.server.app.mcp_catalog import get_builtin_server_tools
+
+        # Configured (so not a 404) but absent from the registry: this is what
+        # a dropped connector looks like from here.
+        with patch("src.server.app.mcp_catalog.builtin_names", return_value={"price"}), \
+             patch("ptc_agent.core.mcp_registry.get_global_registry",
+                   return_value=self._registry()):
+            out = await get_builtin_server_tools("price", "u-1")
+        assert out["connected"] is False
+        assert out["tools"] == []
+
+    @pytest.mark.asyncio
+    async def test_no_registry_at_all_is_also_unknown_not_empty(self):
+        from src.server.app.mcp_catalog import get_builtin_server_tools
+
+        with patch("src.server.app.mcp_catalog.builtin_names", return_value={"price"}), \
+             patch("ptc_agent.core.mcp_registry.get_global_registry", return_value=None):
+            out = await get_builtin_server_tools("price", "u-1")
+        assert out["connected"] is False
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_name_is_still_a_404(self):
+        from fastapi import HTTPException
+
+        from src.server.app.mcp_catalog import get_builtin_server_tools
+
+        with patch("src.server.app.mcp_catalog.builtin_names", return_value={"price"}):
+            with pytest.raises(HTTPException) as exc:
+                await get_builtin_server_tools("nope", "u-1")
+        assert exc.value.status_code == 404
+

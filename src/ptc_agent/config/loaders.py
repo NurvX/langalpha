@@ -321,7 +321,6 @@ def load_from_dict(
     skills_config = SkillsConfig(
         enabled=skills_data.get("enabled", True),
         user_skills_dir=skills_data.get("user_skills_dir", "~/.ptc-agent/skills"),
-        project_skills_dir=skills_data.get("project_skills_dir", "skills"),
         sandbox_skills_base=skills_data.get(
             "sandbox_skills_base", f"{filesystem_config.working_directory}/.agents/skills"
         ),

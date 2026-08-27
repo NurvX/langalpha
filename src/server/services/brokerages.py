@@ -33,6 +33,12 @@ class Brokerage:
     name: str
     label: str
     url: str
+    # The broker's website, which is where their logo is and is almost never
+    # the endpoint's host: an MCP endpoint sits on an API subdomain that has no
+    # page (agent.robinhood.com) or one with no icons (api.ibkr.com). Named
+    # rather than derived from ``url``, because no amount of trimming labels
+    # off api.ibkr.com produces interactivebrokers.com.
+    site: str
     # Stored on the row, so it reaches the agent's prompt — describe the tools,
     # not the company.
     description: str
@@ -52,6 +58,7 @@ BROKERAGES: tuple[Brokerage, ...] = (
         name="robinhood",
         label="Robinhood",
         url="https://agent.robinhood.com/mcp/trading",
+        site="robinhood.com",
         description=(
             "Robinhood brokerage account: balances, positions, order history, "
             "instrument lookup, and order placement."
@@ -62,6 +69,7 @@ BROKERAGES: tuple[Brokerage, ...] = (
         name="ibkr",
         label="Interactive Brokers",
         url="https://api.ibkr.com/v1/api/mcp-public",
+        site="interactivebrokers.com",
         description=(
             "Interactive Brokers account: portfolio, positions, account "
             "performance, market data, and draft orders the user confirms in "

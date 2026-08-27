@@ -19,7 +19,9 @@ from httpx import ASGITransport, AsyncClient
 
 from ptc_agent.config.core import MCPServerConfig
 from src.server.app.mcp_servers import _derive_status
+from src.server.database.account_disables import AccountDisables
 from src.server.services.mcp_config import Origin
+from src.server.services.plugins.bundled import ComponentOwners
 from src.server.services.mcp_discovery import mcp_discovery_fingerprint
 from tests.conftest import create_test_app
 from tests.unit.server.mcp_builders import resolved_mcp
@@ -1669,8 +1671,8 @@ async def test_patch_enable_builtin_deletes_marker(client):
         patch("src.server.app.mcp_servers.db_get_workspace", new=AsyncMock(return_value=ws)),
         patch("src.server.app.setup.agent_config", base),
         patch(
-            "src.server.app.mcp_servers.list_user_builtin_disables",
-            new=AsyncMock(return_value=set()),
+            "src.server.app.mcp_servers.account_disabled_builtins",
+            new=AsyncMock(return_value=frozenset()),
         ),
         patch("src.server.app.mcp_servers.upsert_workspace_server", new=AsyncMock(return_value={})) as up,
         patch("src.server.app.mcp_servers.delete_workspace_server", new=AsyncMock(return_value=True)) as dele,
@@ -1693,8 +1695,46 @@ async def test_patch_enable_builtin_conflicts_when_disabled_for_user(client):
         patch("src.server.app.mcp_servers.db_get_workspace", new=AsyncMock(return_value=ws)),
         patch("src.server.app.setup.agent_config", base),
         patch(
-            "src.server.app.mcp_servers.list_user_builtin_disables",
-            new=AsyncMock(return_value={"builtin_search"}),
+            "src.server.app.mcp_servers.account_disabled_builtins",
+            new=AsyncMock(return_value=frozenset({"builtin_search"})),
+        ),
+        patch("src.server.app.mcp_servers.delete_workspace_server", new=AsyncMock(return_value=True)) as dele,
+    ):
+        resp = await client.patch(
+            f"/api/v1/workspaces/{ws['workspace_id']}/mcp/servers/builtin_search/enabled",
+            json={"enabled": True},
+        )
+    assert resp.status_code == 409
+    assert dele.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_patch_enable_builtin_conflicts_when_its_bundle_is_off(client):
+    """Same refusal when the subtraction came from the bundle, not the server.
+
+    A bundle disable leaves no per-server row, so the workspace's marker
+    delete would succeed and change nothing — success reported for a switch
+    that did not move. Patched one layer lower than the test above on
+    purpose: what is under test is that the router asks a question covering
+    both routes, not that a stub answers.
+    """
+    ws = _ws()
+    base = _agent_config([_builtin("builtin_search")])
+    owners = ComponentOwners(servers={"builtin_search": "some-bundle"}, skills={})
+    with (
+        patch("src.server.app.mcp_servers.db_get_workspace", new=AsyncMock(return_value=ws)),
+        patch("src.server.app.setup.agent_config", base),
+        patch(
+            "src.server.database.account_disables.list_account_disables",
+            new=AsyncMock(
+                return_value=AccountDisables(
+                    servers=frozenset(), bundles=frozenset({"some-bundle"})
+                )
+            ),
+        ),
+        patch(
+            "src.server.services.plugins.bundled.component_owners",
+            return_value=owners,
         ),
         patch("src.server.app.mcp_servers.delete_workspace_server", new=AsyncMock(return_value=True)) as dele,
     ):

@@ -2797,7 +2797,8 @@
     "mcp": {
       "platform": "平台服务器",
       "platformBadge": "平台",
-      "yours": "你的服务器"
+      "yours": "你的服务器",
+      "builtinLoadFailed": "无法加载随应用一起提供的服务器。"
     },
     "skills": {
       "platform": "平台技能",
@@ -2843,7 +2844,7 @@
       "inWorkspace": "工作区：{{name}}",
       "unknownWorkspace": "未知工作区",
       "triggerAria": "范围：{{scope}}",
-      "movePluginBlocked": "由 {{plugin}} 安装；插件组件保留在账户层级"
+      "movePluginBlocked": "由 {{plugin}} 提供；其组件保留在账户层级"
     },
     "list": {
       "title": "已安装插件",
@@ -2871,7 +2872,8 @@
       "uninstallFailed": "卸载失败",
       "uninstallConfirm": "卸载 {{plugin}}？其服务器和技能将从所有工作区移除。已自定义的组件会被保留。",
       "uninstallConfirmYes": "卸载",
-      "uninstallConfirmNo": "保留"
+      "uninstallConfirmNo": "保留",
+      "sourceBundled": "随 LangAlpha 提供"
     },
     "component": {
       "fromPlugin": "由 {{plugin}} 提供",
@@ -2928,7 +2930,8 @@
       "collapseAria": "收起 {{title}}",
       "selectAllAria": "全选 {{title}}",
       "uploaded": "本地上传",
-      "openPlugin": "查看插件"
+      "openPlugin": "查看插件",
+      "bundled": "内置"
     },
     "bulk": {
       "select": "选择",
@@ -2999,7 +3002,10 @@
       "sourceLabel": "来源",
       "installed": "安装于",
       "openComponentAria": "打开 {{name}}",
-      "toolsFailed": "无法加载工具。请求失败，请重试。"
+      "toolsFailed": "无法加载工具。请求失败，请重试。",
+      "toolsUnavailable": "当前服务进程未能获取，重启后通常可恢复。",
+      "repository": "代码仓库",
+      "license": "许可证"
     }
   }
 }

@@ -6,7 +6,7 @@ servers, and a workspace's DB-backed rows into one deterministic effective set:
 
     effective = built-ins (config order)
                 MINUS names disabled by a (source='builtin', enabled=false) row
-                MINUS names in user_mcp_builtin_disables (account-wide)
+                MINUS names disabled account-wide (server or owning bundle)
                 PLUS  enabled user-level servers (alphabetical)
                 MINUS names disabled by a (source='user', enabled=false) row
                 MINUS names shadowed by a workspace-local server
@@ -27,6 +27,7 @@ effective-list endpoint and the sandbox-sync path can import the same logic
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
@@ -206,6 +207,26 @@ def builtin_names() -> set[str]:
     return {s.name for s in setup.agent_config.mcp.servers}
 
 
+async def account_disabled_builtins(user_id: str) -> frozenset[str]:
+    """Built-in names this account has switched off, by either route.
+
+    Two different writes produce the same subtraction: a per-server disable,
+    and a disable of the bundle that ships the server. Both outrank every
+    workspace, so every surface that asks "is this off for the whole account"
+    has to mean both — asked once here rather than assembled per call site,
+    which is how the workspace re-enable came to report success for a name it
+    could not turn back on.
+    """
+    from src.server.database.account_disables import list_account_disables
+    from src.server.services.plugins.bundled import enforcement_owners
+
+    disables = await list_account_disables(user_id)
+    if not disables.bundles:
+        return disables.servers
+    owned, _ = enforcement_owners().owned_by(disables.bundles)
+    return disables.servers | owned
+
+
 def reserved_catalog_names() -> set[str]:
     """Names a catalog row may not claim, whichever door it arrives through.
 
@@ -307,22 +328,20 @@ async def resolve_mcp_config(
     """Resolve the effective MCP server set for ``workspace_id``.
 
     Built-ins come from ``base_config.mcp.servers`` (enabled ones, config
-    order); a ``(source='builtin', enabled=false)`` row or an account-wide
-    ``user_mcp_builtin_disables`` row removes a built-in by name; enabled
-    user-level servers are inherited (alphabetical) unless tombstoned by a
+    order); a ``(source='builtin', enabled=false)`` row, an account-wide
+    ``user_mcp_builtin_disables`` row, or a disable of the bundle that ships
+    it removes a built-in by name; enabled user-level servers are inherited
+    (alphabetical) unless tombstoned by a
     ``(source='user', enabled=false)`` row or shadowed by a workspace-local
     server; ``source='workspace'`` enabled rows are appended alphabetically.
     A workspace with zero rows AND zero user-level state returns the built-in
     objects unchanged (no copies) so the common case stays byte-identical
     downstream.
     """
-    import asyncio
-
     from src.server.database.mcp_oauth import list_connections
     from src.server.database.mcp_servers import (
         get_workspace_servers_and_version,
         list_enabled_user_servers,
-        list_user_builtin_disables,
     )
     from src.server.services.brokerages import brokerage_names
 
@@ -353,10 +372,13 @@ async def resolve_mcp_config(
     # mutations fan the bump out to every workspace of the user, so the same
     # ordering argument covers the user reads below.
     rows, version = await get_workspace_servers_and_version(workspace_id)
+    # A switched-off bundle is not a tier of its own: it expands into the
+    # names of the built-ins it ships, and every rule below applies to them
+    # unchanged. That expansion is what account_disabled_builtins does.
     user_rows, connections, user_disabled_builtins = await asyncio.gather(
         list_enabled_user_servers(user_id),
         list_connections(user_id),
-        list_user_builtin_disables(user_id),
+        account_disabled_builtins(user_id),
     )
 
     # Short-circuit: nothing user-level and no workspace rows ⇒ the effective

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ptc_agent.config.plugins import bundled_skill_dirs
 from ptc_agent.config.core import (
     CoreConfig,
     DaytonaConfig,
@@ -100,6 +101,25 @@ class FlashConfig(BaseModel):
     enabled: bool = True
 
 
+#: The operator's own drop-in directory, and the one place to override a
+#: shipped skill. Absolute rather than relative to the working directory, so it
+#: means the same thing whether the server was started from the repo or from
+#: anywhere else.
+DEFAULT_USER_SKILLS_DIR = "~/.ptc-agent/skills"
+
+
+def host_skill_dirs(user_skills_dir: str = DEFAULT_USER_SKILLS_DIR) -> list[Path]:
+    """Every host-side skill source, in the order that resolves them.
+
+    Last wins, so the operator's directory comes after the bundles. Two
+    readers that never build a config -- skill-name reservation and the
+    content route -- have to name the same sources in the same order as
+    delivery does, because both answer questions about the file the agent will
+    actually load.
+    """
+    return [*bundled_skill_dirs(), Path(user_skills_dir).expanduser()]
+
+
 class SkillsConfig(BaseModel):
     """Skills configuration for agent capabilities.
 
@@ -107,35 +127,34 @@ class SkillsConfig(BaseModel):
     Each skill is a directory containing a SKILL.md file with YAML frontmatter.
 
     Resolution and precedence:
-    - Skills are sourced from both user and project directories.
-    - Project skills override user skills when names conflict.
+    - Skills are sourced from the shipped bundles, then the user directory.
+    - A later source overrides an earlier one when names conflict, so an
+      operator can replace a shipped skill by dropping one of the same name
+      into ``user_skills_dir``.
     """
 
     enabled: bool = True
-    user_skills_dir: str = "~/.ptc-agent/skills"
-    project_skills_dir: str = (
-        "skills"  # Project skills directory (relative to project root)
-    )
+    #: See ``DEFAULT_USER_SKILLS_DIR``.
+    user_skills_dir: str = DEFAULT_USER_SKILLS_DIR
     sandbox_skills_base: str = "/home/workspace/.agents/skills"  # Where skills live in sandbox
 
-    def local_skill_dirs_with_sandbox(
-        self, *, cwd: Path | None = None
-    ) -> list[tuple[str, str]]:
+    def local_skill_dirs_with_sandbox(self) -> list[tuple[str, str]]:
         """Return ordered (local_dir, sandbox_dir) sources.
 
         Precedence is last-wins (later sources override earlier ones).
-        Order: user skills < project skills (project wins on conflict).
+        Order: bundled skills < user skills.
+
+        Nothing here depends on the working directory. Both sources resolve
+        from somewhere fixed — the bundles from the installed source, the
+        operator's from their home — so a server started from anywhere finds
+        the same skills, which a directory relative to ``cwd`` could not
+        promise once the shipped skills moved into the bundles that declare
+        them.
         """
-        base = cwd or Path.cwd()
-
-        user_dir = str(Path(self.user_skills_dir).expanduser())
-        project_dir = str((base / self.project_skills_dir).resolve())
-
-        sources: list[tuple[str, str]] = [
-            (user_dir, self.sandbox_skills_base),
-            (project_dir, self.sandbox_skills_base),
+        return [
+            (str(d), self.sandbox_skills_base)
+            for d in host_skill_dirs(self.user_skills_dir)
         ]
-        return sources
 
 
 class SubagentConfig(BaseModel):
@@ -461,7 +480,6 @@ class AgentConfig(BaseModel):
         skills_config = SkillsConfig(
             enabled=kwargs.pop("skills_enabled", True),
             user_skills_dir=kwargs.pop("user_skills_dir", "~/.ptc-agent/skills"),
-            project_skills_dir=kwargs.pop("project_skills_dir", "skills"),
             sandbox_skills_base=kwargs.pop(
                 "sandbox_skills_base",
                 f"{filesystem_config.working_directory}/.agents/skills",

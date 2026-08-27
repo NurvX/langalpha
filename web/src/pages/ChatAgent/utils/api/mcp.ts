@@ -179,6 +179,9 @@ export interface CatalogServer {
   oauth_status?: McpOauthStatus | null;
   /** Host-side discovered tool count for the current config (OAuth servers). */
   tool_count?: number | null;
+  /** Path on this origin to the mark the server declared in its handshake.
+   * Absent when it declared none, which is most of them. */
+  icon_url?: string | null;
   /** Non-blocking policy nudges — present on create/update responses only. */
   warnings?: string[] | null;
   created_at: string | null;
@@ -427,6 +430,30 @@ export async function getMcpCatalogServerTools(name: string): Promise<{
   };
 }
 
+/** What a builtin reported to this process at startup. Same shape as the
+ * catalog's snapshot so the detail view has one way to render tools, minus a
+ * `discovered_at`: a builtin is discovered once per process, not at a moment
+ * the user acted. */
+export async function getBuiltinMcpServerTools(name: string): Promise<{
+  server_name: string;
+  /** False when this worker never connected the server, which is not the same
+   *  as the server having no tools. Absent on an older backend, so it defaults
+   *  to true and the view reads as it did before. */
+  connected: boolean;
+  tools: McpToolSummary[];
+  discovered_at: string | null;
+}> {
+  const { data } = await api.get(
+    `/api/v1/mcp/builtin-servers/${encodeURIComponent(name)}/tools`,
+  );
+  return {
+    server_name: data.server_name ?? name,
+    connected: data.connected ?? true,
+    tools: data.tools ?? [],
+    discovered_at: data.discovered_at ?? null,
+  };
+}
+
 export async function createMcpCatalogServer(body: McpServerInput): Promise<CatalogServer> {
   const { data } = await api.post<CatalogServer>('/api/v1/mcp/servers', body);
   return data;
@@ -468,6 +495,13 @@ export interface BuiltinMcpServer {
   description: string;
   transport: string;
   enabled: boolean;
+  /** Path on this origin to the mark the server declared in its handshake. */
+  icon_url?: string | null;
+  /** The bundle that ships this server, and whether that bundle is on — the
+   *  same provenance pair a catalog row carries, so both group and explain
+   *  themselves the same way. */
+  plugin_name?: string | null;
+  plugin_enabled?: boolean | null;
   /** Workspaces with a disable-marker for this builtin — all-scopes view only. */
   disabled_workspace_ids?: string[];
 }

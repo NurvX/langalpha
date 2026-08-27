@@ -74,6 +74,12 @@ INTERNAL_SERVER_ERROR_DETAIL = "Internal Server Error"
 
 # Global variables
 agent_config = None  # PTC Agent configuration (loaded from config files)
+# Which bundle owns each shipped MCP server and skill, as of the read that
+# composed `agent_config`. Enforcement reads this rather than re-reading
+# plugins/, so it cannot disagree with the server set actually running; the
+# Plugins page keeps the live read, where showing an edited manifest at once
+# is the point. See services/plugins/bundled.enforcement_owners.
+bundle_owners = None
 session_service = None  # PTC Session service instance
 workspace_manager = None  # Workspace manager instance
 checkpointer = None  # PTC Agent LangGraph checkpointer for state persistence
@@ -163,6 +169,7 @@ async def lifespan(app: FastAPI):
     """Initialize resources when server starts, cleanup when stops."""
     global \
         agent_config, \
+        bundle_owners, \
         session_service, \
         workspace_manager, \
         checkpointer, \
@@ -292,6 +299,10 @@ async def lifespan(app: FastAPI):
 
         logger.info("Loading PTC Agent configuration...")
         agent_config = await load_from_files(context=ConfigContext.SDK)
+
+        from src.server.services.plugins.bundled import component_owners
+
+        bundle_owners = component_owners()
 
         from src.server.services.platform_secret_rollout import (
             reconcile_platform_secrets_at_boot,

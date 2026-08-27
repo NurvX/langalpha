@@ -315,7 +315,8 @@ async def discover_user_mcp_schemas(
         For each server: run ``mcp_client.py discover <name> <out>`` (file IPC —
         the CLI writes its result JSON to a temp file, never stdout), read the
         file back, delete it. Per-server error isolation; one hung/broken server
-        never blocks the others. Returns ``{name: {"status","error","tools"}}``.
+        never blocks the others. Returns
+        ``{name: {"status","error","tools","server_info"}}``.
         No vault file is needed — the client substitutes inert placeholders.
         """
     await sandbox._wait_ready()
@@ -363,10 +364,12 @@ async def discover_user_mcp_schemas(
                 parsed = json.loads(
                     raw.decode("utf-8") if isinstance(raw, bytes) else raw
                 )
+                info = parsed.get("server_info")
                 return name, {
                     "status": parsed.get("status", "error"),
                     "error": parsed.get("error", "") or "",
                     "tools": parsed.get("tools") or [],
+                    "server_info": info if isinstance(info, dict) else None,
                 }
             except Exception as e:  # noqa: BLE001 — isolate one bad server
                 logger.warning(

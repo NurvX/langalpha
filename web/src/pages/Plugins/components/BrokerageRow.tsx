@@ -6,7 +6,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
-import { IdentityTile } from '@/pages/ChatAgent/components/mcp/IdentityTile';
+import { brokerageArt } from '@/lib/brandArt';
+import { BrandMark } from '@/pages/ChatAgent/components/mcp/BrandMark';
 import { McpOauthPill } from '@/pages/ChatAgent/components/mcp/McpStatusPill';
 import { needsOauthConnect } from '@/pages/ChatAgent/components/mcp/mcpState';
 import {
@@ -26,7 +27,7 @@ import {
   VendorNotes,
 } from './OauthRowParts';
 import { RowNote } from './RowNote';
-import { ScopeControl, type ScopeWorkspace } from './ScopeControl';
+import { ScopeControl, scopeLocked, type ScopeWorkspace } from './ScopeControl';
 
 /**
  * One shipped brokerage, in whichever of its two states the user is in: an
@@ -111,9 +112,10 @@ export function BrokerageRow({
   // label and, with no description of its own, the vendor's description too --
   // so a row pointing at an address the user chose was still introduced as
   // "Interactive Brokers account: portfolio, positions...". It goes back to
-  // wearing its own name, which is what it is now. The tile is unchanged: it is
-  // decorative and keyed on the row's name, which is the one thing that did not
-  // move, and re-keying it here would split the tint across the two tabs.
+  // wearing its own name, which is what it is now. The mark below follows the
+  // same rule and drops the vendor's art, but the monogram it falls back to
+  // stays keyed on the row's name, which is the one thing that did not move --
+  // re-keying that would split the tint across the two tabs.
   const title = redirected ? (row?.name ?? brokerage.name) : brokerage.label;
   const description = redirected
     ? row?.description
@@ -122,7 +124,16 @@ export function BrokerageRow({
   return (
     <ServerRowShell
       testid={rowKey}
-      tile={<IdentityTile name={brokerage.name} />}
+      // Off `vendor`, like every other vendor-specific thing on this row: a
+      // row edited to another host keeps its name and drops to a monogram,
+      // rather than drawing a broker's mark over somebody else's endpoint.
+      tile={
+        <BrandMark
+          name={brokerage.name}
+          kind="server"
+          art={brokerageArt(vendor)}
+        />
+      }
       main={
         <>
           <ServerNameLine name={title} />
@@ -180,7 +191,7 @@ export function BrokerageRow({
                 workspaces={workspaces}
                 scopeWorkspaceId={null}
                 disabledWorkspaceIds={row.disabled_workspace_ids ?? []}
-                checklistLocked={!row.enabled}
+                checklistLocked={scopeLocked(row)}
                 // A brokerage is an account-wide identity, so the only scope
                 // question it has is which workspaces may reach it. Moving one
                 // into a single workspace would strand the OAuth connection,

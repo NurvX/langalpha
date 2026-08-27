@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import React from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { renderWithProviders } from '@/test/utils';
 import type { CatalogServer, CatalogServerList } from '@/pages/ChatAgent/utils/api';
 // Aliased rather than wrapped: the field list is shared, the name this file
@@ -42,6 +43,8 @@ let catalogError: Error | null = null;
 let brokerages: unknown[] | undefined = [];
 let brokeragesError: Error | null = null;
 const refetchBrokerages = vi.fn();
+const refetchBuiltins = vi.fn();
+let builtinError: Error | null = null;
 let catalogLoading = false;
 let deletePending = false;
 
@@ -56,7 +59,12 @@ vi.mock('@/hooks/useMcpServers', () => ({
   useRefreshMcpOauthSchemas: () => ({ mutateAsync: mutateAsync.refresh, isPending: false }),
   // The nested BuiltinMcpSection renders nothing while its list is empty —
   // these tests exercise the user-tier list only.
-  useBuiltinMcpServers: () => ({ data: { servers: [] }, isLoading: false, error: null }),
+  useBuiltinMcpServers: () => ({
+    data: builtinError ? undefined : { servers: [] },
+    isLoading: false,
+    error: builtinError,
+    refetch: refetchBuiltins,
+  }),
   useToggleBuiltinMcpServer: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useSetMcpServerEnabledInWorkspace: () => ({ mutateAsync: mutateAsync.wsEnable, isPending: false }),
   useAdoptMcpServerToWorkspace: () => ({ mutateAsync: mutateAsync.adopt, isPending: false }),
@@ -203,6 +211,7 @@ beforeEach(() => {
   deletePending = false;
   brokerages = [];
   brokeragesError = null;
+  builtinError = null;
 });
 
 // ---------------------------------------------------------------------------
@@ -960,5 +969,71 @@ describe('McpServers — add intent', () => {
 
     renderWithProviders(<McpServers />, { route: '/plugins?tab=mcp' });
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deck actions
+// ---------------------------------------------------------------------------
+
+describe('McpServers — View plugin', () => {
+  /** The deck already knows which package it is. Setting only `tab=plugins`
+   *  drops the reader on the bare list to find it again, which reads as a
+   *  no-op whenever more than one package is installed. */
+  function Location() {
+    const [params] = useSearchParams();
+    return <div data-testid="loc">{params.toString()}</div>;
+  }
+
+  it('carries the deck name into the plugin detail', async () => {
+    catalogData = makeCatalog([
+      makeCatalogServer({ name: 'owned_one', plugin_name: 'acme-pack', plugin_enabled: true }),
+    ]);
+    renderWithProviders(
+      <>
+        <McpServers />
+        <Location />
+      </>,
+      { route: '/plugins?tab=mcp' },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /view plugin/i }));
+
+    await waitFor(() => {
+      const params = new URLSearchParams(screen.getByTestId('loc').textContent ?? '');
+      expect(params.get('tab')).toBe('plugins');
+      expect(params.get('detail')).toBe('plugin:acme-pack');
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The shipped servers failing to load
+// ---------------------------------------------------------------------------
+
+describe('McpServers — the shipped list fails', () => {
+  // The shipped decks are the only thing that query feeds, so with no notice
+  // an outright failure renders as "this build ships nothing" — and the user's
+  // own section loads fine beside it, which makes the page look healthy.
+  it('says so and offers a retry instead of showing nothing', () => {
+    builtinError = new Error('boom');
+    catalogData = makeCatalog([]);
+
+    renderWithProviders(<McpServers />);
+
+    expect(
+      screen.getByText(/servers that ship with the app/i),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    expect(refetchBuiltins).toHaveBeenCalled();
+  });
+
+  it('stays out of the way when the query is fine', () => {
+    renderWithProviders(<McpServers />);
+
+    expect(
+      screen.queryByText(/servers that ship with the app/i),
+    ).not.toBeInTheDocument();
   });
 });

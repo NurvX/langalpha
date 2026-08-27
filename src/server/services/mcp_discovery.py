@@ -24,6 +24,7 @@ from ptc_agent.core.mcp_sanitize import (
 
 from src.server.database import mcp_servers as mcp_db
 from src.server.database.mcp_tool_schemas import upsert_tool_schemas
+from src.server.services.mcp_identity import bounded_identity
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +318,7 @@ async def discover_and_cache(
                 observed_meta={
                     "tool_count": len(kept),
                     "skipped": [list(item) for item in skipped],
+                    "server_info": bounded_identity(result.get("server_info")),
                 },
             )
         )

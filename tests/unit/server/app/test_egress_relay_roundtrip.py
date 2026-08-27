@@ -345,6 +345,9 @@ class TestModernRoundTrip:
             "mode": "modern",
             "version": "2026-07-28",
             "session_id": None,
+            # Captured, not discarded: a real server's identity stamp survives
+            # the relay hop, which is the only place that is provable.
+            "server_info": {"name": "vendor-under-test", "version": ""},
         }
 
     @pytest.mark.asyncio
