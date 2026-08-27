@@ -57,6 +57,13 @@ ascii liveness glyph. Never:
   only sanctioned edge markers are **nav selection** (sidebar rail edge,
   bottom-bar underline, watchlist active row).
 
+The rule governs the product's own surfaces. Illustrations that *depict* the
+product are not one of them: the onboarding intro panels draw a miniature of the
+app rather than being part of it, and they carry the accent structurally, in
+washes, glows and fills. A picture of a branded thing reads as brand, not as
+state. The alternative is a picture whose color has to be kept in step with the
+brand by hand, which is how that panel spent a rebrand still showing the old one.
+
 Semantic color (profit/loss/warning/danger) is separate from the accent and
 never substitutes for it.
 
