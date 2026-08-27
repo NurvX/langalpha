@@ -41,12 +41,16 @@ export const scrollMemory = {
 // Thread/route keys are per-account state — wipe on sign-out/account switch.
 registerAuthReset(() => scrollMemory.clear());
 
-// Restore retries: content below the fold lands after the route swap, and how
-// long after depends on where it comes from -- a lazy chunk or a warm query
-// cache is a few frames, a cold fetch is not. A frame budget was tuned for the
-// first and silently never restored the second, so the wait is a deadline
-// instead. A user who has started scrolling cancels it (wheel/touch).
-const RESTORE_WINDOW_MS = 1200;
+// Restoring is content-dependent, not time-dependent: a saved offset only
+// becomes reachable once whatever fills the port has arrived, and how long that
+// takes is the network's business rather than a number this module can pick. A
+// frame budget tuned for a lazy chunk silently never restored a route whose body
+// comes from a fetch, and widening it into a deadline only moved the cliff out
+// to slower responses. So watch the port for content instead, and stop the
+// moment the offset lands or the user takes the scroll for themselves. The
+// bound below is a backstop for a port that never grows tall enough to hold the
+// offset, not the mechanism.
+const RESTORE_BACKSTOP_MS = 10_000;
 
 /**
  * Keyed scroll persistence for a container the caller owns. Saves scrollTop
@@ -64,25 +68,40 @@ export function useScrollMemory(ref: React.RefObject<HTMLElement | null>, key: s
     el.scrollTop = target;
     if (target === 0) return;
 
-    let cancelled = false;
-    const deadline = performance.now() + RESTORE_WINDOW_MS;
-    const retry = () => {
-      if (cancelled) return;
-      if (el.scrollTop >= target - 4) return; // reached (content tall enough)
+    // The offset this hook last wrote, so a scroll event can be attributed. Any
+    // other value means something else moved the port -- a wheel, a key, a drag
+    // on the scrollbar -- and where the user is now outranks where they were.
+    // Reading it back rather than assuming `target` matters while the content is
+    // still short: the write clamps to whatever the port can currently hold.
+    let written = el.scrollTop;
+    let stopped = false;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      observer.disconnect();
+      clearTimeout(backstop);
+      el.removeEventListener('scroll', onScroll);
+    };
+    const attempt = () => {
+      if (stopped) return;
+      if (el.scrollTop >= target - 4) return stop(); // reached
       el.scrollTop = target;
-      if (performance.now() < deadline) requestAnimationFrame(retry);
+      written = el.scrollTop;
+      if (written >= target - 4) stop();
     };
-    requestAnimationFrame(retry);
-    const cancel = () => {
-      cancelled = true;
+    const onScroll = () => {
+      if (el.scrollTop !== written) stop();
     };
-    el.addEventListener('wheel', cancel, { passive: true });
-    el.addEventListener('touchstart', cancel, { passive: true });
-    return () => {
-      cancelled = true;
-      el.removeEventListener('wheel', cancel);
-      el.removeEventListener('touchstart', cancel);
-    };
+    // `subtree`, because the growth is inside the page the port wraps, not in
+    // the port itself -- whose own box is pinned by the column and so never
+    // resizes. `characterData`, because a route that renders its shell first and
+    // fills the text in later grows without adding a node.
+    const observer = new MutationObserver(attempt);
+    const backstop = setTimeout(stop, RESTORE_BACKSTOP_MS);
+    observer.observe(el, { childList: true, subtree: true, characterData: true });
+    el.addEventListener('scroll', onScroll, { passive: true });
+    requestAnimationFrame(attempt);
+    return stop;
   }, [ref, key]);
 
   useLayoutEffect(() => {

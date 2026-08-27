@@ -45,12 +45,9 @@ function NewsDetailPage() {
   // Owned here rather than left to the shell, now that the scrolling is. What
   // `App.tsx` remembers is `.app-main`, which on this route no longer moves.
   //
-  // The saved offset does not come back yet, and did not before this port
-  // existed either (measured both ways: 1200 out, 0 back). The restore runs on
-  // mount and gives up after ten frames, while the article arrives from a fetch
-  // in `NewsArticleView` some time after that, so there is nothing to scroll
-  // when the hook looks. Fixing that means teaching the hook to wait for content
-  // it does not own, which is every caller's problem and not this route's.
+  // The slowest caller the hook has, and the one that decided its shape: the
+  // article arrives from a fetch inside `NewsArticleView`, so the port is empty
+  // for as long as that takes and there is nothing to scroll until it lands.
   useScrollMemory(portRef, `page:news:${id ?? ''}`);
 
   return (
