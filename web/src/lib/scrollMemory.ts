@@ -41,10 +41,12 @@ export const scrollMemory = {
 // Thread/route keys are per-account state — wipe on sign-out/account switch.
 registerAuthReset(() => scrollMemory.clear());
 
-// Restore retries: content below the fold often lands a few frames after the
-// route swap (lazy pages, query cache hydration). ~10 frames covers that
-// without fighting a user who has started scrolling (wheel/touch cancels).
-const RESTORE_RETRY_FRAMES = 10;
+// Restore retries: content below the fold lands after the route swap, and how
+// long after depends on where it comes from -- a lazy chunk or a warm query
+// cache is a few frames, a cold fetch is not. A frame budget was tuned for the
+// first and silently never restored the second, so the wait is a deadline
+// instead. A user who has started scrolling cancels it (wheel/touch).
+const RESTORE_WINDOW_MS = 1200;
 
 /**
  * Keyed scroll persistence for a container the caller owns. Saves scrollTop
@@ -63,12 +65,12 @@ export function useScrollMemory(ref: React.RefObject<HTMLElement | null>, key: s
     if (target === 0) return;
 
     let cancelled = false;
-    let attempts = 0;
+    const deadline = performance.now() + RESTORE_WINDOW_MS;
     const retry = () => {
       if (cancelled) return;
       if (el.scrollTop >= target - 4) return; // reached (content tall enough)
       el.scrollTop = target;
-      if (++attempts < RESTORE_RETRY_FRAMES) requestAnimationFrame(retry);
+      if (performance.now() < deadline) requestAnimationFrame(retry);
     };
     requestAnimationFrame(retry);
     const cancel = () => {
