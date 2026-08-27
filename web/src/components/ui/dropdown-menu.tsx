@@ -60,7 +60,7 @@ const DropdownMenuItem = React.forwardRef<
   <DropdownMenuPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-default select-none items-center gap-2 rounded-sm px-3 py-2 text-sm outline-none transition-colors",
+      "relative flex w-full cursor-default select-none items-center gap-2 rounded-sm px-2.5 py-1.5 text-sm outline-none transition-colors",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       itemVariants[variant],
       className
@@ -76,7 +76,7 @@ const DropdownMenuLabel = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DropdownMenuPrimitive.Label
     ref={ref}
-    className={cn("px-3 py-2 text-sm font-medium", className)}
+    className={cn("px-2.5 py-1.5 text-sm font-medium", className)}
     {...props}
   />
 ))
@@ -103,7 +103,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
   <DropdownMenuPrimitive.SubTrigger
     ref={ref}
     className={cn(
-      "flex cursor-default select-none items-center gap-2 rounded-sm px-3 py-2 text-sm outline-none data-[highlighted]:bg-accent/15 data-[state=open]:bg-accent/15",
+      "flex cursor-default select-none items-center gap-2 rounded-sm px-2.5 py-1.5 text-sm outline-none data-[highlighted]:bg-accent/15 data-[state=open]:bg-accent/15",
       className
     )}
     {...props}
