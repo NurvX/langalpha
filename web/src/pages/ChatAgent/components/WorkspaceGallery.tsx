@@ -706,14 +706,20 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
 
   if (isWsLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="flex flex-col items-center gap-4">
-          <span aria-hidden="true" className="flex-shrink-0">
-            <Loader size={32} className="text-[color:var(--color-accent-primary)]" />
-          </span>
-          <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
-            {t('workspace.loadingWorkspaces')}
-          </p>
+      // A branch that replaces the whole route replaces its top bar too, so it
+      // owes the window a titlebar of its own -- otherwise the column beside the
+      // sidebar stops moving the window for as long as the fetch is in flight.
+      <div className="h-full flex flex-col">
+        <div className="chrome-drag-strip" aria-hidden="true" />
+        <div className="flex-1 min-h-0 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-4">
+            <span aria-hidden="true" className="flex-shrink-0">
+              <Loader size={32} className="text-[color:var(--color-accent-primary)]" />
+            </span>
+            <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
+              {t('workspace.loadingWorkspaces')}
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -721,21 +727,24 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
 
   if (wsError) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="flex flex-col items-center gap-4 max-w-md text-center px-4">
-          <p className="text-sm" style={{ color: 'var(--color-loss)' }}>
-            {t('workspace.failedLoadWorkspaces')}
-          </p>
-          <button
-            onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.lists() })}
-            className="px-4 py-2 rounded-md text-sm font-medium transition-opacity hover:opacity-90"
-            style={{
-              backgroundColor: 'var(--color-btn-primary-bg)',
-              color: 'var(--color-btn-primary-text)',
-            }}
-          >
-            {t('common.retry')}
-          </button>
+      <div className="h-full flex flex-col">
+        <div className="chrome-drag-strip" aria-hidden="true" />
+        <div className="flex-1 min-h-0 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-4 max-w-md text-center px-4">
+            <p className="text-sm" style={{ color: 'var(--color-loss)' }}>
+              {t('workspace.failedLoadWorkspaces')}
+            </p>
+            <button
+              onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.lists() })}
+              className="px-4 py-2 rounded-md text-sm font-medium transition-opacity hover:opacity-90"
+              style={{
+                backgroundColor: 'var(--color-btn-primary-bg)',
+                color: 'var(--color-btn-primary-text)',
+              }}
+            >
+              {t('common.retry')}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -861,6 +870,10 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
       className="h-full flex flex-col overflow-hidden"
       style={{ backgroundColor: 'var(--color-bg-page)' }}
     >
+      {/* Doubles as the window titlebar in the desktop shell; inert elsewhere.
+          The header below is centred and holds a title, so it is not the bar to
+          hand the window -- a drag region over prose is text you cannot select. */}
+      <div className="chrome-drag-strip" aria-hidden="true" />
       {/* Header (desktop only) */}
       <header className="hidden md:flex w-full h-24 items-end mx-auto max-w-4xl flex-shrink-0 px-8 enter-fade-up">
         <div className="flex w-full items-center justify-between gap-4">
