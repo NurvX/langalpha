@@ -199,17 +199,17 @@ export function UserInfoTab() {
 
   return (
     <>
-    <div className="space-y-5">
-      <div className="flex items-center gap-4 mb-6 pb-6" style={{ borderBottom: '1px solid var(--color-border-muted)' }}>
+    <div className="space-y-4">
+      <div className="flex items-center gap-4 mb-5 pb-5" style={{ borderBottom: '1px solid var(--color-border-muted)' }}>
         <div
-          className="h-16 w-16 rounded-full flex items-center justify-center cursor-pointer overflow-hidden flex-shrink-0"
+          className="h-12 w-12 rounded-full flex items-center justify-center cursor-pointer overflow-hidden flex-shrink-0"
           style={{ backgroundColor: 'var(--color-accent-soft)' }}
           onClick={() => fileInputRef.current?.click()}
         >
           {avatarUrl ? (
             <img src={avatarUrl} alt="avatar" className="h-full w-full object-cover" onError={() => setAvatarUrl(null)} />
           ) : (
-            <User className="h-8 w-8" style={{ color: 'var(--color-accent-primary)' }} />
+            <User className="h-6 w-6" style={{ color: 'var(--color-accent-primary)' }} />
           )}
         </div>
         <div>
@@ -225,7 +225,7 @@ export function UserInfoTab() {
           <button
             type="button"
             onClick={() => setShowLogoutConfirm(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
             style={{ color: 'var(--color-loss)', backgroundColor: 'transparent', border: '1px solid var(--color-loss)' }}
           >
             <LogOut className="h-4 w-4" /> {t('settings.logout')}
@@ -234,7 +234,7 @@ export function UserInfoTab() {
       </div>
 
       <div>
-        <label className="block text-sm font-medium mb-2" style={{ color: 'var(--color-text-primary)' }}>{t('common.email')}</label>
+        <label className="block text-[0.8125rem] font-medium mb-1.5" style={{ color: 'var(--color-text-primary)' }}>{t('common.email')}</label>
         <Input
           type="email"
           value={authUser?.email || ''}
@@ -251,7 +251,7 @@ export function UserInfoTab() {
       </div>
 
       <div>
-        <label className="block text-sm font-medium mb-2" style={{ color: 'var(--color-text-primary)' }}>{t('common.name')}</label>
+        <label className="block text-[0.8125rem] font-medium mb-1.5" style={{ color: 'var(--color-text-primary)' }}>{t('common.name')}</label>
         <Input
           type="text"
           value={name}
@@ -268,7 +268,7 @@ export function UserInfoTab() {
       </div>
 
       <div>
-        <label className="block text-sm font-medium mb-2" style={{ color: 'var(--color-text-primary)' }}>{t('settings.timezone')}</label>
+        <label className="block text-[0.8125rem] font-medium mb-1.5" style={{ color: 'var(--color-text-primary)' }}>{t('settings.timezone')}</label>
         <Select
           value={timezone}
           onChange={(e) => handleTimezoneChange(e.target.value)}
@@ -288,7 +288,7 @@ export function UserInfoTab() {
       </div>
 
       <div>
-        <label className="block text-sm font-medium mb-2" style={{ color: 'var(--color-text-primary)' }}>{t('settings.locale')}</label>
+        <label className="block text-[0.8125rem] font-medium mb-1.5" style={{ color: 'var(--color-text-primary)' }}>{t('settings.locale')}</label>
         <Select
           value={locale}
           onChange={(e) => handleLocaleChange(e.target.value)}
@@ -299,16 +299,17 @@ export function UserInfoTab() {
         </Select>
       </div>
 
+      <div className="settings-rows">
       {/* Theme Toggle */}
-      <div className="flex items-center justify-between p-3 rounded-lg" style={{ backgroundColor: 'var(--color-bg-card)', border: '1px solid var(--color-border-muted)' }}>
+      <div className="settings-row">
         <div className="space-y-0.5">
-          <label className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.theme')}</label>
+          <label className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.theme')}</label>
         </div>
         <div className="inline-flex rounded-lg overflow-hidden" style={{ border: '1px solid var(--color-border-muted)' }}>
           <button
             type="button"
             onClick={() => setThemePref('dark')}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[0.8125rem] font-medium transition-colors"
             style={{
               backgroundColor: preference === 'dark' ? 'var(--color-accent-soft)' : 'transparent',
               color: preference === 'dark' ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)',
@@ -320,7 +321,7 @@ export function UserInfoTab() {
           <button
             type="button"
             onClick={() => setThemePref('light')}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[0.8125rem] font-medium transition-colors"
             style={{
               backgroundColor: preference === 'light' ? 'var(--color-accent-soft)' : 'transparent',
               color: preference === 'light' ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)',
@@ -332,7 +333,7 @@ export function UserInfoTab() {
           <button
             type="button"
             onClick={() => setThemePref('auto')}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[0.8125rem] font-medium transition-colors"
             style={{
               backgroundColor: preference === 'auto' ? 'var(--color-accent-soft)' : 'transparent',
               color: preference === 'auto' ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)',
@@ -345,9 +346,9 @@ export function UserInfoTab() {
       </div>
 
       {/* Font size — multiplies the browser's own font-size preference */}
-      <div className="flex items-center justify-between p-3 rounded-lg" style={{ backgroundColor: 'var(--color-bg-card)', border: '1px solid var(--color-border-muted)' }}>
+      <div className="settings-row">
         <div className="space-y-0.5">
-          <label className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.fontSize', 'Font size')}</label>
+          <label className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.fontSize', 'Font size')}</label>
         </div>
         <div className="inline-flex rounded-lg overflow-hidden" style={{ border: '1px solid var(--color-border-muted)' }}>
           {FONT_SCALES.map((s) => (
@@ -355,7 +356,7 @@ export function UserInfoTab() {
               key={s}
               type="button"
               onClick={() => { setFontScale(s); setFontScaleState(s); }}
-              className="px-2.5 py-1.5 text-sm font-medium transition-colors"
+              className="px-2 py-1 text-[0.8125rem] font-medium transition-colors"
               style={{
                 backgroundColor: fontScale === s ? 'var(--color-accent-soft)' : 'transparent',
                 color: fontScale === s ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)',
@@ -368,9 +369,9 @@ export function UserInfoTab() {
       </div>
 
       {/* Voice Input Toggle */}
-      <div className="flex items-center justify-between p-3 rounded-lg" style={{ backgroundColor: 'var(--color-bg-card)', border: '1px solid var(--color-border-muted)' }}>
+      <div className="settings-row">
         <div className="space-y-0.5">
-          <label className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.voiceInput')}</label>
+          <label className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.voiceInput')}</label>
           <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>{t('settings.voiceInputDesc')}</p>
         </div>
         <ToggleSwitch
@@ -378,6 +379,7 @@ export function UserInfoTab() {
           onChange={handleVoiceInputToggle}
           ariaLabel={t('settings.voiceInput')}
         />
+      </div>
       </div>
 
       {error && (

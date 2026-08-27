@@ -110,6 +110,12 @@
 
 .login-page__input {
   width: 100%;
+  /* These are <Input>, so the shared primitive's height lands here too. This
+     surface sets its own type (1rem) and radius and wants the roomier box the
+     console does not; min-height rather than height so it holds whatever the
+     primitive's default becomes next. It is also what keeps the password
+     toggle's 44px touch target from overflowing the field it sits in. */
+  min-height: 2.5rem;
   padding: 0.75rem 1rem;
   font-size: 1rem;
   font-weight: 400;
