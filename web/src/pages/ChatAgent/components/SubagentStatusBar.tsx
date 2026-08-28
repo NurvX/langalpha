@@ -283,7 +283,7 @@ function SubagentStatusBar({ agent, threadId, onInstructionSent }: SubagentStatu
             onKeyDown={handleKeyDown}
             placeholder={t('chat.subagentBar.inputPlaceholder')}
             disabled={sending}
-      className="flex-1 bg-transparent text-sm placeholder-foreground/30 "
+            className="flex-1 bg-transparent text-sm placeholder-foreground/30"
             style={{ color: 'var(--color-text-primary)' }}
           />
           <div className="flex items-center gap-1">

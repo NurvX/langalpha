@@ -101,7 +101,6 @@ test.describe('a keyboard user still gets an indicator', () => {
  * under test is the stylesheet, and coupling it to market-data mocks would let
  * it pass vacuously the day that data stops arriving.
  */
-const SURFACE = '#chart-fixture';
 const BAR = '#chart-fixture rect';
 const BEFORE = '#before-fixture';
 const PLAIN = '#plain-fixture';
