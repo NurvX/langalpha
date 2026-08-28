@@ -191,7 +191,7 @@ function Plugins() {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          <div className="flex gap-2 mb-6 border-b overflow-x-auto plugins-tab-bar" style={{ borderColor: 'var(--color-border-muted)' }}>
+          <div className="flex gap-2 mb-6 border-b overflow-x-auto plugins-tab-bar clips-focus-ring" style={{ borderColor: 'var(--color-border-muted)' }}>
             {TABS.map((tab) => (
               <button
                 key={tab}

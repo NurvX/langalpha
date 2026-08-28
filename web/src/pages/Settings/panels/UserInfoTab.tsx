@@ -305,7 +305,7 @@ export function UserInfoTab() {
         <div className="space-y-0.5">
           <label className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.theme')}</label>
         </div>
-        <div className="inline-flex rounded-lg overflow-hidden" style={{ border: '1px solid var(--color-border-muted)' }}>
+        <div className="inline-flex rounded-lg overflow-hidden clips-focus-ring" style={{ border: '1px solid var(--color-border-muted)' }}>
           <button
             type="button"
             onClick={() => setThemePref('dark')}
@@ -350,7 +350,7 @@ export function UserInfoTab() {
         <div className="space-y-0.5">
           <label className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.fontSize', 'Font size')}</label>
         </div>
-        <div className="inline-flex rounded-lg overflow-hidden" style={{ border: '1px solid var(--color-border-muted)' }}>
+        <div className="inline-flex rounded-lg overflow-hidden clips-focus-ring" style={{ border: '1px solid var(--color-border-muted)' }}>
           {FONT_SCALES.map((s) => (
             <button
               key={s}

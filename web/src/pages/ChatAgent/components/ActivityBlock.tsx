@@ -308,7 +308,10 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
         {hasCompleted && (
           <motion.div
             key="accordion-zone"
-            className="-mt-2"
+            /* The fold animates its height, so it has to clip -- and its only
+               child is a summary button flush against every edge, whose ring
+               the clip then eats. clips-focus-ring turns it inward. */
+            className="-mt-2 clips-focus-ring"
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             transition={SPRING_FOLD}

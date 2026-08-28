@@ -7,6 +7,9 @@ import { AuthProvider } from './contexts/AuthContext'
 import App from './App'
 import './i18n'
 import './index.css'
+// Side-effect import: the modality listeners have to be running before the
+// first click, not from whichever overlay happens to load first.
+import './lib/inputModality'
 import { Toaster } from './components/ui/toaster'
 import { StaleBuildBoundary } from './components/StaleBuildBoundary'
 

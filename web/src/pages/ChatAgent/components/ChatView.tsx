@@ -1685,7 +1685,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                             <button
                               type="button"
                               aria-label={t('chat.workspaceStateHelp')}
-                              className="inline-flex items-center justify-center rounded-full p-0.5 hover:opacity-80 focus:outline-none focus-visible:ring-1 focus-visible:ring-current"
+                              className="inline-flex items-center justify-center rounded-full p-0.5 hover:opacity-80 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                               style={{ color: 'var(--color-text-quaternary)' }}
                             >
                               <Info className="h-3 w-3" />
