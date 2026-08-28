@@ -1240,6 +1240,10 @@
     "jumpToLatest": {
       "aria": "滚动到最新消息"
     },
+    "minimap": {
+      "untitledTurn": "无文字消息",
+      "replyPending": "处理中"
+    },
     "pills": {
       "plan": "计划",
       "planTitle": "计划模式 — 智能体先生成计划，经确认后再执行",

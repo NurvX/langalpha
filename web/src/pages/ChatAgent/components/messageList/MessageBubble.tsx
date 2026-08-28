@@ -18,6 +18,7 @@ import { MessageContentSegments } from './MessageContentSegments';
 import { OverflowCollapse } from './OverflowCollapse';
 import { useMessageActions } from './MessageActionsContext';
 import { isSteeringUserMessage } from './messagePredicates';
+import { assistantText } from './messageText';
 import { EMPTY_OBJ } from './types';
 import type { ContentSegmentRecord, FeedbackResult, MessageRecord, ToolCallProcessRecord } from './types';
 
@@ -169,12 +170,7 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
   };
 
   const handleCopy = () => {
-    // Collect all text content from segments
-    const contentSegments = message.contentSegments as ContentSegmentRecord[] | undefined;
-    const text = contentSegments
-      ?.filter((s) => s.type === 'text')
-      .map((s) => s.content)
-      .join('') || (message.content as string) || '';
+    const text = assistantText(message);
     // Confirm only after the write lands (it can reject when the document
     // loses focus); rapid re-copies reset the shared timer instead of
     // stacking timers that would cut the newer indicator short.

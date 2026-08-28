@@ -359,6 +359,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     isNearBottomRef,
     isSubagentNearBottomRef,
     restoredForThreadRef,
+    pinToMessage,
+    pinTargetRef,
   } = useChatScroll({
     activeAgentId,
     messages,
@@ -1575,10 +1577,13 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                 </div>
               )}
               {/* Minimap TOC — desktop only, when no right panel open */}
-              {!isMobile && !rightPanelType && activeAgentId === 'main' && (
+              {isActive && !isMobile && !rightPanelType && activeAgentId === 'main' && (
                 <ChatMinimap
                   messages={messages as unknown as MessageRecord[]}
                   scrollAreaRef={scrollAreaRef}
+                  turnInFlight={isLoading}
+                  pinToMessage={pinToMessage}
+                  pinTargetRef={pinTargetRef}
                 />
               )}
               {/* Jump-to-latest pill — coexists with the minimap (centered vs

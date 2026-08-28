@@ -8,15 +8,8 @@ import { isTaskAgentId } from '../../utils/agentId';
 import { deriveTaskSegment, applyTaskSegment, applyLaunchReply } from '../subagents/taskSegmentBuilder';
 import type { SubagentTaskRecord } from '@/types/chat';
 import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload, HtmlWidgetData } from '../../hooks/utils/types';
+import type { PairState } from '../types';
 
-let _steeringIdCounter = 0;
-
-/** Per-pair mutable state tracked during history replay. */
-interface PairState {
-  contentOrderCounter: number;
-  reasoningId: string | null;
-  toolCallId: string | null;
-}
 
 /** Shape of an SSE history event. */
 interface HistoryEvent {
@@ -88,6 +81,7 @@ export function handleHistoryUserMessage({
           contentOrderCounter: 0,
           reasoningId: null,
           toolCallId: null,
+          steeringBatches: 0,
         });
       }
       // Map turn_index to the streaming assistant message ID
@@ -101,6 +95,7 @@ export function handleHistoryUserMessage({
       contentOrderCounter: 0,
       reasoningId: null,
       toolCallId: null,
+      steeringBatches: 0,
     });
 
     // Create user message bubble (skip for empty content, HITL resume pairs,
@@ -167,6 +162,7 @@ export function handleHistoryUserMessage({
         contentOrderCounter: 0,
         reasoningId: null,
         toolCallId: null,
+        steeringBatches: 0,
       });
     }
 
@@ -518,8 +514,11 @@ export function handleHistorySteeringDelivered({
   const { newMessagesStartIndexRef } = refs;
   const steeringMessages = (event.messages || []) as Array<Record<string, unknown>>;
 
-  // Create user message bubble(s) for each steering message
-  const batchId = ++_steeringIdCounter;
+  // Create user message bubble(s) for each steering message. The batch is
+  // numbered within its pair, never from a process-wide counter: ids that
+  // change on every replay make the same bubbles look new to every id-keyed
+  // consumer (scroll observers, the minimap) each time history reattaches.
+  const batchId = (pairStateByPair.get(pairIndex)?.steeringBatches ?? 0) + 1;
   for (let sIdx = 0; sIdx < steeringMessages.length; sIdx++) {
     const qMsg = steeringMessages[sIdx];
     if (!qMsg.content) continue;
@@ -551,6 +550,7 @@ export function handleHistorySteeringDelivered({
     contentOrderCounter: 0,
     reasoningId: null,
     toolCallId: null,
+    steeringBatches: batchId,
   });
 
   const assistantMessage: MessageRecord = {
