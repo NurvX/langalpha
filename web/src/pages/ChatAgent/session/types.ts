@@ -236,6 +236,8 @@ interface PairState {
   contentOrderCounter: number;
   reasoningId: string | null;
   toolCallId: string | null;
+  /** Steering batches delivered in this pair so far. It keys the ids of the bubbles a batch adds, so a replay mints the same ids as the last one. */
+  steeringBatches: number;
 }
 
 
