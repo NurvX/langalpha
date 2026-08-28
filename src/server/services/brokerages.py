@@ -64,6 +64,7 @@ BROKERAGES: tuple[Brokerage, ...] = (
             "instrument lookup, and order placement."
         ),
         native_callback_only=True,
+        exclusive_connection=True,
     ),
     Brokerage(
         name="ibkr",
