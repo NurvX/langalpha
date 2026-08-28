@@ -225,7 +225,7 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
                   resizeTextarea();
                 }}
                 onKeyDown={handleEditKeyDown}
-                className="w-full bg-transparent text-sm resize-none outline-none leading-relaxed overflow-hidden"
+        className="w-full bg-transparent text-sm resize-none leading-relaxed overflow-hidden"
                 style={{ color: 'var(--color-text-primary)' }}
                 rows={1}
               />

@@ -79,7 +79,7 @@ function CommandChip({
       onBlur={() => setEditing(false)}
       spellCheck={false}
       aria-label={t('plugins.skills.commandInputAria')}
-      className="text-[0.6875rem] px-1.5 py-0.5 rounded w-28 outline-none"
+   className="text-[0.6875rem] px-1.5 py-0.5 rounded w-28 "
       style={{
         color: 'var(--color-text-secondary)',
         backgroundColor: 'var(--color-bg-input)',
