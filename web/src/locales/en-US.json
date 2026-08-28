@@ -1240,6 +1240,10 @@
     "jumpToLatest": {
       "aria": "Scroll to latest message"
     },
+    "minimap": {
+      "untitledTurn": "Message without text",
+      "replyPending": "Working"
+    },
     "pills": {
       "plan": "Plan",
       "planTitle": "Plan mode — agent creates a plan for approval before executing",
