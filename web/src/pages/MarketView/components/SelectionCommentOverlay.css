@@ -70,7 +70,6 @@
 .selection-composer-input {
   appearance: none;
   border: none;
-  outline: none;
   background: transparent;
   width: 190px;
   max-width: 40vw;
