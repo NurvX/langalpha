@@ -46,7 +46,7 @@ function Settings() {
       <div ref={pageRef} className="settings-scroll">
         <div className="settings-container">
           <h2 className="text-xl font-semibold mb-6" style={{ color: 'var(--color-text-primary)' }}>{t('settings.title')}</h2>
-          <div className="flex gap-2 mb-6 border-b overflow-x-auto settings-tab-bar" style={{ borderColor: 'var(--color-border-muted)' }}>
+          <div className="flex gap-2 mb-6 border-b overflow-x-auto settings-tab-bar clips-focus-ring" style={{ borderColor: 'var(--color-border-muted)' }}>
             <button
               type="button"
               onClick={() => handleTabChange('userInfo')}

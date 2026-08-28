@@ -421,6 +421,48 @@ html {
     margin: 0;
     padding: 0;
   }
+
+  /* The ring every control gets unless it draws its own. Without a baseline the
+     fallback is Chromium's -- `outline: auto` in a blue this product uses
+     nowhere -- and that was the ring on four out of five controls, the chat
+     transcript included. Lives in the base layer, so a component that does draw
+     its own still wins: a Tailwind `focus-visible:` utility by layer order, a
+     hand-written `.class:focus-visible` by specificity. */
+  :focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+
+  /* Inside an SVG, Chromium paints its own ring on plain :focus -- it does not
+     gate that on :focus-visible the way it does for HTML, so a mouse click on
+     a chart draws a ring where the same click on a button would not. Take the
+     non-keyboard half away and the pseudo-class above rings the surface on a
+     Tab, exactly like everything else.
+
+     The descendant half is what the visible bug was: recharts stacks its
+     z-index layers as `<g tabindex="-1">`, so a click landing on a bar focuses
+     that layer rather than the surface, which is why the stray ring hugged the
+     bars and left the axis labels outside them. */
+  svg:focus:not(:focus-visible),
+  svg :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* A box that clips -- a tab bar that scrolls sideways, a segmented control
+     rounding its children -- eats the outset ring off whichever child sits
+     flush against the clipped edge, and what is left renders as a bar down one
+     side. Mark the clipper and its children ring inward instead. */
+  .clips-focus-ring > :focus-visible {
+    outline-offset: -2px;
+  }
+
+  /* tabindex="-1" is not a tab stop -- it is a landing spot script moves focus
+     to so the next Tab starts there (dialog roots, scroll ports). Chromium
+     carries :focus-visible across that programmatic move (lib/inputModality.ts),
+     so without this the ring draws around an entire dialog. */
+  [tabindex="-1"]:focus-visible {
+    outline: none;
+  }
 }
 
 @layer utilities {

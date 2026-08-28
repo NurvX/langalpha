@@ -100,7 +100,7 @@ export function ChatInputModelMenu({
     <DropdownMenu modal={false} open={menuOpen} onOpenChange={(open) => { setMenuOpen(open); if (!open) setShowMoreModels(false); }}>
       <DropdownMenuTrigger asChild>
         <button
-          className={`model-selector-trigger ${TRIGGER_CLASS} cursor-pointer transition-colors outline-none`}
+          className={`model-selector-trigger ${TRIGGER_CLASS} cursor-pointer transition-colors`}
           onClick={(e) => e.stopPropagation()}
           type="button"
           title="Select model"

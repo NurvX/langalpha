@@ -61,7 +61,7 @@
 /* The ring goes on the button, not the faded bar: an outline inherits the
    bar's opacity and a 22% ring is no focus indicator. */
 .chat-minimap-tick:focus-visible {
-  outline: 2px solid var(--color-accent-primary);
+  outline: 2px solid var(--color-focus-ring);
   outline-offset: 1px;
 }
 
