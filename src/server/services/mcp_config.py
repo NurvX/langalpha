@@ -37,6 +37,7 @@ from urllib.parse import urlsplit
 
 from ptc_agent.config.core import MCPServerConfig
 from src.server.database.mcp_oauth import ConnectionStatus
+from src.server.services.brokerage_capabilities import tools_for
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -127,6 +128,11 @@ class ResolvedServer:
     # display only. Rides here rather than MCPServerConfig — provenance must
     # never enter the config blob round-trip.
     plugin_name: str | None = None
+    # The tools this connection's consent permits, or None for a server we
+    # curate no capability groups for, which is every server that is not a
+    # shipped brokerage. Empty is a real answer and distinct from None: it
+    # means the user granted no group, so the server runs and offers nothing.
+    granted_tools: frozenset[str] | None = None
 
     @property
     def name(self) -> str:
@@ -177,6 +183,19 @@ class ResolvedMCP:
     @cached_property
     def shadowed_inherited_names(self) -> frozenset[str]:
         return self._names(Origin.USER, State.SHADOWED)
+
+    @cached_property
+    def granted_tools_by_name(self) -> dict[str, frozenset[str]]:
+        """Consent filters for the running set, keyed by server name.
+
+        Only servers that have one, so a caller reads "absent" as "no policy"
+        without having to know which vendors we curate.
+        """
+        return {
+            e.name: e.granted_tools
+            for e in self.entries
+            if e.state is State.ACTIVE and e.granted_tools is not None
+        }
 
 
 @dataclass(frozen=True)
@@ -521,6 +540,27 @@ async def resolve_mcp_config(
         if row.get("plugin_name")
     }
 
+    def _granted_tools(name: str) -> frozenset[str] | None:
+        """What consent permits for this server, or None if we curate no groups.
+
+        A brokerage whose connection carries no record of consent is read as
+        consent to nothing rather than consent to everything. Both the connect
+        path and migration 036 write that record, so a missing one is a bug,
+        and the safe reading of a bug here is the one that cannot place an
+        order. It is loud rather than silent for the same reason.
+        """
+        connection = connection_by_server.get(name)
+        if connection is None:
+            return tools_for(name, ())
+        capabilities = connection.get("granted_capabilities")
+        if capabilities is None and tools_for(name, ()) is not None:
+            logger.warning(
+                "[MCP] user %s connection %r has no recorded capability "
+                "consent; serving none of its tools until it is reconnected",
+                user_id, name,
+            )
+        return tools_for(name, capabilities or ())
+
     def _user_entry(cfg: MCPServerConfig, state: State) -> ResolvedServer:
         return ResolvedServer(
             config=cfg,
@@ -528,6 +568,7 @@ async def resolve_mcp_config(
             state=state,
             oauth_status=oauth_status_by_name.get(cfg.name),
             plugin_name=plugin_name_by_server.get(cfg.name),
+            granted_tools=_granted_tools(cfg.name),
         )
 
     # Entry order IS the API's row order: the running set first (built-ins,

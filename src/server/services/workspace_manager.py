@@ -674,11 +674,22 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
                 workspace_rows=await get_tool_schemas(session.conversation_id),
                 user_rows=user_rows,
             )
+            # Consent narrows the set here rather than at discovery. The
+            # snapshot is shared by every workspace and by the catalog page and
+            # has to keep answering "what does this vendor offer": filtering it
+            # would make schema_digest consent-dependent, so a toggle would read
+            # as a vendor schema change and the page could no longer show the
+            # capabilities the user is choosing between.
+            granted = resolved.granted_tools_by_name
             for server in untrusted_servers:
                 snapshot = snapshots.ok(server)
                 if snapshot is not None:
                     settled.add(server.name)
-                    tool_schemas[server.name] = snapshot.get("tools") or []
+                    tools = snapshot.get("tools") or []
+                    allowed = granted.get(server.name)
+                    if allowed is not None:
+                        tools = [t for t in tools if t.get("name") in allowed]
+                    tool_schemas[server.name] = tools
         session.mcp_settled_servers = settled
 
         # Always build from the BUILTIN registry, never a prior composite —

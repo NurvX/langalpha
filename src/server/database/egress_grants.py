@@ -6,6 +6,7 @@ at creation. The relay authorizes every request with one query here; grant or
 connection status flips deny the next request with no sandbox convergence.
 """
 
+import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -33,6 +34,43 @@ class GrantSync:
 
     grants: dict[str, str]
     retired: int
+
+
+async def _tool_policies(
+    cur: Any, *, user_id: str, connection_ids: Sequence[str]
+) -> tuple[list[str], list[str | None], list[bool]]:
+    """Expand each connection's stored consent into the allowlist its grant carries.
+
+    Read inside the caller's transaction and keyed only by connection_id, so
+    the policy has the same provenance as ``destination_url``: the DB row, not
+    a caller argument. Expansion happens here rather than being stored because
+    the curation map is source — a curated tool ships with a deploy and applies
+    at the next sync, with no row to migrate and no way for the two to drift.
+
+    Returned as three parallel arrays for the INSERT's ``unnest`` join. A
+    connection we curate no groups for contributes a NULL allowlist and
+    ``policy_required`` false, which is what the relay already reads as "no
+    policy" for a user's own OAuth server.
+    """
+    from src.server.services.brokerage_capabilities import tools_for
+
+    await cur.execute(
+        """
+        SELECT connection_id, server_name, granted_capabilities
+        FROM user_mcp_oauth_connections
+        WHERE connection_id = ANY(%s::uuid[]) AND user_id = %s
+        """,
+        (list(connection_ids), user_id),
+    )
+    ids: list[str] = []
+    allowlists: list[str | None] = []
+    required: list[bool] = []
+    for row in await cur.fetchall():
+        tools = tools_for(row["server_name"], row["granted_capabilities"] or ())
+        ids.append(str(row["connection_id"]))
+        allowlists.append(None if tools is None else json.dumps(sorted(tools)))
+        required.append(tools is not None)
+    return ids, allowlists, required
 
 
 async def sync_oauth_grants(
@@ -102,24 +140,37 @@ async def sync_oauth_grants(
 
             granted: dict[str, str] = {}
             if connection_ids:
+                ids, allowlists, required = await _tool_policies(
+                    cur, user_id=user_id, connection_ids=connection_ids
+                )
                 await cur.execute(
                     """
                     INSERT INTO sandbox_egress_grants
                         (user_id, workspace_id, kind, connection_id,
-                         destination_url, status, created_at, updated_at)
+                         destination_url, tool_allowlist, policy_required,
+                         status, created_at, updated_at)
                     SELECT %s, %s::uuid, %s, c.connection_id, c.server_url,
+                           p.allowlist, COALESCE(p.required, false),
                            'active', NOW(), NOW()
                     FROM user_mcp_oauth_connections c
+                    LEFT JOIN (
+                        SELECT * FROM unnest(
+                            %s::uuid[], %s::text[]::jsonb[], %s::boolean[]
+                        ) AS t(connection_id, allowlist, required)
+                    ) p ON p.connection_id = c.connection_id
                     WHERE c.connection_id = ANY(%s::uuid[]) AND c.user_id = %s
                       AND c.status = ANY(%s)
                     ON CONFLICT (workspace_id, kind, connection_id) DO UPDATE SET
                         destination_url = EXCLUDED.destination_url,
+                        tool_allowlist = EXCLUDED.tool_allowlist,
+                        policy_required = EXCLUDED.policy_required,
                         status = 'active',
                         updated_at = NOW()
                     RETURNING connection_id, grant_id
                     """,
                     (
                         user_id, workspace_id, GRANT_KIND_OAUTH_MCP,
+                        ids, allowlists, required,
                         list(connection_ids), user_id, SERVABLE_PARAM,
                     ),
                 )
