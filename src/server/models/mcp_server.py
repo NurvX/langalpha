@@ -696,6 +696,18 @@ class BuiltinServerList(BaseModel):
     servers: list[BuiltinServer]
 
 
+class CapabilityGroupOption(BaseModel):
+    """One consent toggle offered when connecting a brokerage.
+
+    ``key`` is the fact and also the translation key; ``tone`` is how loudly to
+    draw the row. No label or description, for the reason the flags above carry
+    no prose: the words are the client's.
+    """
+
+    key: str
+    tone: str
+
+
 class BrokerageOption(BaseModel):
     """One shipped brokerage connector, as offered on the Plugins page.
 
@@ -711,6 +723,9 @@ class BrokerageOption(BaseModel):
     description: str = ""
     native_callback_only: bool = False
     exclusive_connection: bool = False
+    # List order is display order. Empty would mean a brokerage we curate no
+    # groups for, which the client reads as "nothing to choose".
+    capabilities: list[CapabilityGroupOption] = []
 
 
 class BrokerageList(BaseModel):
@@ -727,8 +742,21 @@ def brokerage_to_response(brokerage: Brokerage) -> BrokerageOption:
     one the API should carry. Extra keys are ignored on the way through, so
     adding one to :class:`Brokerage` keeps it off the wire until it is named
     above — and nobody has to maintain a copy to keep that true.
+
+    The exception is ``capabilities``, which is derived rather than stored: the
+    curation map is the source for which groups a vendor has, and copying them
+    onto the registry entry would be a second place for that to be wrong.
     """
-    return BrokerageOption.model_validate(asdict(brokerage))
+    from src.server.services.brokerage_capabilities import groups_for
+
+    return BrokerageOption.model_validate(
+        asdict(brokerage)
+        | {
+            "capabilities": [
+                {"key": g.key, "tone": g.tone} for g in groups_for(brokerage.name)
+            ]
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

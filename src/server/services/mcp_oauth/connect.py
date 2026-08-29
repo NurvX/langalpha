@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -49,6 +50,7 @@ from src.server.database.mcp_servers import (
     list_catalog_servers,
 )
 from src.server.database.workspace import get_running_workspace_ids_for_user
+from src.server.services.brokerage_capabilities import group_keys_for
 from src.server.services.brokerages import Brokerage, brokerage_for_url
 from src.server.services.mcp_config import same_consented_url
 from src.server.services.mcp_oauth.http import (
@@ -173,6 +175,12 @@ class ConnectState(BaseModel):
     # a victim's browser has no matching cookie and is refused. Defaulted so an
     # older-shaped record still validates (its callback simply skips the check).
     browser_nonce: str = ""
+    # Capability groups consented to in phase 1, for a vendor that has them.
+    # Carried across the browser round trip rather than re-read at the callback,
+    # so the grant that gets written is the one the user actually agreed to and
+    # not whatever a concurrent edit left on the row meanwhile. Defaulted so an
+    # older-shaped record still validates.
+    granted_capabilities: list[str] | None = None
 
 
 def _cache_client():
@@ -516,6 +524,28 @@ async def _drop_what_the_vendor_displaced(
         )
 
 
+def _consented_capabilities(
+    server_name: str, requested: Sequence[str] | None
+) -> list[str] | None:
+    """The subset of a vendor's real capability groups the caller asked for.
+
+    Intersected rather than trusted: these keys arrive from a browser, and one
+    we do not curate would be stored as consent to something with no meaning.
+    Order is the display order, so the stored record reads the way the dialog
+    that produced it did.
+
+    None only for a server that has no groups, which is every server that is
+    not a shipped brokerage. A brokerage always gets a list, empty included:
+    asking for nothing is a decision, and it must not be recorded as the
+    absence of one.
+    """
+    available = group_keys_for(server_name)
+    if not available:
+        return None
+    wanted = set(requested or ())
+    return [key for key in available if key in wanted]
+
+
 async def start_connect(
     user_id: str,
     server_name: str,
@@ -524,6 +554,7 @@ async def start_connect(
     web_origin: str | None = None,
     loopback_redirect: str | None = None,
     expected_url: str | None = None,
+    granted_capabilities: Sequence[str] | None = None,
 ) -> StartedConnect:
     """Phase 1: discovery + DCR + state/PKCE persist.
 
@@ -651,6 +682,9 @@ async def start_connect(
         web_origin=sanitize_web_origin(web_origin),
         browser_nonce=browser_nonce,
         client_secret=client_info.client_secret or "",
+        granted_capabilities=_consented_capabilities(
+            server_name, granted_capabilities
+        ),
     )
     redis = _cache_client()
     stored = await redis.set(
@@ -900,6 +934,7 @@ async def complete_callback(
             client_info=record.client_info,
             as_metadata=record.as_metadata,
             resource_metadata=record.resource_metadata,
+            granted_capabilities=record.granted_capabilities,
         )
         logger.info(
             "[mcp_oauth] connected user=%s server=%s connection=%s has_refresh=%s",

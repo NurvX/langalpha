@@ -113,6 +113,9 @@ def _row_summary(r: dict[str, Any]) -> dict[str, Any]:
         "expires_at": r["expires_at"].isoformat() if r["expires_at"] else None,
         "token_generation": r["token_generation"],
         "last_refresh_at": r["last_refresh_at"].isoformat() if r["last_refresh_at"] else None,
+        # resolve_mcp_config reads consent from this dict, so dropping the key
+        # here would not raise — it would quietly serve no brokerage tools.
+        "granted_capabilities": r.get("granted_capabilities"),
         "created_at": r["created_at"].isoformat(),
         "updated_at": r["updated_at"].isoformat(),
     }
@@ -132,6 +135,7 @@ async def upsert_connection(
     client_secret: str | None = None,
     as_metadata: dict[str, Any] | None = None,
     resource_metadata: dict[str, Any] | None = None,
+    granted_capabilities: list[str] | None = None,
 ) -> str:
     """Store a freshly exchanged bundle (connect or re-auth). Returns connection_id.
 
@@ -147,14 +151,15 @@ async def upsert_connection(
                     (user_id, server_name, server_url,
                      access_token, refresh_token, token_type, scope, expires_at,
                      token_generation, client_info, client_secret,
-                     as_metadata, resource_metadata, status, created_at, updated_at)
+                     as_metadata, resource_metadata, granted_capabilities,
+                     status, created_at, updated_at)
                 VALUES (%s, %s, %s,
                         pgp_sym_encrypt(%s, %s),
                         CASE WHEN %s::text IS NULL THEN NULL ELSE pgp_sym_encrypt(%s, %s) END,
                         %s, %s, %s,
                         0, %s,
                         CASE WHEN %s::text IS NULL THEN NULL ELSE pgp_sym_encrypt(%s, %s) END,
-                        %s, %s, %s, NOW(), NOW())
+                        %s, %s, %s, %s, NOW(), NOW())
                 ON CONFLICT (user_id, server_name) DO UPDATE SET
                     server_url = EXCLUDED.server_url,
                     access_token = EXCLUDED.access_token,
@@ -195,6 +200,14 @@ async def upsert_connection(
                     client_secret = EXCLUDED.client_secret,
                     as_metadata = EXCLUDED.as_metadata,
                     resource_metadata = EXCLUDED.resource_metadata,
+                    -- Kept when the exchange carried none, so a re-auth that
+                    -- does not re-ask keeps what the user already chose. A
+                    -- plain assignment would null it, which reads downstream as
+                    -- consent to nothing and silently empties the connection.
+                    granted_capabilities = COALESCE(
+                        EXCLUDED.granted_capabilities,
+                        user_mcp_oauth_connections.granted_capabilities
+                    ),
                     -- Deliberately rewrites a terminal status: a legitimate
                     -- reconnect lands on this same row and must go
                     -- revoked→connected, which is why a freshly consented
@@ -217,6 +230,9 @@ async def upsert_connection(
                     client_secret, client_secret, enc_key,
                     Json(as_metadata) if as_metadata is not None else None,
                     Json(resource_metadata) if resource_metadata is not None else None,
+                    Json(granted_capabilities)
+                    if granted_capabilities is not None
+                    else None,
                     ConnectionStatus.CONNECTED.value,
                 ),
             )
@@ -324,7 +340,7 @@ async def list_connections(user_id: str) -> list[dict[str, Any]]:
                 """
                 SELECT connection_id, user_id, server_name, server_url, status,
                        scope, expires_at, token_generation, last_refresh_at,
-                       created_at, updated_at
+                       granted_capabilities, created_at, updated_at
                 FROM user_mcp_oauth_connections
                 WHERE user_id = %s
                 ORDER BY server_name

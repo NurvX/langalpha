@@ -34,7 +34,8 @@ def _set_cookies(response: Response) -> list[str]:
 @pytest.mark.asyncio
 async def test_start_names_the_cookie_for_its_state(monkeypatch):
     async def _start(
-        user_id, name, *, return_to, web_origin, loopback_redirect, expected_url
+        user_id, name, *, return_to, web_origin, loopback_redirect, expected_url,
+        **_rest,
     ):
         return StartedConnect(
             authorize_url="https://as.test/authorize?state=state-A",
@@ -78,7 +79,8 @@ async def test_two_concurrent_starts_do_not_share_a_cookie_name(monkeypatch):
     )
 
     async def _start(
-        user_id, name, *, return_to, web_origin, loopback_redirect, expected_url
+        user_id, name, *, return_to, web_origin, loopback_redirect, expected_url,
+        **_rest,
     ):
         return next(flows)
 
@@ -98,7 +100,8 @@ async def test_two_concurrent_starts_do_not_share_a_cookie_name(monkeypatch):
 @pytest.mark.asyncio
 async def test_loopback_start_sets_no_cookie(monkeypatch):
     async def _start(
-        user_id, name, *, return_to, web_origin, loopback_redirect, expected_url
+        user_id, name, *, return_to, web_origin, loopback_redirect, expected_url,
+        **_rest,
     ):
         # Loopback callback → no nonce minted (see redirects.callback_is_loopback).
         return StartedConnect(
@@ -181,7 +184,8 @@ async def test_the_body_key_that_carries_the_loopback_uri(monkeypatch):
     seen = {}
 
     async def _start(
-        user_id, name, *, return_to, web_origin, loopback_redirect, expected_url
+        user_id, name, *, return_to, web_origin, loopback_redirect, expected_url,
+        **_rest,
     ):
         seen["loopback_redirect"] = loopback_redirect
         seen["expected_url"] = expected_url
@@ -222,7 +226,8 @@ async def test_the_start_says_which_callback_it_actually_bound(monkeypatch):
     hosted = "https://api.example.com/api/v1/mcp/oauth/callback"
 
     async def _start(
-        user_id, name, *, return_to, web_origin, loopback_redirect, expected_url
+        user_id, name, *, return_to, web_origin, loopback_redirect, expected_url,
+        **_rest,
     ):
         return StartedConnect(
             authorize_url="u",
