@@ -189,6 +189,7 @@ const EXCLUSIVE_VENDOR = {
   name: 'ibkr',
   label: 'Interactive Brokers',
   url: 'https://api.broker.test/mcp',
+  site: 'broker.test',
   description: 'Portfolio and draft orders.',
   native_callback_only: false,
   exclusive_connection: true,

@@ -76,6 +76,10 @@ class ConnectionSummary:
     status: ConnectionStatus
     token_type: str | None
     scope: str | None
+    # The capability groups this connection was granted, None for a server we
+    # curate none for. Beside ``scope`` because it answers the same question the
+    # other way round: scope is what the vendor allows, this is what we do.
+    granted_capabilities: list[str] | None
     expires_at: datetime | None
     token_generation: int
     client_info: dict[str, Any]
@@ -289,6 +293,7 @@ def _to_record(r: dict[str, Any], secrets: Secrets) -> ConnectionSummary:
         "status": ConnectionStatus(r["status"]),
         "token_type": r["token_type"],
         "scope": r["scope"],
+        "granted_capabilities": r["granted_capabilities"],
         "expires_at": r["expires_at"],
         "token_generation": r["token_generation"],
         "client_info": r["client_info"] or {},
@@ -319,7 +324,8 @@ async def _fetch_one(
             await cur.execute(
                 f"""
                 SELECT connection_id, user_id, server_name, server_url, status,
-                       token_type, scope, expires_at, token_generation,
+                       token_type, scope, granted_capabilities, expires_at,
+                       token_generation,
                        client_info, as_metadata, resource_metadata,
                        last_refresh_at, created_at, updated_at,
                        (refresh_token IS NOT NULL) AS has_refresh_token{secret_cols}

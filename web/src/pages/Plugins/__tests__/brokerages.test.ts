@@ -11,12 +11,20 @@ import { describe, expect, it } from 'vitest';
 import enUS from '@/locales/en-US.json';
 import zhCN from '@/locales/zh-CN.json';
 
-import { brokerageForUrl, connectAsks, defaultGrant, type Brokerage } from '../brokerages';
+import {
+  activeRungs,
+  brokerageForUrl,
+  connectAsks,
+  defaultGrant,
+  orderRungs,
+  type Brokerage,
+} from '../brokerages';
 
 const robinhood: Brokerage = {
   name: 'robinhood',
   label: 'Robinhood',
   url: 'https://agent.robinhood.com/mcp/trading',
+  site: 'robinhood.com',
   description: 'Robinhood brokerage account.',
   native_callback_only: true,
   exclusive_connection: false,
@@ -32,6 +40,7 @@ const ibkr: Brokerage = {
   name: 'ibkr',
   label: 'Interactive Brokers',
   url: 'https://api.ibkr.com/v1/api/mcp-public',
+  site: 'interactivebrokers.com',
   description: 'Interactive Brokers account.',
   native_callback_only: false,
   exclusive_connection: true,
@@ -188,5 +197,56 @@ describe('the capability group sentences', () => {
       );
       expect(new Set(labels).size).toBe(labels.length);
     }
+  });
+});
+
+/**
+ * What a broker can do about orders, which the row and the detail both ask.
+ *
+ * Read off the group's own `rung` and not a key list held in this build, so a
+ * rung added at the backend reaches the badges with no release here -- the same
+ * argument `defaultGrant` makes for reading the tone.
+ */
+describe('orderRungs', () => {
+  it('picks the order steps out of everything a vendor offers', () => {
+    expect(orderRungs(robinhood).map((g) => g.key)).toEqual([
+      'order_preview',
+      'trading',
+    ]);
+  });
+
+  it('has none for a row that is no brokerage', () => {
+    expect(orderRungs(null)).toEqual([]);
+  });
+});
+
+describe('activeRungs', () => {
+  // Before a connection nothing has been granted, so what the badges can
+  // honestly show is the offer. `settled` is what keeps the two apart, and it
+  // is why an offer is never painted in the colour a live grant gets.
+  it('reads as an offer while there is no connection', () => {
+    const { rungs, settled } = activeRungs(robinhood, null);
+    expect(rungs.map((g) => g.key)).toEqual(['order_preview', 'trading']);
+    expect(settled).toBe(false);
+  });
+
+  it('reads the grant once there is one', () => {
+    const { rungs, settled } = activeRungs(robinhood, ['market_data', 'order_preview']);
+    expect(rungs.map((g) => g.key)).toEqual(['order_preview']);
+    expect(settled).toBe(true);
+  });
+
+  // The state the whole feature exists to make visible: connected, and granted
+  // nothing. An empty grant is a decision, not a missing answer.
+  it('shows nothing for a connection granted nothing', () => {
+    const { rungs, settled } = activeRungs(robinhood, []);
+    expect(rungs).toEqual([]);
+    expect(settled).toBe(true);
+  });
+
+  // A key the registry no longer offers expands to no tools at all, so it is
+  // not something this connection can do however it got stored.
+  it('ignores a granted key the vendor no longer offers', () => {
+    expect(activeRungs(robinhood, ['rehearsal']).rungs).toEqual([]);
   });
 });

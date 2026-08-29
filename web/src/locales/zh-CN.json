@@ -2827,8 +2827,23 @@
         "subtitle": "选择此连接允许智能体在该券商做哪些事。",
         "footnote": "未开启的能力在智能体调用时会被拒绝，而不只是隐藏起来。之后如需更改，请重新连接。"
       },
+      "detail": {
+        "broker": "券商",
+        "capabilities": "可执行的操作",
+        "capabilitiesNote": "未授予的操作在智能体调用时会被拒绝，而不只是隐藏。重新连接即可修改。",
+        "declined": "未授予",
+        "endpoint": "接入地址",
+        "granted": "已授予",
+        "grantedNone": "该连接未获授予任何操作，因此下方所有工具都会被拒绝。重新连接可重新选择。",
+        "notConnectedNote": "连接之前不会授予任何操作，连接时由你选择。",
+        "offered": "可选",
+        "ungrouped": "不可用",
+        "ungroupedNote": "没有任何权限组包含这些工具，智能体始终看不到它们。",
+        "website": "官网"
+      },
       "exclusiveNote": "会取代该账户已有的 AI 连接",
       "exclusiveWarning": "该账户只允许连接一个 AI 平台，因此在此连接会取代当前已连接的那一个。",
+      "grantedNone": "未授予任何操作",
       "intro": "智能体可读取并交易的券商账户。连接后即可关联你的账户；在此之前不会向券商发送任何数据。",
       "none": "此版本未内置券商连接器。",
       "notAdded": "未添加",
@@ -3078,6 +3093,7 @@
     },
     "detail": {
       "kindServer": "MCP 服务器",
+      "kindBrokerage": "券商",
       "kindSkill": "技能",
       "kindPlugin": "插件",
       "tools": "工具",

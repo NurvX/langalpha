@@ -9,7 +9,12 @@
  * vendor, and whether this build can start a connect against one at all.
  */
 import { canBeginMcpOAuth, isDesktopShell } from '@/lib/desktop';
-import type { Brokerage, CapabilityGroup } from '@/pages/ChatAgent/utils/api';
+import { needsOauthConnect } from '@/pages/ChatAgent/components/mcp/mcpState';
+import type {
+  Brokerage,
+  CapabilityGroup,
+  McpOauthStatus,
+} from '@/pages/ChatAgent/utils/api';
 
 // Re-exported because this module is where the concept lives for every surface
 // that draws one; the wire shape is declared with the call that fetches it.
@@ -71,6 +76,27 @@ export function connectBlock(vendor: Brokerage | null | undefined): ConnectBlock
 }
 
 /**
+ * The grant a row behaves as, which is not always the one it stored.
+ *
+ * Null means two different things and only one of them is "nothing to read".
+ * With no connection it is the offer, drawn unsettled. On a live connection it
+ * is a brokerage connected before its tools were curated: the dialog had no
+ * groups to store, and the relay refuses every call. Reading that as the offer
+ * would draw every group granted on a connection that permits nothing.
+ *
+ * Shared because three surfaces answer it -- the row's badges, the row's note
+ * and the detail overlay -- and a row whose rungs read "offered" beside its own
+ * note reading "granted nothing" was telling the reader both at once.
+ */
+export function settledGrant(
+  granted: string[] | null | undefined,
+  oauthStatus: McpOauthStatus | null | undefined,
+): string[] | null {
+  if (granted != null) return granted;
+  return oauthStatus && !needsOauthConnect(oauthStatus) ? [] : null;
+}
+
+/**
  * The groups a connect starts with ticked.
  *
  * Everything the vendor offers except the ones that place real orders. A
@@ -99,4 +125,36 @@ export function connectAsks(vendor: Brokerage | null | undefined): boolean {
   // that reaches a backend which predates it gets undefined, and the question
   // that must still be asked is the vendor's own terms.
   return !!vendor && (vendor.exclusive_connection || (vendor.capabilities ?? []).length > 0);
+}
+
+/**
+ * The steps between reading and placing an order that this vendor has, in
+ * ladder order.
+ *
+ * Read off the group's own `rung` rather than a list of keys held here: which
+ * groups are order steps is the backend's fact, and the display order is the
+ * one the registry already sends. What this owns is only the question -- what
+ * can this broker do about orders -- which the row, the badges and the detail
+ * all ask in exactly these words.
+ */
+export function orderRungs(vendor: Brokerage | null | undefined): CapabilityGroup[] {
+  return (vendor?.capabilities ?? []).filter((group) => group.rung);
+}
+
+/**
+ * What a brokerage can do about orders right now, and how sure we are.
+ *
+ * `granted` is null before there is a connection, and the honest answer then is
+ * what the broker offers rather than what it may do -- nothing may be done yet.
+ * Once a connection exists the grant is the answer, and a group the vendor
+ * dropped since is not one of them: the stored keys are the user's intent, and
+ * a key the registry no longer offers expands to no tools at all.
+ */
+export function activeRungs(
+  vendor: Brokerage | null | undefined,
+  granted: string[] | null | undefined,
+): { rungs: CapabilityGroup[]; settled: boolean } {
+  const offered = orderRungs(vendor);
+  if (granted == null) return { rungs: offered, settled: false };
+  return { rungs: offered.filter((g) => granted.includes(g.key)), settled: true };
 }

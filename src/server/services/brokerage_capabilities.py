@@ -333,3 +333,20 @@ def tools_for(brokerage: str, granted: Iterable[str]) -> frozenset[str] | None:
         tool for key, tools in curated.items() if key in wanted for tool in tools
     )
 
+
+def group_of_tool(brokerage: str, tool: str) -> str | None:
+    """The group a tool belongs to, or None if no group names it.
+
+    None is the honest answer for both a server we curate nothing for and a
+    tool left uncurated at one we do, because the display is the same either
+    way: there is no consent toggle that reaches this tool.
+    """
+    return _BY_TOOL.get(brokerage, {}).get(tool)
+
+
+# Built once rather than scanned per tool: the tools endpoint annotates a whole
+# vendor list in one pass, and moomoo's is 88 long.
+_BY_TOOL: dict[str, dict[str, str]] = {
+    brokerage: {tool: key for key, tools in curated.items() for tool in tools}
+    for brokerage, curated in _CURATION.items()
+}

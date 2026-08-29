@@ -18,12 +18,19 @@ import {
 } from '@/pages/ChatAgent/components/mcp/McpPrimitives';
 import { needsOauthConnect } from '@/pages/ChatAgent/components/mcp/mcpState';
 import { formatApiErrorDetail, type CatalogServer } from '@/pages/ChatAgent/utils/api';
-import { brokerageForUrl, connectBlock, type Brokerage } from '../brokerages';
+import {
+  brokerageForUrl,
+  connectBlock,
+  settledGrant,
+  type Brokerage,
+} from '../brokerages';
 import { useMcpOauthActions } from '../hooks/useMcpOauthActions';
 import { useWorkspaceOptions } from '../hooks/useWorkspaceOptions';
+import { useDetailParam } from '../hooks/useDetailParam';
 import { withDetail } from '../utils/detailParam';
 import { BrokerageConsentDialog } from './BrokerageConsentDialog';
 import { BrokerageRow } from './BrokerageRow';
+import { ServerDetail, type ServerDetailData } from './ServerDetail';
 
 /**
  * The Plugins → Brokerages tab: every broker this build ships, listed whether
@@ -158,6 +165,9 @@ export function Brokerages() {
       // row `prepare` is about to create will carry -- which is the registry's,
       // the one thing on this tab the user does not choose.
       url: row?.url ?? brokerage.url,
+      // What the row already grants, so the dialog opens on the answer the user
+      // gave last time rather than on the vendor's default.
+      granted: settledGrant(row?.granted_capabilities, row?.oauth_status),
       prepare: wasInert ? () => ensureLive(brokerage.name) : undefined,
       rollback: wasInert ? () => revertLive(brokerage.name) : undefined,
     });
@@ -195,6 +205,22 @@ export function Brokerages() {
       });
     }
   }
+
+  // --- Detail overlay (?detail=brokerage:NAME) ---
+  // Its own kind rather than the Connectors tab's `server:NAME`, because a
+  // brokerage has a detail before it has a row: the offer is the thing being
+  // described, and the row is one of the facts about it.
+  const detail = useDetailParam<ServerDetailData>(
+    'brokerage',
+    (ref) => {
+      const found = rows.find(({ b }) => b.name === ref.name);
+      return found
+        ? { origin: 'brokerage' as const, brokerage: found.b, server: found.row }
+        : null;
+    },
+    !loadingOffers && !loadingCatalog && brokerages !== undefined && catalog !== undefined,
+  );
+  const detailData = detail.target;
 
   /** The row's other home, where its address and headers are editable. */
   function openInMcpTab(name: string) {
@@ -275,6 +301,7 @@ export function Brokerages() {
                     handleSetWorkspaceDisabled(b.name, wsId, disabled)
                   }
                   onOpenInMcpTab={() => openInMcpTab(b.name)}
+                  onOpen={() => detail.open(b.name)}
                 />
               );
             })}
@@ -302,8 +329,13 @@ export function Brokerages() {
           opens on the Connectors tab for the same row. */}
       {oauth.pendingConfirm && (
         <BrokerageConsentDialog
+          // Keyed by row, because the dialog seeds its toggles once from the
+          // grant it opened on. Reused across rows it would show the previous
+          // row's answer.
+          key={oauth.pendingConfirm.name}
           vendor={oauth.pendingConfirm.vendor}
           name={oauth.pendingConfirm.name}
+          granted={oauth.pendingConfirm.granted}
           pending={oauth.connectingName === oauth.pendingConfirm.name}
           // The hook still holds the whole request, prepare and rollback
           // included, so resuming it needs only the answer.
@@ -311,6 +343,37 @@ export function Brokerages() {
           onCancel={oauth.cancelPending}
         />
       )}
+
+      <AnimatePresence>
+        {detailData && (
+          <ServerDetail
+            key={`brokerage:${detailData.origin === 'brokerage' ? detailData.brokerage.name : ''}`}
+            data={detailData}
+            onClose={detail.close}
+            toggling={
+              detailData.origin === 'brokerage' &&
+              togglingName === detailData.brokerage.name
+            }
+            onToggle={(enabled) => {
+              if (detailData.origin === 'brokerage') {
+                void handleToggle(detailData.brokerage.name, enabled);
+              }
+            }}
+            connecting={
+              detailData.origin === 'brokerage' &&
+              oauth.connectingName === detailData.brokerage.name
+            }
+            // The same call the row makes, so the consent dialog and the
+            // create-then-connect steps behind it are asked once and answered
+            // in one place, wherever the click came from.
+            onConnect={() => {
+              if (detailData.origin !== 'brokerage') return;
+              const found = rows.find(({ b }) => b.name === detailData.brokerage.name);
+              if (found) requestConnect(found.b, found.row, found.vendor);
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

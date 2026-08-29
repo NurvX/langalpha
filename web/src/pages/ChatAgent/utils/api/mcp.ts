@@ -40,6 +40,14 @@ export interface McpToolSummary {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
+  /**
+   * Which brokerage capability group reaches this tool, null when none does.
+   * Discovery is unfiltered on purpose -- it is what the vendor offers, not
+   * what a connection may call -- so this is what lets a surface say which of
+   * them the user actually granted. Absent outside the catalog tools route,
+   * and on every server that is not a brokerage.
+   */
+  capability?: string | null;
 }
 
 export type McpStatus =
@@ -177,6 +185,14 @@ export interface CatalogServer {
   enabled?: boolean;
   /** OAuth connection status, when one exists for this server. */
   oauth_status?: McpOauthStatus | null;
+  /**
+   * The capability groups this connection was granted, in the order they were
+   * stored. `null`/absent means no connection, or one for a server we curate
+   * no groups for; `[]` means a brokerage the user granted nothing. The two
+   * are different answers and the gap between them is a broker that can do
+   * nothing, so they stay distinguishable here too.
+   */
+  granted_capabilities?: string[] | null;
   /** Host-side discovered tool count for the current config (OAuth servers). */
   tool_count?: number | null;
   /** Path on this origin to the mark the server declared in its handshake.
@@ -211,6 +227,9 @@ export interface Brokerage {
   name: string;
   label: string;
   url: string;
+  /** The broker's own website, which is not the endpoint's host: an MCP
+   *  endpoint sits on an API subdomain with no page behind it. */
+  site: string;
   description: string;
   /**
    * The vendor's authorization server refuses a hosted callback, so only the

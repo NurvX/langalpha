@@ -603,6 +603,12 @@ class CatalogServer(BaseModel):
     transport: str
     enabled: bool = False
     oauth_status: Optional[ConnectionStatus] = None
+    # The capability groups this connection was actually granted, in the order
+    # they were stored. None means no connection, or one for a server we curate
+    # no groups for -- distinct from ``[]``, which is a brokerage the user
+    # granted nothing. The consent is enforced per call at the relay, so a
+    # surface that cannot read it back can only guess what a connection does.
+    granted_capabilities: Optional[list[str]] = None
     # Host-side discovered tool count for the server's CURRENT config (OAuth
     # servers only today — that's the only user-level discovery path). None =
     # no current snapshot; the UI omits the count rather than showing 0.
@@ -723,6 +729,10 @@ class BrokerageOption(BaseModel):
     name: str
     label: str
     url: str
+    # The broker's own website, not the endpoint's host. The detail view links
+    # it, which is the one thing a user reliably wants that we cannot answer:
+    # where their actual account lives.
+    site: str = ""
     description: str = ""
     native_callback_only: bool = False
     exclusive_connection: bool = False
@@ -781,6 +791,7 @@ def catalog_row_to_response(
     row: dict[str, Any],
     *,
     oauth_status: ConnectionStatus | None = None,
+    granted_capabilities: list[str] | None = None,
     tool_count: int | None = None,
     icon_url: str | None = None,
 ) -> CatalogServer:
@@ -795,6 +806,7 @@ def catalog_row_to_response(
         transport=row["transport"],
         enabled=bool(row.get("enabled", False)),
         oauth_status=oauth_status,
+        granted_capabilities=granted_capabilities,
         tool_count=tool_count,
         icon_url=icon_url,
         command=row.get("command"),

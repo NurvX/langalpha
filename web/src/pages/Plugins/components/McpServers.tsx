@@ -55,10 +55,10 @@ import { ListControls } from './ListControls';
 import { McpCatalogRow } from './McpCatalogRow';
 import { REGISTRY_NOTE_ID } from './OauthRowParts';
 import { RowNote } from './RowNote';
-import { brokerageForUrl } from '../brokerages';
+import { brokerageForUrl, settledGrant } from '../brokerages';
 import { McpWorkspaceRow } from './McpWorkspaceRow';
 import { PluginSuppressedBadge } from './PluginBadges';
-import { ServerDetail, type ServerDetailData } from './ServerDetail';
+import { ServerDetail, type McpServerDetailData } from './ServerDetail';
 
 /**
  * The Plugins → MCP tab, grouped by the package a row came from: one deck per
@@ -221,7 +221,7 @@ export function McpServers() {
   // --- Detail overlay (?detail=server:NAME [&dws=wsid]) ---
   // Builtin names are reserved against catalog names, so a bare name lookup
   // is unambiguous; a `dws` selects the workspace-local row instead.
-  const detail = useDetailParam<ServerDetailData>(
+  const detail = useDetailParam<McpServerDetailData>(
     'server',
     (ref) => {
       if (ref.workspaceId) {
@@ -366,7 +366,12 @@ export function McpServers() {
           // One strip at a time: a delete question already on screen belongs to
           // a different row and its Yes is not this one's.
           cancelDelete();
-          oauth.connect({ name: server.name, vendor, url: server.url ?? null });
+          oauth.connect({
+            name: server.name,
+            vendor,
+            url: server.url ?? null,
+            granted: settledGrant(server.granted_capabilities, server.oauth_status),
+          });
         }}
         onDisconnect={() => oauth.disconnect(server.name)}
         onRefreshSchemas={() => oauth.refreshSchemas(server.name)}
@@ -639,8 +644,10 @@ export function McpServers() {
           answered, so nothing has happened yet either way. */}
       {oauth.pendingConfirm && (
         <BrokerageConsentDialog
+          key={oauth.pendingConfirm.name}
           vendor={oauth.pendingConfirm.vendor}
           name={oauth.pendingConfirm.name}
+          granted={oauth.pendingConfirm.granted}
           pending={oauth.connectingName === oauth.pendingConfirm.name}
           onConfirm={oauth.confirmPending}
           onCancel={oauth.cancelPending}
