@@ -23,6 +23,7 @@ import { RowNote } from './RowNote';
 export function BrokerageConsentDialog({
   vendor,
   name,
+  granted: current,
   pending,
   onConfirm,
   onCancel,
@@ -32,16 +33,26 @@ export function BrokerageConsentDialog({
   vendor: Brokerage | null | undefined;
   /** The row's name, for a vendor with no label of its own to show. */
   name: string;
+  /** What the connection already grants, or null for a first connect. */
+  granted?: string[] | null;
   pending: boolean;
   onConfirm: (grantedCapabilities: string[]) => void;
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
   const groups = vendor?.capabilities ?? [];
+  // What the connection already has, and the vendor's default only for one
+  // that has nothing yet. This dialog is also the way an existing grant is
+  // narrowed, and opening it on the default re-ticked every group the user had
+  // declined -- offering to widen consent while looking like it was showing it.
+  //
   // Seeded once. Re-deriving per render would undo the user's own ticks, and
   // the dialog is mounted for exactly one question, so there is nothing for it
-  // to go stale against: a different row opens a different dialog.
-  const [granted, setGranted] = useState<string[]>(() => defaultGrant(vendor));
+  // to go stale against: the call sites key it by row, so a different row
+  // opens a different dialog.
+  const [granted, setGranted] = useState<string[]>(
+    () => current ?? defaultGrant(vendor),
+  );
   const label = vendor?.label ?? name;
 
   function toggle(key: string) {
@@ -88,16 +99,7 @@ export function BrokerageConsentDialog({
                       className="text-[0.6875rem] mt-0.5"
                       style={{ color: 'var(--color-text-tertiary)' }}
                     >
-                      {/* Per vendor first, generic second. `rehearsal` is the
-                          group that genuinely means something different at each
-                          broker -- play money at one, a dry run on the real
-                          account at another, a draft order a human can submit
-                          in one click at the third -- and a fallback chain is
-                          what lets any group say so without a branch here. */}
-                      {t([
-                        `plugins.brokerages.capabilities.${group.key}.desc_${vendor?.name}`,
-                        `plugins.brokerages.capabilities.${group.key}.desc`,
-                      ])}
+                      {t(`plugins.brokerages.capabilities.${group.key}.desc`)}
                     </p>
                   </div>
                   <div className="flex-shrink-0 pt-0.5">

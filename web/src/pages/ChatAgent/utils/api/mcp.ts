@@ -244,6 +244,13 @@ export interface Brokerage {
 export interface CapabilityGroup {
   key: string;
   tone: string;
+  /**
+   * One of the steps between reading and placing an order (paper, preview,
+   * staged, live). A fact about the group rather than a reading of its key, so
+   * a group added later reaches the badges with no release here. Absent on a
+   * backend that predates it, which reads as "not a rung" and costs a badge.
+   */
+  rung?: boolean;
 }
 
 export async function getBrokerages(): Promise<Brokerage[]> {

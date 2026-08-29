@@ -13,12 +13,21 @@ in no group: a tool no group names is unreachable, which is also what makes a
 vendor's newly published tool absent until someone curates it rather than
 arriving switched on.
 
-``rehearsal`` is the group whose meaning genuinely differs per vendor, so its
-copy is per vendor too. moomoo's ``sim_trade_*`` is a parallel simulated account
-that cannot touch real money; Robinhood's ``review_*_order`` is a dry run
-against the real account that places nothing; IBKR's ``*_order_instruction``
-writes a draft into the real account that a human can submit in one click. Three
-rungs of a ladder, and only the first is play money.
+The rungs below ``trading`` are three different things, not one, which is why
+they are three groups. moomoo's ``sim_trade_*`` is **paper trading**: a parallel
+simulated account with its own cash, positions and order history, unable to
+touch real money. Robinhood's ``review_*_order`` is an **order preview**: a
+computation against the real account that returns pre-trade alerts and persists
+nothing, which is why it has no list or delete counterpart. IBKR's
+``*_order_instruction`` is a **staged order**: a full create/list/delete triple
+that writes an object into the real account, one human click from being live --
+IBKR's own description draws the line for us, saying an instruction "is not a
+live order".
+
+Folding them into one group would cost the display its vocabulary. The badge on
+the row and the switch in the consent dialog read the same key, so a single
+group would have to be labelled something true of all three and precise about
+none of them.
 
 Keys are facts and the words for them belong to the client, the same contract
 ``brokerages.py`` keeps.
@@ -37,11 +46,17 @@ class CapabilityGroup:
     ``tone`` tells the client how loudly to draw the row without deciding the
     words: ``neutral`` is public or personal data, ``caution`` is the user's own
     positions and money, ``danger`` places real orders.
+
+    ``rung`` marks a group as one of the steps between reading and placing.
+    Which of them a broker has is the first thing someone wants off a row --
+    paper, preview, staged, live -- and it is a fact about the group rather than
+    a reading of its key, so it travels rather than being inferred client-side.
     """
 
     key: str
     order: int
     tone: str
+    rung: bool = False
 
 
 GROUPS: tuple[CapabilityGroup, ...] = (
@@ -50,8 +65,10 @@ GROUPS: tuple[CapabilityGroup, ...] = (
     CapabilityGroup(key="scanners", order=30, tone="neutral"),
     CapabilityGroup(key="alerts", order=40, tone="neutral"),
     CapabilityGroup(key="account", order=50, tone="caution"),
-    CapabilityGroup(key="rehearsal", order=60, tone="caution"),
-    CapabilityGroup(key="trading", order=70, tone="danger"),
+    CapabilityGroup(key="paper_trading", order=60, tone="neutral", rung=True),
+    CapabilityGroup(key="order_preview", order=70, tone="neutral", rung=True),
+    CapabilityGroup(key="staged_orders", order=80, tone="caution", rung=True),
+    CapabilityGroup(key="trading", order=90, tone="danger", rung=True),
 )
 
 _BY_KEY: dict[str, CapabilityGroup] = {g.key: g for g in GROUPS}
@@ -143,7 +160,7 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
             "account_positions",
             "account_trading_info",
         ),
-        "rehearsal": (
+        "paper_trading": (
             "sim_trade_account_list",
             "sim_trade_cancel_order",
             "sim_trade_cash_info",
@@ -215,7 +232,7 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
             "get_portfolio",
             "get_realized_pnl",
         ),
-        "rehearsal": (
+        "order_preview": (
             "review_equity_order",
             "review_option_order",
         ),
@@ -267,7 +284,7 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
             "get_pa_allocation",
             "get_pa_performance_all_periods",
         ),
-        "rehearsal": (
+        "staged_orders": (
             "create_order_instruction",
             "delete_order_instruction",
             "get_order_instructions",
@@ -315,3 +332,4 @@ def tools_for(brokerage: str, granted: Iterable[str]) -> frozenset[str] | None:
     return frozenset(
         tool for key, tools in curated.items() if key in wanted for tool in tools
     )
+

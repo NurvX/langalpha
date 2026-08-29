@@ -706,6 +706,9 @@ class CapabilityGroupOption(BaseModel):
 
     key: str
     tone: str
+    # One of the steps between reading and placing an order, which is the thing
+    # a row is asked first. False for the reading groups.
+    rung: bool = False
 
 
 class BrokerageOption(BaseModel):
@@ -753,7 +756,8 @@ def brokerage_to_response(brokerage: Brokerage) -> BrokerageOption:
         asdict(brokerage)
         | {
             "capabilities": [
-                {"key": g.key, "tone": g.tone} for g in groups_for(brokerage.name)
+                {"key": g.key, "tone": g.tone, "rung": g.rung}
+                for g in groups_for(brokerage.name)
             ]
         }
     )

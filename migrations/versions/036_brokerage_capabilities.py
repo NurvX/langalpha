@@ -30,10 +30,13 @@ depends_on = None
 # curation map are free to grow afterwards. A brokerage added later brings its
 # own pass; a group added later is a code change with no backfill to do, because
 # an existing connection's stored keys stay exactly what its user agreed to.
+# Renaming one is the exception that does need a pass of its own: a stored key
+# the map no longer names expands to no tools at all, so it reads as a
+# connection that may do nothing rather than as the group it used to be.
 _BACKFILL = """(VALUES
-    ('robinhood', '["market_data","watchlists","scanners","account","rehearsal","trading"]'),
-    ('ibkr',      '["market_data","watchlists","alerts","account","rehearsal"]'),
-    ('moomoo',    '["market_data","watchlists","account","rehearsal","trading"]')
+    ('robinhood', '["market_data","watchlists","scanners","account","order_preview","trading"]'),
+    ('ibkr',      '["market_data","watchlists","alerts","account","staged_orders"]'),
+    ('moomoo',    '["market_data","watchlists","account","paper_trading","trading"]')
 ) AS shipped(name, caps)"""
 
 

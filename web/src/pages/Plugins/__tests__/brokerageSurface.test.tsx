@@ -33,7 +33,7 @@ const RH: Brokerage = {
   capabilities: [
     { key: 'market_data', tone: 'neutral' },
     { key: 'account', tone: 'caution' },
-    { key: 'trading', tone: 'danger' },
+    { key: 'trading', tone: 'danger', rung: true },
   ],
 };
 /** What Robinhood's connect grants unless the user says otherwise. */
@@ -48,10 +48,10 @@ const IBKR: Brokerage = {
   capabilities: [
     { key: 'market_data', tone: 'neutral' },
     { key: 'account', tone: 'caution' },
-    { key: 'rehearsal', tone: 'caution' },
+    { key: 'staged_orders', tone: 'caution', rung: true },
   ],
 };
-const IBKR_DEFAULT = ['market_data', 'account', 'rehearsal'];
+const IBKR_DEFAULT = ['market_data', 'account', 'staged_orders'];
 
 /** A brokerage's own catalog row. Named, always, since the tab joins on it. */
 function catalogRow(over: Partial<CatalogServer> & { name: string }): CatalogServer {
@@ -558,7 +558,7 @@ describe('the brokerages tab', () => {
       fireEvent.click(screen.getByTestId('brokerage-connect-robinhood'));
       fireEvent.click(
         within(connectConfirm()!).getByRole('switch', {
-          name: 'Enable Place and cancel real orders',
+          name: 'Enable Live orders',
         }),
       );
       fireEvent.click(

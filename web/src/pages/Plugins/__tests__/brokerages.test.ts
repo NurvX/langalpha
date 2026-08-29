@@ -23,7 +23,8 @@ const robinhood: Brokerage = {
   capabilities: [
     { key: 'market_data', tone: 'neutral' },
     { key: 'account', tone: 'caution' },
-    { key: 'trading', tone: 'danger' },
+    { key: 'order_preview', tone: 'neutral', rung: true },
+    { key: 'trading', tone: 'danger', rung: true },
   ],
 };
 
@@ -36,7 +37,7 @@ const ibkr: Brokerage = {
   exclusive_connection: true,
   capabilities: [
     { key: 'market_data', tone: 'neutral' },
-    { key: 'rehearsal', tone: 'caution' },
+    { key: 'staged_orders', tone: 'caution', rung: true },
   ],
 };
 
@@ -96,11 +97,11 @@ describe('the quirks read off a match', () => {
  */
 describe('defaultGrant', () => {
   it('ticks everything a vendor offers short of real orders', () => {
-    expect(defaultGrant(robinhood)).toEqual(['market_data', 'account']);
+    expect(defaultGrant(robinhood)).toEqual(['market_data', 'account', 'order_preview']);
   });
 
   it('ticks all of a vendor that cannot place one at all', () => {
-    expect(defaultGrant(ibkr)).toEqual(['market_data', 'rehearsal']);
+    expect(defaultGrant(ibkr)).toEqual(['market_data', 'staged_orders']);
   });
 
   it('has nothing to tick for a row that is no brokerage', () => {
@@ -150,7 +151,9 @@ describe('the capability group sentences', () => {
     'scanners',
     'alerts',
     'account',
-    'rehearsal',
+    'paper_trading',
+    'order_preview',
+    'staged_orders',
     'trading',
   ])('%s reads in both catalogs', (key) => {
     for (const catalog of [enUS, zhCN]) {
@@ -166,22 +169,24 @@ describe('the capability group sentences', () => {
     }
   });
 
-  // `rehearsal` is the group whose meaning is genuinely different at each
-  // broker: play money at one, a dry run against the real account at the next,
-  // a draft order a human can submit in one click at the third. The generic
-  // sentence is the fallback and is true of none of them in particular, so a
-  // shipped vendor missing its own is the sentence being wrong rather than
-  // absent.
-  it.each(['moomoo', 'robinhood', 'ibkr'])('rehearsal says what it means at %s', (vendor) => {
+  // The order rungs must not share a label. They are the four different answers
+  // to the only question a brokerage row is asked first, and a build that gave
+  // two of them one word would be back to the single group they were split out
+  // of -- with the badge and the switch agreeing on a word that is true of
+  // paper money and real money alike.
+  it('gives every order rung its own words', () => {
     for (const catalog of [enUS, zhCN]) {
-      const rehearsal = (
+      const groups = (
         catalog as {
           plugins: {
-            brokerages: { capabilities: { rehearsal: Record<string, string> } };
+            brokerages: { capabilities: Record<string, Record<string, string>> };
           };
         }
-      ).plugins.brokerages.capabilities.rehearsal;
-      expect(typeof rehearsal[`desc_${vendor}`]).toBe('string');
+      ).plugins.brokerages.capabilities;
+      const labels = ['paper_trading', 'order_preview', 'staged_orders', 'trading'].map(
+        (key) => groups[key].label,
+      );
+      expect(new Set(labels).size).toBe(labels.length);
     }
   });
 });

@@ -194,11 +194,11 @@ const EXCLUSIVE_VENDOR = {
   exclusive_connection: true,
   capabilities: [
     { key: 'market_data', tone: 'neutral' },
-    { key: 'rehearsal', tone: 'caution' },
+    { key: 'staged_orders', tone: 'caution', rung: true },
   ],
 };
 /** What this vendor's connect grants unless the user says otherwise. */
-const EXCLUSIVE_DEFAULT = ['market_data', 'rehearsal'];
+const EXCLUSIVE_DEFAULT = ['market_data', 'staged_orders'];
 
 function makeCatalog(servers: CatalogServer[], maxServers = 20): CatalogServerList {
   return { servers, max_servers: maxServers };

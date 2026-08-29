@@ -2828,15 +2828,20 @@
           "label": "Account and positions",
           "desc": "Balances, holdings, order history and transfers. Reading only."
         },
-        "rehearsal": {
-          "label": "Order rehearsal",
-          "desc": "Work an order out without placing one.",
-          "desc_moomoo": "Trade in moomoo's paper account, which is separate from your real one and holds no real money.",
-          "desc_robinhood": "Check an order against your real account without placing it. Nothing is ever submitted.",
-          "desc_ibkr": "Save a draft order into your real IBKR account. It is not submitted, but you can submit it there in one click."
+        "paper_trading": {
+          "label": "Paper trading",
+          "desc": "Trade in the broker's simulated account. It has its own cash and positions, and no real money."
+        },
+        "order_preview": {
+          "label": "Order preview",
+          "desc": "Work an order out against your real account and see its cost and warnings. Nothing is submitted, and nothing is saved."
+        },
+        "staged_orders": {
+          "label": "Staged orders",
+          "desc": "Save a draft order into your real account. It is not live, but you can submit it at the broker in one click."
         },
         "trading": {
-          "label": "Place and cancel real orders",
+          "label": "Live orders",
           "desc": "Buy, sell, replace and cancel with real money in your account, without asking you first."
         }
       },
