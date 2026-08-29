@@ -9,7 +9,7 @@ import {
   startMcpOauth,
 } from '@/pages/ChatAgent/utils/api';
 import { markConnectStarted } from '../connectReturn';
-import type { Brokerage } from '../brokerages';
+import { connectAsks, type Brokerage } from '../brokerages';
 
 /** One row's request to connect, and the steps that belong to that row alone. */
 export interface ConnectRequest {
@@ -32,6 +32,16 @@ export interface ConnectRequest {
    * one about to be connected.
    */
   url: string | null;
+  /**
+   * What this connection already grants, or null when there is nothing
+   * connected to read one from.
+   *
+   * The consent dialog is also how an existing grant is narrowed, so it has to
+   * open on what the connection has rather than on the vendor's default. Seeded
+   * from the default, a reconnect re-ticked every group the user had
+   * deliberately declined, and the only sign of it was the user noticing.
+   */
+  granted?: string[] | null;
   /**
    * Whatever this surface must do before the vendor's consent screen, run only
    * once the user has answered anything this connect had to ask. Answers false
@@ -56,6 +66,13 @@ export interface ConnectRequest {
  * from the MCP tab went straight to the consent screen. A gate a caller has to
  * remember is a gate the next caller does not have, so `connect` raises the
  * question itself and every surface renders the same answer.
+ *
+ * A brokerage's capability consent is the same kind of gate and is raised the
+ * same way, and it is the one with teeth: what the user does not tick is
+ * refused at the relay for the life of the connection. A surface that never
+ * asks sends no selection, and the backend grants such a connection nothing --
+ * so forgetting the question costs the user a working broker, never a broker
+ * that can do more than they agreed to.
  */
 /**
  * Which run currently owns each row's connect.
@@ -140,7 +157,7 @@ export function useMcpOauthActions({
    * has already been brought to life for a connect the user then declines.
    */
   function connect(request: ConnectRequest) {
-    if (request.vendor?.exclusive_connection) {
+    if (connectAsks(request.vendor)) {
       setPendingConfirm(request);
       return;
     }
@@ -151,9 +168,17 @@ export function useMcpOauthActions({
     void run(request);
   }
 
-  /** Go ahead with the connect the strip is asking about. */
-  function confirmPending() {
-    if (pendingConfirm) void run(pendingConfirm);
+  /**
+   * Go ahead with the connect that was asked about, on the terms answered.
+   *
+   * The selection arrives here rather than being held beside `pendingConfirm`
+   * because it is the surface's to collect and this hook's only to forward: it
+   * is what the user ticked, it exists for exactly as long as the question is
+   * on screen, and mirroring it into state here would be a second copy that
+   * could disagree with the toggles the user is looking at.
+   */
+  function confirmPending(grantedCapabilities?: string[]) {
+    if (pendingConfirm) void run(pendingConfirm, grantedCapabilities);
   }
 
   /**
@@ -173,7 +198,7 @@ export function useMcpOauthActions({
     if (request) owner.delete(request.name);
   }
 
-  async function run(request: ConnectRequest) {
+  async function run(request: ConnectRequest, grantedCapabilities?: string[]) {
     const { name, vendor, url, prepare, rollback } = request;
     const token = Symbol(name);
     owner.set(name, token);
@@ -227,6 +252,7 @@ export function useMcpOauthActions({
           vendorRefusesHostedCallback: !!vendor?.native_callback_only,
           expectedUrl: url,
           stillWanted: ours,
+          grantedCapabilities,
         }),
       );
       if (!started) {

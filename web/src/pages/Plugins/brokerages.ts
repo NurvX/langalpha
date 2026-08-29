@@ -9,11 +9,11 @@
  * vendor, and whether this build can start a connect against one at all.
  */
 import { canBeginMcpOAuth, isDesktopShell } from '@/lib/desktop';
-import type { Brokerage } from '@/pages/ChatAgent/utils/api';
+import type { Brokerage, CapabilityGroup } from '@/pages/ChatAgent/utils/api';
 
 // Re-exported because this module is where the concept lives for every surface
 // that draws one; the wire shape is declared with the call that fetches it.
-export type { Brokerage };
+export type { Brokerage, CapabilityGroup };
 
 /**
  * The brokerage a server address belongs to, matched on host.
@@ -68,4 +68,35 @@ export function connectBlock(vendor: Brokerage | null | undefined): ConnectBlock
   // native-only vendor gets a live button into the dead end.
   if (vendor === undefined) return 'unknown';
   return vendor?.native_callback_only && !canBeginMcpOAuth() ? 'native-only' : null;
+}
+
+/**
+ * The groups a connect starts with ticked.
+ *
+ * Everything the vendor offers except the ones that place real orders. A
+ * brokerage connected with nothing ticked is a broker that does nothing, which
+ * reads as broken rather than careful; ticking everything is what this change
+ * exists to stop being the only option. The line is drawn at `danger` because
+ * that is the tone's whole meaning, so a group added later lands on the right
+ * side of it without anyone remembering to come back here.
+ */
+export function defaultGrant(vendor: Brokerage | null | undefined): string[] {
+  return (vendor?.capabilities ?? [])
+    .filter((group) => group.tone !== 'danger')
+    .map((group) => group.key);
+}
+
+/**
+ * Whether connecting this vendor has to ask something first.
+ *
+ * Both questions, because they are asked in one place: what the connection may
+ * do, and -- for a vendor allowing one connected AI platform per account --
+ * what it costs elsewhere. A vendor with neither is connected on the click, as
+ * every ordinary OAuth server always has been.
+ */
+export function connectAsks(vendor: Brokerage | null | undefined): boolean {
+  // `?? []` for the same reason the wire model names the field at all: a build
+  // that reaches a backend which predates it gets undefined, and the question
+  // that must still be asked is the vendor's own terms.
+  return !!vendor && (vendor.exclusive_connection || (vendor.capabilities ?? []).length > 0);
 }

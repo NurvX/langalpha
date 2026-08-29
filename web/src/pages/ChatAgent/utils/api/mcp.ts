@@ -223,6 +223,27 @@ export interface Brokerage {
    * previous one, so connecting is destructive to a connection elsewhere.
    */
   exclusive_connection: boolean;
+  /**
+   * What this vendor's tools can be granted in, in display order. Empty for a
+   * vendor nothing is curated for, which reads as "nothing to choose" rather
+   * than "everything": the backend answers the same way, and a connect that
+   * names no group is granted none of them.
+   */
+  capabilities: CapabilityGroup[];
+}
+
+/**
+ * One consent toggle offered when connecting a brokerage.
+ *
+ * The key is the fact and also the translation key; the words are this client's,
+ * the same contract the quirk booleans above keep. `tone` is how loudly to draw
+ * the row -- `neutral` is public or personal data, `caution` is the user's own
+ * positions and money, `danger` places real orders -- and is left a plain string
+ * because a tone this build has no styling for must still render.
+ */
+export interface CapabilityGroup {
+  key: string;
+  tone: string;
 }
 
 export async function getBrokerages(): Promise<Brokerage[]> {
@@ -609,6 +630,17 @@ export interface StartMcpOauthOptions {
    * minutes earlier.
    */
   stillWanted?: () => boolean;
+  /**
+   * The capability groups the user agreed this connection may carry, or
+   * undefined for a connect that was never asked.
+   *
+   * The empty array and undefined are different answers and both travel as they
+   * are: `[]` is a brokerage granted nothing, undefined is a server we curate no
+   * groups for and hold no policy over. Collapsing them would make "declined
+   * everything" and "not a brokerage" the same request, and only one of those
+   * may reach a vendor's whole tool list.
+   */
+  grantedCapabilities?: string[];
 }
 
 /**
@@ -625,6 +657,7 @@ export async function startMcpOauth(
     vendorRefusesHostedCallback = false,
     expectedUrl,
     stillWanted,
+    grantedCapabilities,
   }: StartMcpOauthOptions = {},
 ): Promise<McpOauthStart | null> {
   // Asked unconditionally, because asking is free: `loopbackFlow` answers
@@ -668,6 +701,12 @@ export async function startMcpOauth(
         return_to: returnTo,
         ...(flow ? { redirect_uri: flow.redirectUri } : {}),
         ...(expectedUrl ? { expected_url: expectedUrl } : {}),
+        // Presence, not truthiness, unlike the two above: an empty selection is
+        // a decision the user made and has to be sent, and it is the one value
+        // here that a shorthand check would drop.
+        ...(grantedCapabilities !== undefined
+          ? { granted_capabilities: grantedCapabilities }
+          : {}),
       },
     );
     if (flow) {

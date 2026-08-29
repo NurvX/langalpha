@@ -2807,8 +2807,46 @@
       "warningTitle": "Server saved with warnings"
     },
     "brokerages": {
-      "exclusiveConfirm": "Connect \"{{server}}\"? This account allows one connected AI platform, so this replaces whichever one is connected now.",
+      "capabilities": {
+        "market_data": {
+          "label": "Market data and research",
+          "desc": "Quotes, charts, fundamentals, filings and screeners. Nothing about your account."
+        },
+        "watchlists": {
+          "label": "Watchlists",
+          "desc": "Read your watchlists, and add or remove symbols."
+        },
+        "scanners": {
+          "label": "Saved scanners",
+          "desc": "Read the screeners you have saved, and create or delete them."
+        },
+        "alerts": {
+          "label": "Price alerts",
+          "desc": "Read your price alerts, and create or delete them."
+        },
+        "account": {
+          "label": "Account and positions",
+          "desc": "Balances, holdings, order history and transfers. Reading only."
+        },
+        "rehearsal": {
+          "label": "Order rehearsal",
+          "desc": "Work an order out without placing one.",
+          "desc_moomoo": "Trade in moomoo's paper account, which is separate from your real one and holds no real money.",
+          "desc_robinhood": "Check an order against your real account without placing it. Nothing is ever submitted.",
+          "desc_ibkr": "Save a draft order into your real IBKR account. It is not submitted, but you can submit it there in one click."
+        },
+        "trading": {
+          "label": "Place and cancel real orders",
+          "desc": "Buy, sell, replace and cancel with real money in your account, without asking you first."
+        }
+      },
+      "consent": {
+        "title": "Connect “{{server}}”",
+        "subtitle": "Choose what this connection lets the agent do at this broker.",
+        "footnote": "Anything left off is refused when the agent asks for it, not merely hidden. To change this later, reconnect."
+      },
       "exclusiveNote": "Replaces this account's other AI connection",
+      "exclusiveWarning": "This account allows one connected AI platform, so connecting here replaces whichever one is connected now.",
       "intro": "Brokerage accounts the agent can read and trade in. Connect one to link your account; nothing reaches a broker until you do.",
       "none": "This build ships no brokerage connectors.",
       "notAdded": "Not added",

@@ -46,6 +46,7 @@ import { useMcpBulkActions } from '../hooks/useMcpBulkActions';
 import { useMcpOauthActions } from '../hooks/useMcpOauthActions';
 import { usePluginListSurface } from '../hooks/usePluginListSurface';
 import { useWorkspaceOptions } from '../hooks/useWorkspaceOptions';
+import { BrokerageConsentDialog } from './BrokerageConsentDialog';
 import { BuiltinMcpRow } from './BuiltinMcpRow';
 import { BulkActionBar } from './BulkActionBar';
 import { EmptyState } from './EmptyState';
@@ -630,23 +631,16 @@ export function McpServers() {
         </GroupDeck>
       ))}
 
-      {/* The vendor's terms, asked here as well as on the Brokerages tab: the
-          same row is reachable from both, and a connect that drops the account's
-          other AI connection must not be one click quieter for having been
-          reached through the MCP list. The hook holds the request until this is
+      {/* What a brokerage connection may do, and the vendor's own terms, asked
+          here as well as on the Brokerages tab: the same row is reachable from
+          both, and neither the consent nor a connect that drops the account's
+          other AI connection may be one click quieter for having been reached
+          through the MCP list. The hook holds the request until this is
           answered, so nothing has happened yet either way. */}
       {oauth.pendingConfirm && (
-        <ConfirmStrip
-          message={t('plugins.brokerages.exclusiveConfirm', {
-            server: oauth.pendingConfirm.vendor?.label ?? oauth.pendingConfirm.name,
-          })}
-          confirmVariant="primary"
-          confirmLabel={
-            oauth.connectingName === oauth.pendingConfirm.name
-              ? t('common.loading')
-              : t('plugins.oauth.connect')
-          }
-          cancelLabel={t('plugins.servers.deleteConfirmNo')}
+        <BrokerageConsentDialog
+          vendor={oauth.pendingConfirm.vendor}
+          name={oauth.pendingConfirm.name}
           pending={oauth.connectingName === oauth.pendingConfirm.name}
           onConfirm={oauth.confirmPending}
           onCancel={oauth.cancelPending}

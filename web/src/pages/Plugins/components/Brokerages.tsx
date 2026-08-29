@@ -22,10 +22,8 @@ import { brokerageForUrl, connectBlock, type Brokerage } from '../brokerages';
 import { useMcpOauthActions } from '../hooks/useMcpOauthActions';
 import { useWorkspaceOptions } from '../hooks/useWorkspaceOptions';
 import { withDetail } from '../utils/detailParam';
+import { BrokerageConsentDialog } from './BrokerageConsentDialog';
 import { BrokerageRow } from './BrokerageRow';
-
-/** The one question the strip under the list is asking, and about which row. */
-type Confirm = { kind: 'remove' | 'connect'; name: string };
 
 /**
  * The Plugins → Brokerages tab: every broker this build ships, listed whether
@@ -61,9 +59,9 @@ export function Brokerages() {
   const [scopeBusyName, setScopeBusyName] = useState<string | null>(null);
   // Removing is this tab's own question; the connect question belongs to the
   // connect lifecycle and is held by the hook, so that every surface that can
-  // start one has to answer it. One strip renders whichever is open, and each
-  // entry point closes the other -- two strips stacked under the list, each
-  // with its own Yes, gave no way to tell which broker either belonged to.
+  // start one has to answer it. Each entry point closes the other, so only one
+  // is ever open -- two questions stacked under the list, each with its own
+  // Yes, gave no way to tell which broker either belonged to.
   const [removingName, setRemovingName] = useState<string | null>(null);
 
   const shipped = brokerages ?? [];
@@ -205,18 +203,10 @@ export function Brokerages() {
     setSearchParams(next, { replace: true });
   }
 
-  // Whichever question is open, and never both: each entry point closes the
-  // other. Remove is this tab's; connect belongs to the lifecycle, so that a
-  // surface which forgets to ask still cannot start one that costs something.
-  const confirming: Confirm | null = removingName
-    ? { kind: 'remove', name: removingName }
-    : oauth.pendingConfirm
-      ? { kind: 'connect', name: oauth.pendingConfirm.name }
-      : null;
-  // Re-derived at render rather than captured when the strip opened, so the
-  // row it acts on is the one the list holds now.
-  const pending = confirming
-    ? (rows.find(({ b }) => b.name === confirming.name) ?? null)
+  // Re-derived at render rather than captured when the strip opened, so the row
+  // it acts on is the one the list holds now.
+  const removing = removingName
+    ? (rows.find(({ b }) => b.name === removingName) ?? null)
     : null;
   // The same predicate on the same value the row uses, so the paragraph and the
   // row cannot disagree: a revoked connection needs the authorize flow again,
@@ -235,10 +225,6 @@ export function Brokerages() {
   // that would warn them is suppressed exactly then, because it only renders on
   // a row believed unconnected. An error is the honest thing to show instead.
   const listError = error ?? catalogError;
-  const busyOnConfirm =
-    confirming?.kind === 'remove'
-      ? deleteMutation.isPending
-      : oauth.connectingName === confirming?.name;
 
   return (
     <div className="flex flex-col gap-3">
@@ -296,37 +282,33 @@ export function Brokerages() {
         </div>
       )}
 
-      {confirming && pending && (
+      {removing && (
         <ConfirmStrip
-          message={t(
-            confirming.kind === 'remove'
-              ? 'plugins.brokerages.removeConfirm'
-              : 'plugins.brokerages.exclusiveConfirm',
-            { server: pending.b.label },
-          )}
-          confirmVariant={confirming.kind === 'remove' ? 'destructive' : 'primary'}
+          message={t('plugins.brokerages.removeConfirm', { server: removing.b.label })}
           confirmLabel={
-            busyOnConfirm
+            deleteMutation.isPending
               ? t('common.loading')
-              : confirming.kind === 'remove'
-                ? t('plugins.servers.deleteConfirmYes')
-                : t('plugins.oauth.connect')
+              : t('plugins.servers.deleteConfirmYes')
           }
           cancelLabel={t('plugins.servers.deleteConfirmNo')}
-          pending={busyOnConfirm}
-          onConfirm={() => {
-            if (confirming.kind === 'remove') {
-              void confirmRemove(confirming.name);
-            } else {
-              // The hook still holds the whole request, prepare and rollback
-              // included, so resuming it needs nothing from here.
-              oauth.confirmPending();
-            }
-          }}
-          onCancel={() => {
-            setRemovingName(null);
-            oauth.cancelPending();
-          }}
+          pending={deleteMutation.isPending}
+          onConfirm={() => void confirmRemove(removing.b.name)}
+          onCancel={() => setRemovingName(null)}
+        />
+      )}
+
+      {/* What the connection may do, and what making it costs elsewhere. Both
+          belong to the lifecycle rather than to this tab, so the same dialog
+          opens on the Connectors tab for the same row. */}
+      {oauth.pendingConfirm && (
+        <BrokerageConsentDialog
+          vendor={oauth.pendingConfirm.vendor}
+          name={oauth.pendingConfirm.name}
+          pending={oauth.connectingName === oauth.pendingConfirm.name}
+          // The hook still holds the whole request, prepare and rollback
+          // included, so resuming it needs only the answer.
+          onConfirm={oauth.confirmPending}
+          onCancel={oauth.cancelPending}
         />
       )}
     </div>
