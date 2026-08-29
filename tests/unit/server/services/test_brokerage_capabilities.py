@@ -88,6 +88,9 @@ def test_placing_an_order_takes_the_trading_group() -> None:
     for vendor, tool in (
         ("moomoo", "trading_order_place"),
         ("robinhood", "place_equity_order"),
+        # Crypto rides the same rung as equity: the group answers what the
+        # action costs, not what it trades.
+        ("robinhood", "place_crypto_order"),
     ):
         without = [k for k in group_keys_for(vendor) if k != "trading"]
         assert tool not in tools_for(vendor, without)

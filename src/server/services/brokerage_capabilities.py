@@ -29,6 +29,12 @@ the row and the switch in the consent dialog read the same key, so a single
 group would have to be labelled something true of all three and precise about
 none of them.
 
+Asset class is not one of these axes. A vendor's crypto order tools file under
+the same rungs as its equity ones, because a group answers what an action
+costs rather than what it trades, and ``trading`` has always carried equities,
+options and option exercise together. Granting crypto separately would need a
+second axis that neither the ladder nor the badges have.
+
 Keys are facts and the words for them belong to the client, the same contract
 ``brokerages.py`` keeps.
 """
@@ -74,7 +80,7 @@ GROUPS: tuple[CapabilityGroup, ...] = (
 _BY_KEY: dict[str, CapabilityGroup] = {g.key: g for g in GROUPS}
 
 # Tool names exactly as the vendor publishes them, which is what the relay
-# compares against. Counted against live discovery: moomoo 88, Robinhood 54,
+# compares against. Counted against live discovery: moomoo 88, Robinhood 67,
 # IBKR 34, one of IBKR's deliberately left out.
 _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
     "moomoo": {
@@ -179,10 +185,13 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "robinhood": {
         "market_data": (
+            "get_crypto_quotes",
+            "get_currency_pairs",
             "get_earnings_calendar",
             "get_earnings_results",
             "get_equity_fundamentals",
             "get_equity_historicals",
+            "get_equity_news",
             "get_equity_price_book",
             "get_equity_quotes",
             "get_equity_technical_indicators",
@@ -195,6 +204,10 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
             "get_option_historicals",
             "get_option_instruments",
             "get_option_quotes",
+            "get_sec_filing",
+            "get_sec_filing_facts",
+            "get_sec_filing_facts_catalog",
+            "get_sec_filing_index",
             "search",
         ),
         "watchlists": (
@@ -221,6 +234,9 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
         ),
         "account": (
             "get_accounts",
+            "get_crypto_account_onboarding_info",
+            "get_crypto_orders",
+            "get_crypto_positions",
             "get_equity_orders",
             "get_equity_positions",
             "get_equity_tax_lots",
@@ -233,14 +249,17 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
             "get_realized_pnl",
         ),
         "order_preview": (
+            "preview_crypto_order",
             "review_equity_order",
             "review_option_order",
         ),
         "trading": (
+            "cancel_crypto_order",
             "cancel_equity_order",
             "cancel_option_exercise",
             "cancel_option_order",
             "exercise_option",
+            "place_crypto_order",
             "place_equity_order",
             "place_option_order",
         ),
