@@ -988,6 +988,11 @@ async def test_brokerages_are_offered_without_touching_the_database(client):
     assert by_name["robinhood"]["native_callback_only"] is True
     assert by_name["ibkr"]["exclusive_connection"] is True
     assert by_name["ibkr"]["label"] == "Interactive Brokers"
+    # The two quirks are independent, and Robinhood carries both. Asserted
+    # because it is the one row where a reader could take the first flag as the
+    # whole story, and because dropping this one silently costs the confirm
+    # that stands between a connect here and the user's other AI platform.
+    assert by_name["robinhood"]["exclusive_connection"] is True
 
 
 @pytest.mark.asyncio

@@ -72,9 +72,11 @@ INFLIGHT_PREFIX = "mcp:oauth:inflight:"
 # and a sibling path is still that vendor.
 IBKR_URL = "https://api.ibkr.com/v1/api/mcp-public"
 IBKR_ALT_URL = "https://api.ibkr.com/v1/api/mcp-public/mine"
-# Shipped too, but with no exclusivity, so it is the control for every case
-# below rather than a second example of one.
-RH_URL = "https://agent.robinhood.com/mcp/trading"
+# A vendor we do not ship, which is the control for every case below rather
+# than a second example of one. Neither shipped brokerage can play the part --
+# both are one connection per account -- so the ordinary case has to come from
+# a host the registry has never heard of.
+ORDINARY_URL = "https://mcp.example.com/mcp"
 
 
 # ---------------------------------------------------------------------------
@@ -1084,16 +1086,16 @@ class TestExclusiveVendorScope:
     ):
         """The control, and the reason the scope is not simply the host.
 
-        Robinhood ships from the same registry and joins by host the same way.
-        Widening supersession to every shipped vendor would retire a connect for
-        no reason at all -- nothing about a second Robinhood row costs the first
-        one anything.
+        Two rows at one host join to one vendor exactly as the exclusive case
+        does, so the host alone cannot be what decides. Widening supersession to
+        every vendor would retire a connect for no reason at all -- nothing
+        about a second row here costs the first one anything.
         """
-        self._row(phase1, "robinhood", RH_URL)
-        self._row(phase1, "my_rh", RH_URL + "/mine")
+        self._row(phase1, "ordinary", ORDINARY_URL)
+        self._row(phase1, "my_ordinary", ORDINARY_URL + "/mine")
 
-        first = await start_connect(USER_ID, "robinhood")
-        await start_connect(USER_ID, "my_rh")
+        first = await start_connect(USER_ID, "ordinary")
+        await start_connect(USER_ID, "my_ordinary")
 
         assert f"{STATE_PREFIX}{first.state}" in redis.store
 
