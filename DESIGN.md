@@ -64,6 +64,18 @@ washes, glows and fills. A picture of a branded thing reads as brand, not as
 state. The alternative is a picture whose color has to be kept in step with the
 brand by hand, which is how that panel spent a rebrand still showing the old one.
 
+**The sign-in page is the one product surface that is exempt**, and the reason
+is that the rule has nothing to bite on there. It carries no chrome, no
+navigation and no data, so there is nothing for the accent to annotate, and the
+neutral focus ring would paint in a color the page uses nowhere else. Amber is
+its whole interaction vocabulary instead: the submit button has always taken the
+fill on hover, and keyboard focus takes the same fill rather than inventing a
+second language for the same "about to act" state. Focus is not left to hue
+alone, since hue is what a color deficiency flattens: an underline by default, a
+doubled edge on the boxed controls, an outline under forced colors. The exemption
+is the `.login-page` surface itself, not the route it mounts on: the same build
+serves the app from that route once someone is signed in.
+
 Semantic color (profit/loss/warning/danger) is separate from the accent and
 never substitutes for it.
 

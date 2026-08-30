@@ -3,6 +3,10 @@ import { defineConfig } from '@playwright/test';
 // Use a dedicated port so E2E tests never collide with the user's dev server
 // on :5173 (which might have real Supabase env vars) or other local services.
 const E2E_PORT = 5176;
+// The auth surface only exists in platform mode, and the mode is fixed when the
+// dev server boots, not per test. So it gets a server of its own rather than a
+// flag some spec could flip.
+const E2E_AUTH_PORT = 5177;
 
 export default defineConfig({
   testDir: './e2e',
@@ -34,12 +38,35 @@ export default defineConfig({
       },
     },
     {
+      command: `npm run dev -- --port ${E2E_AUTH_PORT}`,
+      port: E2E_AUTH_PORT,
+      reuseExistingServer: false,
+      env: {
+        VITE_HOST_MODE: 'platform',
+        // Non-empty so lib/supabase.ts constructs its client and the login page
+        // renders. It resolves to nothing: the one spec that submits answers
+        // the send with a route handler, so no request leaves the browser.
+        VITE_SUPABASE_URL: 'https://example.supabase.co',
+        VITE_SUPABASE_PUBLISHABLE_KEY: 'e2e-placeholder-key',
+        VITE_API_BASE_URL: 'http://127.0.0.1:4100',
+      },
+    },
+    {
       command: 'node e2e/mock-sse-server.js',
       port: 4100,
       reuseExistingServer: !process.env.CI,
     },
   ],
   projects: [
-    { name: 'chromium', use: { browserName: 'chromium' } },
+    {
+      name: 'chromium',
+      testIgnore: /auth-surface\..*\.spec\.js/,
+      use: { browserName: 'chromium' },
+    },
+    {
+      name: 'auth-surface',
+      testMatch: /auth-surface\..*\.spec\.js/,
+      use: { browserName: 'chromium', baseURL: `http://127.0.0.1:${E2E_AUTH_PORT}` },
+    },
   ],
 });

@@ -921,8 +921,11 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
         <div className="flex-shrink-0 flex flex-col gap-4 pb-4 md:pb-6 px-1 enter-fade-up enter-fade-up-d1">
           {/* Search Bar */}
           <div className="w-full">
+            {/* The pill rings for the field inside it: a ring drawn on the
+                field alone would cut this border and leave the icon outside
+                the indicator. `rings-within` in tokens.css owns the rule. */}
             <div
-              className="flex items-center gap-2 h-11 px-3 rounded-xl border transition-colors"
+              className="rings-within flex items-center gap-2 h-11 px-3 rounded-xl border transition-colors"
               style={{
                 backgroundColor: 'var(--color-bg-input)',
                 borderColor: 'var(--color-border-muted)',

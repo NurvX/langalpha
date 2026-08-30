@@ -433,6 +433,78 @@ html {
     outline-offset: 2px;
   }
 
+  /* A text field is the one control the browser matches :focus-visible on for
+     either device. The heuristic is deliberate -- a field about to receive
+     typing has to look focused -- but it means the rule above rings a field
+     the mouse just clicked, where the same click on a button rings nothing.
+     No selector separates the two, so lib/inputModality.ts records how focus
+     arrived and this reads it back. A field the mouse focused keeps the caret
+     and its own border change; a Tab still brings the ring.
+
+     Spelled out type by type because the exemption has to be the narrow set
+     where every key is typing. A checkbox, a range, a number spinner and a
+     date field all take keys that are *commands*, and Chromium starts matching
+     :focus-visible the moment one arrives -- while this record still says
+     pointer, because focus never moved and no focusin fired. Written as
+     `input` those controls go dark under the user's own first keystroke.
+     Anything left off this list keeps a ring on a click, which is the mild
+     half of the trade.
+
+     Transparent rather than `none`, which is not a stylistic choice: forced
+     colors repaints every outline in the system palette but cannot paint one
+     that was never drawn, and it drops the box-shadow and normalizes the
+     border a field would otherwise be distinguished by. `none` here leaves a
+     high-contrast user with a clicked field marked by nothing but the caret.
+     A transparent outline is invisible everywhere else and becomes the
+     system's own focus color there -- the same reason Tailwind's
+     `outline-none` compiles to this and not to `outline: none`. */
+  :root[data-pointer-focus] :is(
+    textarea,
+    [contenteditable],
+    input:not([type]),
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    input[type="search"],
+    input[type="tel"],
+    input[type="url"]
+  ):focus-visible {
+    outline: 2px solid transparent;
+  }
+
+  /* A field that fills a bordered container has nowhere to put a ring of its
+     own. An outline on the field alone cuts across the container's border and
+     leaves whatever else lives in there outside the indicator: the icon on a
+     search pill, the chips already entered on a token field. Mark the container
+     and it rings on the field's behalf.
+
+     Scoped to a direct-child input so a button sharing the container -- a clear
+     affordance, a chip's remove -- still rings itself instead of lighting the
+     whole box. Gated like the rule above and for the same reason: the field
+     inside matches :focus-visible for either device, so ungated this would
+     light the container on a click.
+
+     All three sit behind @supports because only the first of them survives a
+     parser without :has(): taking the ring off the field is a plain selector,
+     while the two rules that put it on the container are dropped as invalid.
+     Split, the fallback is not a ring in the wrong place, it is no ring at
+     all. Together they degrade to the baseline, which rings the field. */
+  @supports selector(:has(*)) {
+    .rings-within > input:focus-visible {
+      outline: none;
+    }
+
+    .rings-within:has(> input:focus-visible) {
+      outline: 2px solid var(--color-focus-ring);
+      outline-offset: 2px;
+    }
+
+    /* Transparent for the reason the field rule above is. */
+    :root[data-pointer-focus] .rings-within:has(> input:focus-visible) {
+      outline: 2px solid transparent;
+    }
+  }
+
   /* Inside an SVG, Chromium paints its own ring on plain :focus -- it does not
      gate that on :focus-visible the way it does for HTML, so a mouse click on
      a chart draws a ring where the same click on a button would not. Take the
