@@ -205,6 +205,12 @@ test.describe('every view of the auth surface', () => {
     // One second at a time, not one jump: the countdown re-arms its timer from
     // an effect, so the next tick does not exist yet when the current one
     // fires. A single fastForward finds one timer and lands on 59.
+    //
+    // `install()` makes the clock steerable, it does not stop it -- `pauseAt`
+    // is what freezes time. Measured: a 300ms setTimeout inside the page still
+    // resolves in 300ms after installing. So the waits further down this file
+    // are unaffected, and real time alone is still far too slow to walk out a
+    // 60s cooldown inside a 30s test, which is what runFor is for.
     const resend = page.locator('.login-page__resend-btn');
     for (let tick = 0; tick < 90 && await resend.isDisabled(); tick += 1) {
       await page.clock.runFor(1000);
