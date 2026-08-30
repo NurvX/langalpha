@@ -622,7 +622,7 @@ async def test_fetch_platform_membership_oss_mode_short_circuits():
     with (
         patch(f"{LIMITS}.HOST_MODE", "oss"),
         patch(f"{LIMITS}.AUTH_SERVICE_URL", "http://localhost:8003"),
-        patch(f"{LIMITS}._get_http_client", return_value=mock_client),
+        patch(f"{LIMITS}.get_http_client", return_value=mock_client),
     ):
         from src.server.dependencies.usage_limits import _fetch_platform_membership
 
@@ -646,7 +646,7 @@ async def test_fetch_platform_tier_returns_tier():
         patch(f"{LIMITS}.HOST_MODE", "platform"),
         patch(f"{LIMITS}.AUTH_SERVICE_URL", "http://localhost:8003"),
         patch(
-            f"{LIMITS}._get_http_client",
+            f"{LIMITS}.get_http_client",
             return_value=mock_client,
         ),
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
@@ -672,7 +672,7 @@ async def test_fetch_platform_tier_cache_hit():
         patch(f"{LIMITS}.HOST_MODE", "platform"),
         patch(f"{LIMITS}.AUTH_SERVICE_URL", "http://localhost:8003"),
         patch(
-            f"{LIMITS}._get_http_client",
+            f"{LIMITS}.get_http_client",
             return_value=mock_client,
         ),
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
@@ -698,7 +698,7 @@ async def test_fetch_platform_membership_caches_tier_and_plan_display_name_toget
     with (
         patch(f"{LIMITS}.HOST_MODE", "platform"),
         patch(f"{LIMITS}.AUTH_SERVICE_URL", "http://localhost:8003"),
-        patch(f"{LIMITS}._get_http_client", return_value=mock_client),
+        patch(f"{LIMITS}.get_http_client", return_value=mock_client),
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
         patch("os.getenv", return_value="token"),
     ):
@@ -726,7 +726,7 @@ async def test_fetch_platform_tier_platform_error():
         patch(f"{LIMITS}.HOST_MODE", "platform"),
         patch(f"{LIMITS}.AUTH_SERVICE_URL", "http://localhost:8003"),
         patch(
-            f"{LIMITS}._get_http_client",
+            f"{LIMITS}.get_http_client",
             return_value=mock_client,
         ),
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
@@ -750,7 +750,7 @@ async def test_fetch_platform_tier_network_error():
         patch(f"{LIMITS}.HOST_MODE", "platform"),
         patch(f"{LIMITS}.AUTH_SERVICE_URL", "http://localhost:8003"),
         patch(
-            f"{LIMITS}._get_http_client",
+            f"{LIMITS}.get_http_client",
             return_value=mock_client,
         ),
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
@@ -775,7 +775,7 @@ async def test_fetch_platform_tier_missing_field():
         patch(f"{LIMITS}.HOST_MODE", "platform"),
         patch(f"{LIMITS}.AUTH_SERVICE_URL", "http://localhost:8003"),
         patch(
-            f"{LIMITS}._get_http_client",
+            f"{LIMITS}.get_http_client",
             return_value=mock_client,
         ),
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),

@@ -56,6 +56,7 @@ from src.server.utils.multimodal_context import (
 from src.utils.tracking import ExecutionTracker
 from ptc_agent.agent.flash import build_flash_graph
 from ptc_agent.agent.graph import get_user_profile_for_prompt
+from ptc_agent.agent.middleware.credit_gate import run_with_credit_gate
 
 from .request_prep import (
     DISPATCH_STARTED_MARKER,
@@ -76,6 +77,7 @@ from .request_prep import (
     turn_skill_names,
     user_skill_commands,
 )
+from src.server.services.credit_gate_port import build_run_credit_gate
 from src.server.services.runs.admission import (
     RunScope,
     begin_run,
@@ -334,6 +336,14 @@ async def astream_flash_workflow(
 
         token_callback, tool_tracker = init_tracking(thread_id)
 
+        # Runtime credit gate (None when platform gating is inactive) —
+        # same wiring as the PTC path; a Flash turn is shorter but is
+        # metered the same way.
+        credit_gate = build_run_credit_gate(
+            user_id, run_id, token_callback, tool_tracker, effective_model,
+            is_byok=is_byok,
+        )
+
         # =================================================================
         # Build Flash Agent Graph
         # =================================================================
@@ -492,10 +502,13 @@ async def astream_flash_workflow(
             await manager.start_run(
                 thread_id=thread_id,
                 run_id=run_id,
-                workflow_generator=handler.stream_workflow(
-                    graph=flash_graph,
-                    input_state=input_state,
-                    config=graph_config,
+                workflow_generator=run_with_credit_gate(
+                    credit_gate,
+                    handler.stream_workflow(
+                        graph=flash_graph,
+                        input_state=input_state,
+                        config=graph_config,
+                    ),
                 ),
                 metadata={
                     "workspace_id": workspace_id,

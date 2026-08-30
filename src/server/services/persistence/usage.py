@@ -250,7 +250,8 @@ class UsagePersistenceService:
         deepthinking: bool = False,
         status: str = "completed",
         conn: Optional[Any] = None,
-        is_byok: bool = False
+        is_byok: bool = False,
+        settle_task_run_id: Optional[str] = None,
     ) -> bool:
         """
         Persist usage data to conversation_usage table.
@@ -274,12 +275,18 @@ class UsagePersistenceService:
             status: Workflow completion status (completed, error, cancelled, interrupted)
             conn: Optional database connection for transaction support
             is_byok: Caller hint for billing type (overridden by per-call data when available)
+            settle_task_run_id: When set, stamp this subagent run billing-settled
+                in the same transaction as the usage insert — the pair commits or
+                rolls back together, so the run can never read settled with its
+                spend missing from billing, nor billed while still counting as
+                in-flight.
 
         Returns:
             True if successful, False otherwise
         """
         from src.server.database import conversation as qr_db
         from src.server.database import pool
+        from src.server.database.runs import credit_ledger
 
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
@@ -328,9 +335,19 @@ class UsagePersistenceService:
             # Persist to database (use provided conn for transaction support)
             if conn:
                 await qr_db.create_usage_record(usage_data, conn=conn)
+                if settle_task_run_id:
+                    await credit_ledger.settle_task_run(settle_task_run_id, conn=conn)
             else:
                 async with pool.get_db_connection() as new_conn:
-                    await qr_db.create_usage_record(usage_data, conn=new_conn)
+                    # One transaction either way. The settle stamp has to land
+                    # with the usage row or not at all, and wrapping the lone
+                    # insert when there is no stamp costs nothing.
+                    async with new_conn.transaction():
+                        await qr_db.create_usage_record(usage_data, conn=new_conn)
+                        if settle_task_run_id:
+                            await credit_ledger.settle_task_run(
+                                settle_task_run_id, conn=new_conn
+                            )
 
             logger.info(
                 f"[UsagePersistence] Persisted usage for response_id={response_id}, "

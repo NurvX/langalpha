@@ -47,6 +47,7 @@ from src.server.utils.chart_selection_context import (
     parse_chart_selection_contexts,
     serialize_chart_selections_for_metadata,
 )
+from src.server.utils.credit_resume_context import build_credit_resume_update
 from src.llms.llm import get_input_modalities
 from src.server.utils.multimodal_context import (
     build_attachment_metadata,
@@ -60,6 +61,7 @@ from src.server.utils.multimodal_context import (
 from src.utils.tracking import ExecutionTracker
 
 from ptc_agent.agent.graph import build_ptc_graph_with_session
+from ptc_agent.agent.middleware.credit_gate import run_with_credit_gate
 
 from .request_prep import (
     DISPATCH_STARTED_MARKER,
@@ -81,6 +83,7 @@ from .request_prep import (
     turn_skill_names,
     user_skill_commands,
 )
+from src.server.services.credit_gate_port import build_run_credit_gate
 from src.server.services.runs.admission import (
     RunScope,
     begin_run,
@@ -373,6 +376,14 @@ async def astream_ptc_workflow(
 
         token_callback, tool_tracker = init_tracking(thread_id)
 
+        # Runtime credit gate (None when platform gating is inactive): the
+        # run's spend meter, lease, and refresher. Admission above is its
+        # seed verdict; the stream wrapper below owns its lifetime.
+        credit_gate = build_run_credit_gate(
+            user_id, run_id, token_callback, tool_tracker, effective_model,
+            is_byok=is_byok,
+        )
+
         _mark_phase("db_setup")
 
         # =====================================================================
@@ -642,7 +653,12 @@ async def astream_ptc_workflow(
             # Pydantic validates this into HITLResponse models, but LangChain's
             # HumanInTheLoopMiddleware expects plain dicts (subscriptable).
             resume_payload = serialize_hitl_response_map(request.hitl_response)
-            input_state = Command(resume=resume_payload)
+            input_state = Command(
+                resume=resume_payload,
+                # None for a resume that was not credit-paused, which is what
+                # ``update`` defaults to anyway.
+                update=await build_credit_resume_update(thread_id, run_id),
+            )
             logger.info(
                 f"[PTC_RESUME] thread_id={thread_id} "
                 f"hitl_response keys={list(request.hitl_response.keys())}"
@@ -820,10 +836,13 @@ async def astream_ptc_workflow(
         await manager.start_run(
             thread_id=thread_id,
             run_id=run_id,
-            workflow_generator=handler.stream_workflow(
-                graph=ptc_graph,
-                input_state=input_state,
-                config=graph_config,
+            workflow_generator=run_with_credit_gate(
+                credit_gate,
+                handler.stream_workflow(
+                    graph=ptc_graph,
+                    input_state=input_state,
+                    config=graph_config,
+                ),
             ),
             metadata={
                 "workspace_id": workspace_id,
