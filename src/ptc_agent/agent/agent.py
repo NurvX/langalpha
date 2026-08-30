@@ -38,6 +38,7 @@ from ptc_agent.agent.middleware import (
     MultimodalMiddleware,
     create_plan_mode_interrupt_config,
     CodeValidationMiddleware,
+    CreditGateMiddleware,
     EmptyToolCallRetryMiddleware,
     LeakDetectionMiddleware,
     ProtectedPathMiddleware,
@@ -600,6 +601,10 @@ class PTCAgent:
         )
         shared_middleware.extend(
             [
+                # First so a stop fires before any per-boundary work below;
+                # shared placement gives subagent lanes the same gate. Inert
+                # unless the server installed a gate state for the lane.
+                CreditGateMiddleware(),
                 ToolArgumentParsingMiddleware(),
                 ProtectedPathMiddleware(
                     denied_directories=self.config.filesystem.denied_directories,

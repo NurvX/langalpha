@@ -25,6 +25,7 @@ from ptc_agent.agent.middleware.background_subagent.registry import (
 from ptc_agent.agent.middleware.background_subagent.task import (
     WORKFLOW_SUBAGENT_TYPE,
 )
+from ptc_agent.agent.middleware.background_subagent.outcomes import is_credit_stop
 from ptc_agent.agent.middleware.background_subagent.spawn import (
     SpawnSetupError,
     SpawnStoppedError,
@@ -352,7 +353,11 @@ async def _handle_resume(
     # The agent just looked at this task — bump last_checked_at.
     task.last_checked_at = time.time()
 
-    if task.cancelled:
+    # A credit stop spells itself as a cancel everywhere else on purpose, but
+    # it is the one kind of stop whose checkpoint is meant to be re-entered:
+    # the resume reminder lists exactly these tasks and tells the model to
+    # resume them.
+    if task.cancelled and not is_credit_stop(task.result):
         return ToolMessage(
             content=f"Error: Task-{target_task_id} was cancelled and cannot be resumed.",
             tool_call_id=tool_call_id,

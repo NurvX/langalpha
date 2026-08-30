@@ -13,6 +13,7 @@ from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 
 from ptc_agent.agent.middleware import (
+    CreditGateMiddleware,
     EmptyToolCallRetryMiddleware,
     ToolArgumentParsingMiddleware,
     ToolErrorHandlingMiddleware,
@@ -220,6 +221,8 @@ class FlashAgent:
 
         # Minimal shared middleware stack
         shared_middleware: list[Any] = [
+            # Inert unless the server installed a gate state for this run.
+            CreditGateMiddleware(),
             ToolArgumentParsingMiddleware(),
             ToolErrorHandlingMiddleware(),
             leak_detection,

@@ -8,6 +8,8 @@
 
 import type { AssistantMessage } from '@/types/chat';
 import { updateMessage } from '../../hooks/utils/messageHelpers';
+import { setCardStatus } from './buckets';
+import { buildCreditPauseState } from './creditPauseCard';
 import type { SSEEvent, PairState, HistoryInterruptInfo } from '../types';
 import type { HistoryRuntime } from '../runtime';
 
@@ -23,23 +25,44 @@ export function projectHistoryInterrupt(
   event: SSEEvent,
   ctx: HistoryInterruptContext,
 ): void {
+  const actionRequests = event.action_requests || [];
+  const actionType = actionRequests[0]?.type as string | undefined;
+  const pairIndex = event.turn_index ?? ctx.currentActivePairIndex;
+  const interruptAssistantId = pairIndex != null ? ctx.assistantMessagesByPair.get(pairIndex) : null;
+  const pairState = pairIndex != null ? ctx.pairStateByPair.get(pairIndex) : null;
+
   // Skip a re-raised interrupt: LangGraph re-emits an unanswered
   // interrupt with the same interrupt_id on every resume, landing on a
   // later turn's bubble. The first occurrence owns the card (and its
   // ctx.pendingHistoryInterrupts entry, which answer-replay resolves by id);
   // re-emissions would append a duplicate card and a phantom pending
   // entry, so drop them wholesale.
-  if (event.interrupt_id && rt.renderedInterruptIdsRef.current.has(event.interrupt_id)) return;
-  const pairIndex = event.turn_index ?? ctx.currentActivePairIndex;
-  const interruptAssistantId = pairIndex != null ? ctx.assistantMessagesByPair.get(pairIndex) : null;
-  const pairState = pairIndex != null ? ctx.pairStateByPair.get(pairIndex) : null;
+  if (event.interrupt_id && rt.renderedInterruptIdsRef.current.has(event.interrupt_id)) {
+    // A credit pause is the exception, because it is the one interrupt resolved
+    // from the resume turn's `hitl_interrupt_ids` — stamped when the resume is
+    // requested, not when the graph consumes it. A re-raise is proof it never
+    // was, and it replays after that stamp, so it is the later truth: put the
+    // card back and re-queue the entry that arms the Resume button. Otherwise
+    // the pause replays answered with nothing left to answer it.
+    if (actionType === 'credit_pause' && interruptAssistantId) {
+      const proposalId = event.interrupt_id;
+      rt.setMessages((prev) => setCardStatus(prev, 'creditPauses', proposalId, 'pending'));
+      if (!ctx.pendingHistoryInterrupts.some((p) => p.interruptId === proposalId)) {
+        ctx.pendingHistoryInterrupts.push({
+          type: 'credit_pause',
+          assistantMessageId: interruptAssistantId,
+          proposalId,
+          interruptId: proposalId,
+        });
+      }
+    }
+    return;
+  }
 
   if (interruptAssistantId && pairState) {
     // Mark rendered only once a card will actually attach — a pair-less
     // event must not poison the set and drop a later valid re-raise.
     if (event.interrupt_id) rt.renderedInterruptIdsRef.current.add(event.interrupt_id);
-    const actionRequests = event.action_requests || [];
-    const actionType = actionRequests[0]?.type as string | undefined;
 
     if (actionType === 'ask_user_question') {
       // --- User question interrupt (history) ---
@@ -204,6 +227,30 @@ export function projectHistoryInterrupt(
 
       ctx.pendingHistoryInterrupts.push({
         type: actionType,
+        assistantMessageId: interruptAssistantId,
+        proposalId,
+        interruptId: event.interrupt_id,
+      });
+    } else if (actionType === 'credit_pause') {
+      // --- Credit pause interrupt (history) ---
+      const proposalId = event.interrupt_id!;
+      const pauseState = buildCreditPauseState(actionRequests[0], event.interrupt_id!);
+      const order = event._eventId != null ? Number(event._eventId) : ++pairState.contentOrderCounter;
+
+      rt.setMessages((prev) =>
+        updateMessage(prev,interruptAssistantId, (m) => {
+          if (m.role !== 'assistant') return m;
+          const msg = m as AssistantMessage;
+          return {
+            ...msg,
+            contentSegments: [...(msg.contentSegments || []), { type: 'credit_pause' as const, proposalId, order }],
+            creditPauses: { ...(msg.creditPauses || {}), [proposalId]: pauseState },
+          };
+        })
+      );
+
+      ctx.pendingHistoryInterrupts.push({
+        type: 'credit_pause',
         assistantMessageId: interruptAssistantId,
         proposalId,
         interruptId: event.interrupt_id,

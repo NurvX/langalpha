@@ -1279,6 +1279,8 @@
     "errorHintModelAccess": "Confirm your plan or subscription allows access to this model.",
     "errorHintProviderStatus": "Check the provider's status page for ongoing incidents.",
     "errorHintTryAnotherModel": "Try switching to a different model in the model picker.",
+    "errorLinkManagePlan": "Manage plan",
+    "errorLinkViewUsage": "View usage",
     "errorUpstreamHeadlineModel": "{{model}} returned an error",
     "errorUpstreamHeadlineModelStatus": "{{model}} returned an error ({{status}})",
     "errorAttemptedModels": "Also tried:",
@@ -1315,11 +1317,21 @@
     "taskReportBackPending": "Waiting for subagent results to report back",
     "taskCard": {
       "statusRunning": "Running",
+      "statusPausing": "Finishing current step",
       "statusCompleted": "Completed",
       "statusStopped": "Stopped",
       "statusFailed": "Failed",
       "statusUpdated": "Updated",
       "statusResumed": "Resumed"
+    },
+    "creditPause": {
+      "title": "Run paused",
+      "resume": "Resume",
+      "resuming": "Resuming…",
+      "resumedLabel": "Resumed"
+    },
+    "creditStop": {
+      "title": "Out of credits"
     },
     "subagentCard": {
       "titleFallback": "Subagent Task",
@@ -1339,6 +1351,7 @@
       "initializing": "Initializing",
       "instruct": "Instruct",
       "errorHeading": "This agent stopped with an error",
+      "stoppedHeading": "This agent stopped",
       "inputPlaceholder": "Add instruction for this agent...",
       "avatarAlt": "Agent"
     },
@@ -1467,6 +1480,7 @@
     },
     "compactedNotification": "Context compacted · {{from}} messages → summary",
     "taskErrorNotification": "Subagent run failed",
+    "taskStoppedNotification": "Subagent run stopped",
     "taskSteeringReturnedNotification": "Steering message returned — the run ended before it was delivered",
     "viewSummary": "View summary",
     "hideSummary": "Hide summary",

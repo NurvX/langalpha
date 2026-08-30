@@ -158,9 +158,12 @@ interface SubagentHistoryEntry {
   type: string;
   messages: Record<string, unknown>[];
   status: string;
-  /** Ledger failure reason, present only for an errored task. Surfaced in the
-   *  detail view header so a "Failed" card explains why. */
+  /** Ledger failure reason, present for any task that settled with one — a
+   *  stop as well as a failure. Surfaced in the detail view header and on the
+   *  inline card, so neither a "Failed" nor a "Stopped" card is unexplained. */
   error?: string;
+  /** That reason's machine spelling (``credit_stop``, ``transport_lost``, …). */
+  errorType?: string;
   toolCalls: number;
   tokenUsage: SubagentTokenUsage;
   currentTool: string;
@@ -208,8 +211,11 @@ interface SubagentHistoryData {
   type?: string;
   /** Backend-stamped real task status from replayed task artifacts (running|completed|cancelled). */
   status?: string;
-  /** Backend-stamped ledger failure reason, present only for an errored task. */
+  /** Backend-stamped ledger failure reason, present for any task that
+   *  settled with one — a stop as well as a failure. */
   error?: string;
+  /** The reason's machine spelling (``credit_stop``, ``transport_lost``, …). */
+  errorType?: string;
   /** Build-time stamp: start (epoch ms) of the newest run whose transcript
    *  the projection actually claimed — NOT the ledger's latest run, which
    *  can still be executing and deliberately excluded from the payload. */

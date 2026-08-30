@@ -253,6 +253,7 @@ export function projectSubagentHistory(
       // to 'running' and let /status reconciliation settle it.
       status: taskMetadata?.status || 'running',
       error: taskMetadata?.error,
+      errorType: taskMetadata?.errorType,
       toolCalls: countToolCalls(finalMessages),
       tokenUsage: tempTokenUsage,
       currentTool: '',

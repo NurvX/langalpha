@@ -47,6 +47,7 @@ from src.server.utils.chart_selection_context import (
     parse_chart_selection_contexts,
     serialize_chart_selections_for_metadata,
 )
+from src.server.utils.credit_resume_context import build_credit_resume_update
 from src.llms.llm import get_input_modalities
 from src.server.utils.multimodal_context import (
     build_attachment_metadata,
@@ -60,6 +61,7 @@ from src.server.utils.multimodal_context import (
 from src.utils.tracking import ExecutionTracker
 
 from ptc_agent.agent.graph import build_ptc_graph_with_session
+from ptc_agent.agent.middleware.credit_gate import run_with_credit_gate
 
 from .request_prep import (
     DISPATCH_STARTED_MARKER,
@@ -81,6 +83,7 @@ from .request_prep import (
     turn_skill_names,
     user_skill_commands,
 )
+from src.server.services.credit_gate_port import build_run_credit_gate
 from src.server.services.runs.admission import (
     RunScope,
     begin_run,
@@ -90,7 +93,7 @@ from src.config.settings import get_ptc_recursion_limit
 
 from .admission_gate import wait_or_steer
 from .error_handling import handle_workflow_error
-from src.server.services.llm.config import resolve_llm_config
+from src.server.services.llm.config import is_own_key_turn, resolve_llm_config
 from .steering import drain_steering_return_event
 from .run_stream_reader import stream_from_log
 from .detached import fire_and_forget as _fire_and_forget
@@ -272,6 +275,10 @@ async def astream_ptc_workflow(
         feedback_action = None
         query_content = user_input
         effective_model = config.llm.name if config and config.llm else None
+        # Off the resolved credential, not off ``is_byok``: that flag answers
+        # which ladder to try, and an automation with only an OAuth token
+        # passes it false while still paying its own vendor bill.
+        own_key = is_own_key_turn(config)
         query_metadata = {
             "workspace_id": request.workspace_id,
             "msg_type": "ptc",
@@ -372,6 +379,14 @@ async def astream_ptc_workflow(
         # =====================================================================
 
         token_callback, tool_tracker = init_tracking(thread_id)
+
+        # Runtime credit gate (None when platform gating is inactive): the
+        # run's spend meter, lease, and refresher. Admission above is its
+        # seed verdict; the stream wrapper below owns its lifetime.
+        credit_gate = build_run_credit_gate(
+            user_id, run_id, token_callback, tool_tracker, effective_model,
+            is_byok=own_key,
+        )
 
         _mark_phase("db_setup")
 
@@ -642,7 +657,12 @@ async def astream_ptc_workflow(
             # Pydantic validates this into HITLResponse models, but LangChain's
             # HumanInTheLoopMiddleware expects plain dicts (subscriptable).
             resume_payload = serialize_hitl_response_map(request.hitl_response)
-            input_state = Command(resume=resume_payload)
+            input_state = Command(
+                resume=resume_payload,
+                # None for a resume that was not credit-paused, which is what
+                # ``update`` defaults to anyway.
+                update=await build_credit_resume_update(thread_id, run_id),
+            )
             logger.info(
                 f"[PTC_RESUME] thread_id={thread_id} "
                 f"hitl_response keys={list(request.hitl_response.keys())}"
@@ -820,10 +840,13 @@ async def astream_ptc_workflow(
         await manager.start_run(
             thread_id=thread_id,
             run_id=run_id,
-            workflow_generator=handler.stream_workflow(
-                graph=ptc_graph,
-                input_state=input_state,
-                config=graph_config,
+            workflow_generator=run_with_credit_gate(
+                credit_gate,
+                handler.stream_workflow(
+                    graph=ptc_graph,
+                    input_state=input_state,
+                    config=graph_config,
+                ),
             ),
             metadata={
                 "workspace_id": workspace_id,

@@ -50,6 +50,24 @@ class ResolvedClient:
     credential_source: CredentialSource
 
 
+def is_own_key_turn(config: Any) -> bool:
+    """Did the user's own credential pay the vendor for this turn?
+
+    The billing question, and deliberately not the same one as ``is_byok``,
+    which asks whether to attempt the BYOK ladder. For an OAuth-only user the
+    two answers differ, and reading the ladder's answer as the billing one
+    meters an own-key turn as though the platform had funded it.
+
+    Taken off the RESOLVED credential rather than off a flag a caller passed
+    down, because the caller that knows which ladder to try is not always the
+    one that knows who ends up paying.
+    """
+    return getattr(config, "credential_source", None) in (
+        CredentialSource.OAUTH,
+        CredentialSource.BYOK,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------

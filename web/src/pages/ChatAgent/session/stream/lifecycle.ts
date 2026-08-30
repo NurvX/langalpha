@@ -191,6 +191,12 @@ export const reconnectToStream = async (
             return !stripProposalIds.has(seg.proposalId);
           }
           if (seg.type === 'plan_approval') return !stripPlanApprovalIds.has(seg.planApprovalId);
+          // A credit pause is stripped like the rest. Falling through to
+          // `true` kept the history copy while the id above was released from
+          // the rendered set, so the reconnect's re-delivery rendered a second
+          // card — and resolving one left the other `pending`, which pins
+          // every task card in the finishing state for the rest of the turn.
+          if (seg.type === 'credit_pause') return !stripProposalIds.has(seg.proposalId);
           return true;
         });
         const next: AssistantMessage = { ...msg, contentSegments: newSegments };
@@ -200,7 +206,7 @@ export const reconnectToStream = async (
           next.userQuestions = map;
         }
         if (stripProposalIds.size > 0) {
-          for (const key of ['workspaceProposals', 'questionProposals', 'ptcAgentProposals', 'secretaryActionProposals'] as const) {
+          for (const key of ['workspaceProposals', 'questionProposals', 'ptcAgentProposals', 'secretaryActionProposals', 'creditPauses'] as const) {
             const bucket = msg[key];
             if (!bucket) continue;
             const map = { ...bucket };

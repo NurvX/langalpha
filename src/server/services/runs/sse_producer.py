@@ -576,7 +576,7 @@ class RunSSEProducer:
                             "warning",
                             {
                                 "thread_id": self.thread_id,
-                                "message": f"Workflow approaching timeout ({int(elapsed_time)}s / {self.workflow_timeout}s)",
+                                "message": f"Turn approaching timeout ({int(elapsed_time)}s / {self.workflow_timeout}s)",
                                 "type": "timeout_warning",
                                 "elapsed_seconds": int(elapsed_time),
                                 "timeout_seconds": self.workflow_timeout,
@@ -594,7 +594,7 @@ class RunSSEProducer:
                             "error",
                             {
                                 "thread_id": self.thread_id,
-                                "error": f"Workflow timeout after {int(elapsed_time)} seconds",
+                                "error": f"Turn timed out after {int(elapsed_time)} seconds",
                                 "type": "timeout_error",
                                 "elapsed_seconds": int(elapsed_time),
                                 "timeout_seconds": self.workflow_timeout,
@@ -1083,8 +1083,8 @@ class RunSSEProducer:
             )
             return False
 
-    def _derive_interrupt_reason(self) -> str:
-        """Classify the buffered interrupt: user question vs plan review."""
+    def _derive_interrupt_reason(self) -> Optional[str]:
+        """Classify the buffered interrupt into the ledger's reason column."""
         from src.server.contracts.status import classify_interrupt_reason
 
         return classify_interrupt_reason(

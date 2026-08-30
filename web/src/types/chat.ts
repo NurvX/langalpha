@@ -7,6 +7,7 @@ import type {
   TodoItem,
   ProvenanceSourceType,
 } from './sse';
+import type { ErrorLinkSpec } from '@/utils/rateLimitError';
 
 // --- Content Segments (discriminated union) ---
 
@@ -128,6 +129,12 @@ export interface PlanApprovalSegment {
   order: number;
 }
 
+export interface CreditPauseSegment {
+  type: 'credit_pause';
+  proposalId: string;
+  order: number;
+}
+
 export type ContentSegment =
   | ReasoningSegment
   | TextSegment
@@ -142,7 +149,8 @@ export type ContentSegment =
   | DeleteWorkspaceSegment
   | StopWorkspaceSegment
   | DeleteThreadSegment
-  | PlanApprovalSegment;
+  | PlanApprovalSegment
+  | CreditPauseSegment;
 
 // --- Process Records ---
 
@@ -336,6 +344,24 @@ export interface SecretaryActionProposalState {
   interruptId?: string;
 }
 
+/**
+ * ``resuming`` is the in-flight leg and exists because a resume can be refused:
+ * admission re-runs the quota check and answers 429 without opening a turn, so
+ * a click cannot be treated as success. Only an accepted run reaches
+ * ``resumed``; a refusal returns the card to ``pending`` so a top-up can retry.
+ */
+export type CreditPauseStatus = 'pending' | 'resuming' | 'resumed';
+
+export interface CreditPauseState {
+  status: CreditPauseStatus;
+  /** The quota service's denial copy, relayed verbatim — never authored here. */
+  message?: string;
+  /** Where the user resolves the denial, built by ``buildRateLimitError`` so a
+   *  pause and a 429 banner offer the same destinations. */
+  links?: ErrorLinkSpec[];
+  interruptId: string;
+}
+
 // --- Chat Messages ---
 
 export interface UserMessage {
@@ -394,6 +420,7 @@ export interface AssistantMessage {
   questionProposals?: Record<string, QuestionProposalState>;
   ptcAgentProposals?: Record<string, PTCAgentProposalState>;
   secretaryActionProposals?: Record<string, SecretaryActionProposalState>;
+  creditPauses?: Record<string, CreditPauseState>;
   // Runtime flags
   steering?: boolean;
   steeringDelivered?: boolean;

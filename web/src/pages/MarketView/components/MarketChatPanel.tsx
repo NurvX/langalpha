@@ -406,6 +406,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     handleRejectPTCAgent,
     handleApproveSecretaryAction,
     handleRejectSecretaryAction,
+    handleResumeCreditPause,
     // Turn/context state — drives the stop button, input gating, and the
     // interrupted / plan-feedback / compaction status banners.
     pendingInterrupt,
@@ -649,6 +650,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   const stableRejectPTCAgent = useStableHandler(handleRejectPTCAgent);
   const stableApproveSecretaryAction = useStableHandler(handleApproveSecretaryAction);
   const stableRejectSecretaryAction = useStableHandler(handleRejectSecretaryAction);
+  const stableResumeCreditPause = useStableHandler(handleResumeCreditPause);
   const stableEditMessage = useStableHandler((id: string, content: string) =>
     handleEditMessage(id, content, chatInputRef.current?.getModelOptions?.()));
   const stableRegenerate = useStableHandler((id: string) =>
@@ -678,6 +680,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     onRejectPTCAgent: stableRejectPTCAgent,
     onApproveSecretaryAction: stableApproveSecretaryAction,
     onRejectSecretaryAction: stableRejectSecretaryAction,
+    onResumeCreditPause: stableResumeCreditPause,
     onEditMessage: stableEditMessage,
     onRegenerate: stableRegenerate,
     onRetry: stableRetry,
@@ -690,7 +693,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     stableAnswerQuestion, stableSkipQuestion, stableApproveCreateWorkspace,
     stableRejectCreateWorkspace, stableApproveStartQuestion, stableRejectStartQuestion,
     stableApprovePTCAgent, stableRejectPTCAgent, stableApproveSecretaryAction,
-    stableRejectSecretaryAction, stableEditMessage, stableRegenerate, stableRetry,
+    stableRejectSecretaryAction, stableResumeCreditPause, stableEditMessage, stableRegenerate, stableRetry,
     stableThumbUp, stableThumbDown, stableReportWithAgent, stableWidgetSendPrompt,
   ]);
 

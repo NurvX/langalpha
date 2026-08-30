@@ -56,6 +56,7 @@ from src.server.utils.multimodal_context import (
 from src.utils.tracking import ExecutionTracker
 from ptc_agent.agent.flash import build_flash_graph
 from ptc_agent.agent.graph import get_user_profile_for_prompt
+from ptc_agent.agent.middleware.credit_gate import run_with_credit_gate
 
 from .request_prep import (
     DISPATCH_STARTED_MARKER,
@@ -76,6 +77,7 @@ from .request_prep import (
     turn_skill_names,
     user_skill_commands,
 )
+from src.server.services.credit_gate_port import build_run_credit_gate
 from src.server.services.runs.admission import (
     RunScope,
     begin_run,
@@ -85,7 +87,7 @@ from src.config.settings import get_flash_recursion_limit
 
 from .admission_gate import admission_conflict_detail, wait_or_steer
 from .error_handling import handle_workflow_error
-from src.server.services.llm.config import resolve_llm_config
+from src.server.services.llm.config import is_own_key_turn, resolve_llm_config
 from .steering import (
     drain_steering_return_event,
     steer_thread,
@@ -243,6 +245,10 @@ async def astream_flash_workflow(
         # in history).  This block is flash-specific because of multimodal guard
         # differences vs PTC.
         effective_model = config.llm.flash if config and config.llm else None
+        # Off the resolved credential, not off ``is_byok``: that flag answers
+        # which ladder to try, and an automation with only an OAuth token
+        # passes it false while still paying its own vendor bill.
+        own_key = is_own_key_turn(config)
         query_metadata = {"msg_type": "flash"}
         if effective_model:
             query_metadata["llm_model"] = effective_model
@@ -333,6 +339,14 @@ async def astream_flash_workflow(
         # =================================================================
 
         token_callback, tool_tracker = init_tracking(thread_id)
+
+        # Runtime credit gate (None when platform gating is inactive) —
+        # same wiring as the PTC path; a Flash turn is shorter but is
+        # metered the same way.
+        credit_gate = build_run_credit_gate(
+            user_id, run_id, token_callback, tool_tracker, effective_model,
+            is_byok=own_key,
+        )
 
         # =================================================================
         # Build Flash Agent Graph
@@ -492,10 +506,13 @@ async def astream_flash_workflow(
             await manager.start_run(
                 thread_id=thread_id,
                 run_id=run_id,
-                workflow_generator=handler.stream_workflow(
-                    graph=flash_graph,
-                    input_state=input_state,
-                    config=graph_config,
+                workflow_generator=run_with_credit_gate(
+                    credit_gate,
+                    handler.stream_workflow(
+                        graph=flash_graph,
+                        input_state=input_state,
+                        config=graph_config,
+                    ),
                 ),
                 metadata={
                     "workspace_id": workspace_id,

@@ -609,6 +609,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start ProvenanceGCService: {e}")
 
+    # Confirm the runtime credit gate can reach its lease service, and on
+    # terms its refresher can work with. Both failures it catches are silent
+    # at request time.
+    try:
+        from src.server.services.credit_gate_port import verify_credit_gate_wiring
+
+        await verify_credit_gate_wiring()
+    except Exception as e:
+        logger.warning(f"Credit gate wiring check failed: {e}")
+
     yield  # Server is running
 
     # Shutdown

@@ -16,6 +16,7 @@ from langgraph.config import get_config
 # Module-attribute binding to keep utils.build_message_checker the single patch
 # point shared with orchestrator.py.
 from ptc_agent.agent.middleware.background_subagent import utils
+from ptc_agent.agent.middleware.background_subagent.outcomes import is_credit_stop
 from ptc_agent.agent.middleware.background_subagent.utils import config_own_run_id
 from src.server.contracts.status import REPORT_BACK_STATUSES
 
@@ -64,6 +65,20 @@ def _stop_notice(task: BackgroundTask) -> str:
     )
 
 
+def _credit_stop_notice(task: BackgroundTask) -> str:
+    """A stop the budget caused, not the user — so the advice inverts.
+
+    ``_stop_notice``'s "do not re-dispatch, the stop was deliberate" would
+    steer the model off the one path this stop is designed to leave open.
+    """
+    return (
+        f"**{task.display_id}** ({task.subagent_type}) stopped when the turn "
+        f"ran out of credits; no result was produced. Its prior work is "
+        f'preserved — resume it with Task(action="resume", task_id=...) if '
+        f"the work is still needed."
+    )
+
+
 def _never_started_notice(task: BackgroundTask) -> str:
     """A task the infrastructure refused before it ever ran — the opposite
     advice from ``_stop_notice``, which is why they must not share a status."""
@@ -79,6 +94,8 @@ def _terminal_notice(task: BackgroundTask) -> str | None:
     """The fixed reply for a settled task that produced no result, or None
     when the task has a real result to render."""
     if task.terminal_status == "cancelled":
+        if is_credit_stop(task.result):
+            return _credit_stop_notice(task)
         return _stop_notice(task)
     if task.terminal_status == "timeout":
         return _timeout_notice(task)
@@ -200,8 +217,23 @@ async def _compose_missing_reply(registry, task_id: str, run: dict | None) -> st
             f"the user before re-dispatching it."
         )
     if status == "cancelled":
-        # Deliberately silent on *why*: the ledger spells a timeout kill
-        # 'cancelled' too, so claiming the stop was intentional here would
+        # The one *why* the ledger can prove, and the one that changes the
+        # advice: a credit stop leaves the checkpoint intact and resumable, so
+        # the generic text below would talk the model out of the single path
+        # this stop exists to leave open. The local notice already branches
+        # here; without the same branch the advice would be correct only when
+        # the request happened to land on the worker still holding the task in
+        # memory, which multi-worker makes a coin flip.
+        failure = run.get("failure") if isinstance(run, dict) else None
+        if is_credit_stop(failure):
+            return (
+                f"Task-{task_id} stopped when the turn ran out of credits; no "
+                f"result was produced. Its prior work is preserved — resume it "
+                f'with Task(action="resume", task_id="{task_id}") if the work '
+                f"is still needed."
+            )
+        # Otherwise deliberately silent on *why*: the ledger spells a timeout
+        # kill 'cancelled' too, so claiming the stop was intentional here would
         # tell the agent not to retry a task that merely ran long. The live
         # task carries its own terminal_status and says which it was.
         return (
