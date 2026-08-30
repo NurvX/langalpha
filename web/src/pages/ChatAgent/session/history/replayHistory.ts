@@ -627,9 +627,18 @@ export async function loadConversationHistory(
               if (description && !existing.description) existing.description = description;
               if (prompt && !existing.prompt) existing.prompt = prompt || description || '';
               if (type && !existing.type) existing.type = type;
-              if (stampedStatus) existing.status = stampedStatus;
-              if (stampedError) existing.error = stampedError;
-              if (stampedErrorType) existing.errorType = stampedErrorType;
+              // The failure travels with the status it arrived with, and is
+              // replaced by it rather than merged under it. Every replayed
+              // task artifact carries a status; a resumed task's carries no
+              // failure at all, so preserving the previous run's reason is
+              // exactly how a retracted credit stop comes back on the next
+              // reload — the live session clears both writers when the task
+              // resumes, and replay would put one of them straight back.
+              if (stampedStatus) {
+                existing.status = stampedStatus;
+                existing.error = stampedError;
+                existing.errorType = stampedErrorType;
+              }
               // Monotonic max: artifacts stamp claims-through-their-turn, and
               // page/artifact processing order must not regress the watermark.
               if (stampedRunStartedMs != null) {

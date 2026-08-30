@@ -93,7 +93,7 @@ from src.config.settings import get_ptc_recursion_limit
 
 from .admission_gate import wait_or_steer
 from .error_handling import handle_workflow_error
-from src.server.services.llm.config import resolve_llm_config
+from src.server.services.llm.config import is_own_key_turn, resolve_llm_config
 from .steering import drain_steering_return_event
 from .run_stream_reader import stream_from_log
 from .detached import fire_and_forget as _fire_and_forget
@@ -275,6 +275,10 @@ async def astream_ptc_workflow(
         feedback_action = None
         query_content = user_input
         effective_model = config.llm.name if config and config.llm else None
+        # Off the resolved credential, not off ``is_byok``: that flag answers
+        # which ladder to try, and an automation with only an OAuth token
+        # passes it false while still paying its own vendor bill.
+        own_key = is_own_key_turn(config)
         query_metadata = {
             "workspace_id": request.workspace_id,
             "msg_type": "ptc",
@@ -381,7 +385,7 @@ async def astream_ptc_workflow(
         # seed verdict; the stream wrapper below owns its lifetime.
         credit_gate = build_run_credit_gate(
             user_id, run_id, token_callback, tool_tracker, effective_model,
-            is_byok=is_byok,
+            is_byok=own_key,
         )
 
         _mark_phase("db_setup")

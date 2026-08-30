@@ -35,6 +35,23 @@ export function settleCreditPause(refs: CreditPauseResumeRefs, status: CreditPau
 }
 
 /**
+ * Put the card back on `pending`, KEEPING the pause reference.
+ *
+ * The batched case, and the reason it is not a settle: another interrupt in
+ * this turn is still unanswered, so nothing was dispatched and no stream will
+ * move this card. The click still stands though — the answer is held for the
+ * batch — so the pause this resume is answering has not changed. Clearing the
+ * reference here is what strands the card: the batch dispatches later, and the
+ * real settler then finds no pause to move and leaves a Resume button offered
+ * on a turn that is already running again.
+ */
+export function restoreCreditPausePending(refs: CreditPauseResumeRefs): void {
+  const pauseId = refs.pauseId.current;
+  if (!pauseId) return;
+  refs.setMessages((prev) => setCardStatus(prev, 'creditPauses', pauseId, 'pending'));
+}
+
+/**
  * Snapshot the interrupt board for one resume attempt and return its settler.
  *
  * Clearing the board assumes the resume is admitted. It can be refused, and an

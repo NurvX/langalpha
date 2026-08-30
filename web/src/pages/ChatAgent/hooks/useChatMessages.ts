@@ -49,7 +49,7 @@ import type {
   ModelStatus, FallbackSuggestion,
 } from '../session/types';
 import { SECRETARY_ACTION_TYPES, setCardStatus } from '../session/interrupts/buckets';
-import { beginResume, settleCreditPause, type CreditPauseResumeRefs } from '../session/interrupts/creditPauseResume';
+import { beginResume, restoreCreditPausePending, type CreditPauseResumeRefs } from '../session/interrupts/creditPauseResume';
 export type { ModelStatus, FallbackSuggestion } from '../session/types';
 import type { ChatSessionRuntime } from '../session/runtime';
 import { projectSubagentHistory } from '../session/subagents/projectHistory';
@@ -2389,8 +2389,10 @@ export function useChatMessages(
     if (!resumed) {
       // Another interrupt in this turn is still unanswered, so nothing was
       // sent and no stream will settle this card. Put it back rather than
-      // leave a disabled spinner the user can only clear by reloading.
-      settleCreditPause(creditPauseRefs, 'pending');
+      // leave a disabled spinner the user can only clear by reloading — and
+      // keep the reference, because the batch this answer joined dispatches
+      // later and its settler is what moves the card to `resumed`.
+      restoreCreditPausePending(creditPauseRefs);
     }
   }, [collectHitlResponseAndMaybeResume, resolveProposal, creditPauseRefs]);
 

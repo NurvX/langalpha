@@ -59,9 +59,15 @@ export function resolveSubagentTelemetry(
   // replay stamps history from the ledger — so the reason takes whichever has
   // one rather than whichever won the count.
   const reason = ((): Pick<SubagentTelemetry, 'stopReason' | 'stopReasonType'> => {
-    const error = subagentData?.error || history?.error;
+    // One source for both fields, picked once. Read independently they can
+    // pair a reason from the card with a type from history, and the type is
+    // what decides whether a stop is offered back to the user with plan
+    // links — so a mismatch does not garble the copy, it changes what the
+    // surface claims happened.
+    const source = subagentData?.error ? subagentData : history;
+    const error = source?.error;
     if (!error) return {};
-    const errorType = subagentData?.errorType || history?.errorType;
+    const errorType = source?.errorType;
     return { stopReason: error, ...(errorType ? { stopReasonType: errorType } : {}) };
   })();
 

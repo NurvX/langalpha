@@ -87,7 +87,7 @@ from src.config.settings import get_flash_recursion_limit
 
 from .admission_gate import admission_conflict_detail, wait_or_steer
 from .error_handling import handle_workflow_error
-from src.server.services.llm.config import resolve_llm_config
+from src.server.services.llm.config import is_own_key_turn, resolve_llm_config
 from .steering import (
     drain_steering_return_event,
     steer_thread,
@@ -245,6 +245,10 @@ async def astream_flash_workflow(
         # in history).  This block is flash-specific because of multimodal guard
         # differences vs PTC.
         effective_model = config.llm.flash if config and config.llm else None
+        # Off the resolved credential, not off ``is_byok``: that flag answers
+        # which ladder to try, and an automation with only an OAuth token
+        # passes it false while still paying its own vendor bill.
+        own_key = is_own_key_turn(config)
         query_metadata = {"msg_type": "flash"}
         if effective_model:
             query_metadata["llm_model"] = effective_model
@@ -341,7 +345,7 @@ async def astream_flash_workflow(
         # metered the same way.
         credit_gate = build_run_credit_gate(
             user_id, run_id, token_callback, tool_tracker, effective_model,
-            is_byok=is_byok,
+            is_byok=own_key,
         )
 
         # =================================================================
