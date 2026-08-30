@@ -17,6 +17,7 @@
  * balance: they are the thing most at risk.
  */
 import { test, expect, mockAPI } from './fixtures.js';
+import { keyboardFocus, outlineOn, tabTo, unpainted } from './helpers/focusPaint.js';
 
 // The account button in the sidebar footer, chosen because it is a plain
 // DropdownMenu over the shared ui/ wrapper -- whatever is true here is true of
@@ -156,20 +157,6 @@ async function mountChartFixture(page, chart, bar) {
 }
 
 /** What is focused right now, and the outline actually computed on it. */
-async function focused(page) {
-  return page.evaluate(() => {
-    const el = document.activeElement;
-    const cs = getComputedStyle(el);
-    return {
-      tag: el.tagName,
-      tabindex: el.getAttribute('tabindex'),
-      style: cs.outlineStyle,
-      width: cs.outlineWidth,
-      color: cs.outlineColor,
-    };
-  });
-}
-
 test.describe('a chart clicked with the mouse', () => {
   test.beforeEach(async ({ page }) => {
     await mountChartFixture(page, CHART, BAR_BOX);
@@ -177,7 +164,7 @@ test.describe('a chart clicked with the mouse', () => {
 
   test('leaves no ring on the layer a click on a bar lands in', async ({ page }) => {
     await page.locator(BAR).click();
-    const el = await focused(page);
+    const el = await outlineOn(page);
     // If this is the surface, the fixture stopped reproducing the real bug.
     expect({ tag: el.tag, tabindex: el.tabindex }).toEqual({ tag: 'g', tabindex: '-1' });
     // `auto` is the UA ring, in a blue this product uses nowhere.
@@ -186,7 +173,7 @@ test.describe('a chart clicked with the mouse', () => {
 
   test('leaves no ring on the surface a click on empty plot space lands in', async ({ page }) => {
     await page.mouse.click(EMPTY_PLOT.x, EMPTY_PLOT.y);
-    const el = await focused(page);
+    const el = await outlineOn(page);
     expect(el.tag).toBe('svg');
     expect(el.style).toBe('none');
   });
@@ -201,15 +188,191 @@ test.describe('a chart reached by keyboard', () => {
     await page.locator(BEFORE).focus();
     await page.keyboard.press('Tab');
 
-    const surface = await focused(page);
+    const surface = await outlineOn(page);
     expect(surface.tag).toBe('svg');
     expect(surface.style).toBe('solid');
 
     await page.locator(PLAIN).focus();
-    const plain = await focused(page);
+    const plain = await outlineOn(page);
     expect(plain.style).toBe('solid');
     // One baseline rule serves both; drift here means a chart grew its own.
     expect(surface.color).toBe(plain.color);
     expect(surface.width).toBe(plain.width);
+  });
+});
+
+/**
+ * The text-field half. A text field is the one control the browser always
+ * matches :focus-visible on, a mouse click included: the heuristic exists so a
+ * field about to receive typing looks focused, and it is spec behaviour, not a
+ * quirk. So the baseline ring reached all 33 raw inputs the moment their
+ * `outline-none` came off, and a click drew a ring the same click on a button
+ * would not. No selector can separate those two cases, which is why the fix
+ * stamps how focus arrived and why this file is the only place it is visible.
+ *
+ * The keyboard cases below are again the ones most at risk: suppressing the
+ * ring on every text field would satisfy every mouse assertion here and leave
+ * a keyboard user with a caret for an indicator.
+ */
+const SEARCH = '.dashboard-search-input';
+const COMPOSER = '.chat-input-container textarea';
+const WORKSPACE_SEARCH = 'input[placeholder="Search workspaces..."]';
+// The pill around the Workspaces field: the field fills it, so the ring goes on
+// the container. See the `rings-within` block at the bottom of this file.
+const WORKSPACE_PILL = `.rings-within:has(> ${WORKSPACE_SEARCH})`;
+// The name field of the Create Workspace modal: a call site of the shared
+// ui/ Input, which drew a ring of its own rather than the baseline.
+const SHARED_INPUT = '.cwm-modal .cwm-field input';
+
+/**
+ * One row per kind of text field in the app; `open` is how to get to it, and
+ * `rings` names the element the indicator lands on when it is not the field.
+ */
+const CLICKED = [
+  { field: 'the dashboard search box', sel: SEARCH },
+  { field: 'the chat composer', sel: COMPOSER },
+  {
+    field: 'the Workspaces search box',
+    sel: WORKSPACE_SEARCH,
+    rings: WORKSPACE_PILL,
+    open: (page) => page.goto('/chat'),
+  },
+  {
+    // The shared primitive is the other half of the app's text fields: it drew
+    // its own `focus-visible:ring-2` rather than the baseline, on the same
+    // always-on pseudo-class, so it rang on a click for its own reasons.
+    field: 'a shared ui/ Input',
+    sel: SHARED_INPUT,
+    open: async (page) => {
+      await page.goto('/chat');
+      await page.getByRole('button', { name: /new workspace/i }).first().click();
+    },
+  },
+];
+
+test.describe('a text field clicked with the mouse', () => {
+  for (const { field, sel, open } of CLICKED) {
+    test(`leaves no ring on ${field}`, async ({ page }) => {
+      if (open) await open(page);
+      const target = page.locator(sel);
+      await expect(target).toBeVisible();
+
+      // The resting paint is the reference, because "no ring" is not the same
+      // question as "no outline": half the app draws its ring as a Tailwind
+      // box-shadow, and `outline: none` cannot suppress one. Reading the shadow
+      // against its own resting value is what makes restoring a `ring-2` on
+      // this field fail here instead of passing quietly.
+      const resting = await outlineOn(page, sel);
+
+      await target.click();
+      const clicked = await outlineOn(page, sel);
+      expect(clicked.focused).toBe(true);
+      expect(unpainted(clicked.style, clicked.color)).toBe(true);
+      expect(clicked.shadow).toBe(resting.shadow);
+    });
+  }
+});
+
+test.describe('a text field reached by keyboard', () => {
+  // The mouse cases above are the ones a regression re-opens; these are the
+  // ones an over-eager fix closes. Suppressing the ring on every text field
+  // satisfies every assertion in the block above and leaves a keyboard user
+  // with a caret for an indicator, so each field family has to answer both.
+  for (const { field, sel, rings, open } of CLICKED) {
+    test(`rings ${field}`, async ({ page }) => {
+      if (open) await open(page);
+      await expect(page.locator(sel)).toBeVisible();
+      await keyboardFocus(page, sel);
+      expect(await outlineOn(page, sel)).toMatchObject({ focused: true });
+      expect(await outlineOn(page, rings ?? sel)).toMatchObject({ style: 'solid' });
+    });
+  }
+
+  test('wears the same ring as every other control', async ({ page }) => {
+    // The tab order is only complete once the route has mounted; walking it
+    // early wraps through a shorter ring and never arrives.
+    await expect(page.locator(SEARCH)).toBeVisible();
+    await tabTo(page, SEARCH);
+    const field = await outlineOn(page, SEARCH);
+    expect(field.style).toBe('solid');
+
+    // One baseline rule serves both; drift here means a field grew its own.
+    // The reference is a plain button rather than a control off the page:
+    // several draw their ring as an inset shadow instead (the account row
+    // does), and an outline of `none` would make this pass vacuously.
+    await page.evaluate(() => {
+      const plain = document.createElement('button');
+      plain.id = 'plain-text-reference';
+      plain.type = 'button';
+      plain.setAttribute('style', 'position:fixed;z-index:9999;top:8px;left:8px');
+      document.body.append(plain);
+    });
+    await page.locator('#plain-text-reference').evaluate((el) => el.focus());
+    const reference = await outlineOn(page);
+    expect(reference.style).toBe('solid');
+    expect(field.color).toBe(reference.color);
+    expect(field.width).toBe(reference.width);
+  });
+
+  test('still rings after the click that focused it is followed by typing', async ({ page }) => {
+    // The trap in gating on "last input device": typing is a keydown, so a
+    // global flag would light the ring under the user mid-sentence.
+    await page.click(SEARCH);
+    await page.keyboard.type('AAPL');
+    const typed = await outlineOn(page, SEARCH);
+    expect(typed.focused).toBe(true);
+    expect(unpainted(typed.style, typed.color)).toBe(true);
+  });
+
+  test('leaves an outline box for forced colors to repaint', async ({ page }) => {
+    // Forced colors repaints outlines out of the system palette, but it cannot
+    // paint one that was never drawn -- and it drops the box-shadow and
+    // normalizes the border that would otherwise mark a clicked field, so the
+    // outline is the last thing standing. Suppressing with `none` leaves a
+    // high-contrast user a caret and nothing else, which is why the rule writes
+    // a transparent 2px outline instead. Read from the computed style rather
+    // than under emulation: emulating the media query does not perform the
+    // colour substitution that makes the outline visible, so the substitution
+    // is the browser's half of the contract and this is ours.
+    await page.click(SEARCH);
+    const clicked = await outlineOn(page, SEARCH);
+    expect(clicked.style).toBe('solid');
+    expect(clicked.color).toMatch(/,\s*0\)$/);
+  });
+});
+
+/**
+ * A field that fills a bordered container has nowhere to put a ring of its own:
+ * an outline on the field alone cuts across the container's border and leaves
+ * the icon beside it outside the indicator. `rings-within` moves the ring onto
+ * the container, and has to carry the same device gate the field does -- which
+ * is the half a container rule is most likely to miss, since :focus-within has
+ * no :focus-visible counterpart to inherit it from.
+ */
+test.describe('a field whose container is the indicator', () => {
+  const PILL = WORKSPACE_PILL;
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/chat');
+    await expect(page.getByPlaceholder('Search workspaces...')).toBeVisible();
+  });
+
+  test('rings the Workspaces pill when the field inside it is tabbed to', async ({ page }) => {
+    await keyboardFocus(page, `${PILL} > input`);
+    expect(await outlineOn(page, PILL)).toMatchObject({ style: 'solid' });
+  });
+
+  test('leaves the pill unringed on a click', async ({ page }) => {
+    const resting = await outlineOn(page, PILL);
+    await page.getByPlaceholder('Search workspaces...').click();
+    const clicked = await outlineOn(page, PILL);
+    expect(unpainted(clicked.style, clicked.color)).toBe(true);
+    expect(clicked.shadow).toBe(resting.shadow);
+  });
+
+  test('leaves the field itself unringed either way, so the two never stack', async ({ page }) => {
+    const field = `${PILL} > input`;
+    await keyboardFocus(page, field);
+    expect(await outlineOn(page, field)).toMatchObject({ focused: true, style: 'none' });
   });
 });
