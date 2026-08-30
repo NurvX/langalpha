@@ -121,13 +121,23 @@ async def settle_abandoned(kind: RunKind) -> int:
     task run is not, whatever status it carries: the collector claims by
     ownership rather than status, so a row it is about to bill is
     indistinguishable from one whose parent died before collecting. So that
-    lane needs two proofs rather than one. The grace interval answers "the
-    collector already had its chance"; the parent predicate answers "it has not
-    had its chance yet", because the collector is spawned only once the PARENT
-    turn goes terminal. Age alone cannot see that: a subagent that finishes
-    early under a long turn would be stamped billed 30 minutes later and drop
-    out of the in-flight aggregate for the rest of that turn, understating the
-    balance every admission in the window is measured against.
+    lane needs two proofs rather than one, and both are the same grace read
+    against different clocks: the collector is spawned only once the PARENT
+    turn goes terminal, so its chance starts at whichever came later, the
+    child's own finalization or the parent's. The child's age alone cannot see
+    that — a subagent that finishes early under a long turn would be stamped
+    billed 30 minutes later and drop out of the in-flight aggregate for the
+    rest of that turn, understating the balance every admission in the window
+    is measured against. The parent's status alone cannot see it either: a
+    child that finished long before its parent satisfies its own grace already,
+    so a bare "parent is not in_progress" opens the moment the parent commits,
+    which is the moment BEFORE the collector it spawns has inserted anything.
+    Hence the parent's terminal instant, and hence ``usage_settled_at`` for it:
+    the finalize CAS stamps that in the same statement that turns the row
+    terminal, and it is the only timestamp the response table keeps. A parent
+    finalized by pre-gate code carries none, which reads as "chance not started"
+    and holds the child until the run lane above stamps it — a grace later than
+    strictly needed, in the direction that cannot overstate anyone's balance.
 
     ``user_id IS NOT NULL`` is what lets this use the partial in-flight index
     rather than scanning the table: the index carries that predicate, so
@@ -143,7 +153,12 @@ async def settle_abandoned(kind: RunKind) -> int:
                   AND NOT EXISTS (
                       SELECT 1 FROM conversation_responses r
                       WHERE r.conversation_response_id = {table}.parent_run_id
-                        AND r.status = 'in_progress'
+                        AND (
+                            r.status = 'in_progress'
+                            OR r.usage_settled_at IS NULL
+                            OR r.usage_settled_at
+                                > NOW() - INTERVAL '{_ABANDONED_SETTLE_GRACE}'
+                        )
                   )
         """
         if kind == "task"

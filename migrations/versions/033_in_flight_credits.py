@@ -109,19 +109,17 @@ def upgrade() -> None:
     # is additive and every reader tolerates a missing index or an unvalidated
     # constraint.
     with op.get_context().autocommit_block():
-        # Drop the 5s cap for the concurrent work. CREATE INDEX CONCURRENTLY
-        # spends most of its life in two waits for transactions that can still
-        # see the table, and those are lock waits, so lock_timeout aborts them:
-        # on a table taking continuous writes a 5s cap fails the build almost
-        # every time and leaves an INVALID index behind. The statements below
-        # take no lock worth bounding — CONCURRENTLY and VALIDATE both yield to
-        # readers and writers — so the cap buys nothing here and costs the
-        # migration.
-        op.execute("SET lock_timeout = 0")
-        # NOT VALID skips the scan (SHARE UPDATE EXCLUSIVE, no heap validation);
-        # the VALIDATE that follows scans without blocking readers or writers.
-        # Every existing row holds the column default, so validation cannot
-        # fail — the pair is only about which lock the scan runs under.
+        # The cap stays on for the constraint DDL. NOT VALID skips the heap
+        # SCAN, not the LOCK: ADD CONSTRAINT ... CHECK takes ACCESS EXCLUSIVE
+        # either way, and so does the DROP above it — the reduced-lock ALTER
+        # forms are ADD FOREIGN KEY and VALIDATE, not this one. Skipping the
+        # scan makes the hold brief but does nothing about the WAIT, and an
+        # ACCESS EXCLUSIVE queued behind one long transaction parks every
+        # reader and writer of a hot run table behind it for as long as that
+        # transaction lives. Both tables are done here, before either scan
+        # below, so the exclusive work is over early rather than interleaved
+        # with a validation that can run for minutes.
+        op.execute("SET lock_timeout = '5s'")
         for table in ("conversation_responses", "subagent_runs"):
             constraint = f"ck_{table}_in_flight_credits_nonneg"
             op.execute(
@@ -137,7 +135,22 @@ def upgrade() -> None:
                     CHECK (in_flight_credits >= 0) NOT VALID
                 """
             )
-            op.execute(f"ALTER TABLE {table} VALIDATE CONSTRAINT {constraint}")
+
+        # Only now drop the cap, for the two kinds of statement that need it
+        # dropped. CREATE INDEX CONCURRENTLY spends most of its life in two
+        # waits for transactions that can still see the table, and those are
+        # lock waits, so lock_timeout aborts them: on a table taking continuous
+        # writes a 5s cap fails the build almost every time and leaves an
+        # INVALID index behind. VALIDATE takes SHARE UPDATE EXCLUSIVE and scans
+        # without blocking readers or writers, so it has nothing worth bounding
+        # either. Every existing row holds the column default, so validation
+        # cannot fail.
+        op.execute("SET lock_timeout = 0")
+        for table in ("conversation_responses", "subagent_runs"):
+            op.execute(
+                f"ALTER TABLE {table} "
+                f"VALIDATE CONSTRAINT ck_{table}_in_flight_credits_nonneg"
+            )
 
         # Drop before create, always. IF NOT EXISTS matches on NAME alone, so
         # on its own it adopts whatever index already wears the name: a failed

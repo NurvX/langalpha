@@ -297,6 +297,29 @@ async def test_a_task_sweep_leaves_rows_whose_parent_turn_is_still_live(
 
 
 @pytest.mark.asyncio
+async def test_a_task_sweep_waits_out_the_grace_from_the_parent_going_terminal(
+    mock_connection, mock_cursor
+):
+    """The parent's STATUS is not enough, only the instant it changed.
+
+    A child that finished long before its parent has already served its own
+    grace, so a bare "parent is not in_progress" opens the instant the parent
+    commits — which is before the collector that commit spawns has inserted
+    anything. The sweep would stamp the row settled out from under a collector
+    about to bill it. The parent's ``usage_settled_at`` is the terminal instant
+    (the finalize CAS stamps it in the same statement) and NULL on a parent
+    finalized by pre-gate code, which must read as "chance not started" rather
+    than as "chance over".
+    """
+    with _pool_of(mock_connection):
+        await credit_ledger.settle_abandoned("task")
+
+    sql = " ".join(_executable(_sql(mock_cursor)).split())
+    assert "r.usage_settled_at IS NULL" in sql
+    assert "r.usage_settled_at > NOW() - INTERVAL '30 minutes'" in sql
+
+
+@pytest.mark.asyncio
 async def test_a_response_sweep_has_no_parent_to_wait_on(
     mock_connection, mock_cursor
 ):
