@@ -270,6 +270,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     handleRejectPTCAgent,
     handleApproveSecretaryAction,
     handleRejectSecretaryAction,
+    handleResumeCreditPause,
     tokenUsage,
     threadId: currentThreadId,
     threadModels,
@@ -862,6 +863,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const stableRejectPTCAgent = useStableHandler(handleRejectPTCAgent);
   const stableApproveSecretaryAction = useStableHandler(handleApproveSecretaryAction);
   const stableRejectSecretaryAction = useStableHandler(handleRejectSecretaryAction);
+  const stableResumeCreditPause = useStableHandler(handleResumeCreditPause);
   const stableEditMessage = useStableHandler((id: string, content: string) =>
     handleEditMessage(id, content, chatInputRef.current?.getModelOptions?.()));
   const stableRegenerate = useStableHandler((id: string) =>
@@ -897,6 +899,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     onRejectPTCAgent: stableRejectPTCAgent,
     onApproveSecretaryAction: stableApproveSecretaryAction,
     onRejectSecretaryAction: stableRejectSecretaryAction,
+    onResumeCreditPause: stableResumeCreditPause,
     onEditMessage: stableEditMessage,
     onRegenerate: stableRegenerate,
     onRetry: stableRetry,
@@ -910,7 +913,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     stableAnswerQuestion, stableSkipQuestion, stableApproveCreateWorkspace,
     stableRejectCreateWorkspace, stableApproveStartQuestion, stableRejectStartQuestion,
     stableApprovePTCAgent, stableRejectPTCAgent, stableApproveSecretaryAction,
-    stableRejectSecretaryAction, stableEditMessage, stableRegenerate, stableRetry,
+    stableRejectSecretaryAction, stableResumeCreditPause, stableEditMessage, stableRegenerate, stableRetry,
     stableThumbUp, stableThumbDown, stableReportWithAgent, stableSendMessage,
   ]);
 

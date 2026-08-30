@@ -1279,6 +1279,8 @@
     "errorHintModelAccess": "请确认您的套餐或订阅允许访问此模型。",
     "errorHintProviderStatus": "请查看提供商状态页，了解是否存在服务中断。",
     "errorHintTryAnotherModel": "请尝试在模型选择器中切换到其他模型。",
+    "errorLinkManagePlan": "管理套餐",
+    "errorLinkViewUsage": "查看用量",
     "errorUpstreamHeadlineModel": "{{model}} 返回错误",
     "errorUpstreamHeadlineModelStatus": "{{model}} 返回错误 ({{status}})",
     "errorAttemptedModels": "还尝试了：",
@@ -1314,11 +1316,21 @@
     "taskReportBackPending": "等待子代理结果汇报",
     "taskCard": {
       "statusRunning": "运行中",
+      "statusPausing": "完成当前步骤",
       "statusCompleted": "已完成",
       "statusStopped": "已停止",
       "statusFailed": "失败",
       "statusUpdated": "已更新",
       "statusResumed": "已恢复"
+    },
+    "creditPause": {
+      "title": "运行已暂停",
+      "resume": "继续",
+      "resuming": "继续中…",
+      "resumedLabel": "已继续"
+    },
+    "creditStop": {
+      "title": "额度已用尽"
     },
     "subagentCard": {
       "titleFallback": "子智能体任务",
@@ -1338,6 +1350,7 @@
       "initializing": "初始化中",
       "instruct": "指示",
       "errorHeading": "该智能体因错误而停止",
+      "stoppedHeading": "该智能体已停止",
       "inputPlaceholder": "为该智能体添加指令…",
       "avatarAlt": "智能体"
     },
@@ -1466,6 +1479,7 @@
     },
     "compactedNotification": "上下文已压缩 · {{from}} 条消息 → 摘要",
     "taskErrorNotification": "子任务运行失败",
+    "taskStoppedNotification": "子任务运行已停止",
     "taskSteeringReturnedNotification": "引导消息已退回 · 运行在送达前已结束",
     "viewSummary": "查看摘要",
     "hideSummary": "隐藏摘要",

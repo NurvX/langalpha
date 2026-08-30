@@ -8,8 +8,9 @@ import { useTheme } from '../../../../contexts/ThemeContext';
 import LissajousLoading from '@/components/ui/lissajous-loading';
 import { useUser } from '@/hooks/useUser';
 import { CitationMetadataProvider } from '../CitationMetadataContext';
+import { CreditPausePendingProvider } from '../CreditPausePendingContext';
 import TextMessageContent from '../TextMessageContent';
-import { countDedupedSources, type ProvenanceRecord, type SubagentTaskRecord } from '@/types/chat';
+import { countDedupedSources, type CreditPauseState, type ProvenanceRecord, type SubagentTaskRecord } from '@/types/chat';
 import { TextShimmer } from '@/components/ui/text-shimmer';
 import type { SelectionPreviewShape } from '../SelectionContextPreview';
 import { AttachmentCard, InlineSelectionCards, InlineWidgetDeck } from './attachments';
@@ -295,6 +296,7 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
           {/* Render content segments in chronological order */}
           {(message.contentSegments as ContentSegmentRecord[] | undefined) && (message.contentSegments as ContentSegmentRecord[]).length > 0 ? (
             <CitationMetadataProvider toolCallProcesses={(message.toolCallProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}>
+            <CreditPausePendingProvider creditPauses={message.creditPauses as Record<string, CreditPauseState> | undefined}>
             <MessageContentSegments
               segments={message.contentSegments as ContentSegmentRecord[]}
               reasoningProcesses={(message.reasoningProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
@@ -314,12 +316,13 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
               isSubagentView={isSubagentView}
               ptcAgentProposals={(message.ptcAgentProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
               secretaryActionProposals={(message.secretaryActionProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
+              creditPauses={(message.creditPauses as Record<string, CreditPauseState>) || EMPTY_OBJ}
               htmlWidgetProcesses={(message.htmlWidgetProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
-              textOnly={true}
               readOnly={readOnly}
               allowFiles={allowFiles}
               flashContext={flashContext}
             />
+            </CreditPausePendingProvider>
             </CitationMetadataProvider>
           ) : (
             // Fallback for messages without segments (backward compatibility) - main chat shows text only
