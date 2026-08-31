@@ -16,13 +16,27 @@ const PROPOSAL_INTERRUPT_TYPES = new Set([
 ]);
 
 /** Maps interrupt types to their proposal bucket key on AssistantMessage. */
-const PROPOSAL_DATA_KEY_MAP: Record<string, string> = {
+const PROPOSAL_DATA_KEY_MAP: Record<string, keyof AssistantMessage> = {
   create_workspace: 'workspaceProposals',
   start_question: 'questionProposals',
   ptc_agent: 'ptcAgentProposals',
   delete_workspace: 'secretaryActionProposals',
   stop_workspace: 'secretaryActionProposals',
   delete_thread: 'secretaryActionProposals',
+};
+
+/**
+ * The card bucket each pending interrupt settles into, keyed by the type its
+ * pending entry carries — which, unlike the action request's `type`, names a
+ * plan approval too, so there is no fallback case to get wrong. Typed against
+ * `AssistantMessage` so a renamed bucket fails here rather than writing a card
+ * under a name nothing renders.
+ */
+const CARD_BUCKET_FOR_TYPE: Record<string, keyof AssistantMessage> = {
+  plan_approval: 'planApprovals',
+  ask_user_question: 'userQuestions',
+  credit_pause: 'creditPauses',
+  ...PROPOSAL_DATA_KEY_MAP,
 };
 
 /** Secretary action interrupt types (for type guard in handlers). */
@@ -73,13 +87,17 @@ interface HistoryCardPatch {
 function resolvePendingHistoryInterrupt(
   pending: HistoryInterruptInfo[],
   match: (p: HistoryInterruptInfo) => boolean,
-  toPatch: (matched: HistoryInterruptInfo) => HistoryCardPatch,
+  toPatch: (matched: HistoryInterruptInfo) => HistoryCardPatch | null,
   setMessages: SetMessages,
 ): boolean {
   const idx = pending.findIndex(match);
   if (idx === -1) return false;
   const matched = pending[idx];
-  const { bucket, key, fields } = toPatch(matched);
+  // A caller that matches an entry but declines to patch it leaves the card
+  // pending and the entry queued, so replay still ends holding what is owed.
+  const patch = toPatch(matched);
+  if (!patch) return false;
+  const { bucket, key, fields } = patch;
   setMessages((prev) =>
     updateMessage(prev, matched.assistantMessageId, (m) => {
       if (m.role !== 'assistant') return m;
@@ -94,5 +112,6 @@ function resolvePendingHistoryInterrupt(
 
 export {
   PROPOSAL_INTERRUPT_TYPES, PROPOSAL_DATA_KEY_MAP, SECRETARY_ACTION_TYPES,
-  INTERRUPT_CARD_BUCKETS, setCardStatus, resolvePendingHistoryInterrupt,
+  INTERRUPT_CARD_BUCKETS, CARD_BUCKET_FOR_TYPE,
+  setCardStatus, resolvePendingHistoryInterrupt,
 };

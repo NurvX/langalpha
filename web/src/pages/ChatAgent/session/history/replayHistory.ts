@@ -34,6 +34,7 @@ import type {
   TokenUsage, SSEEvent, HistoryInterruptInfo, SubagentHistoryData, PairState,
 } from '../types';
 import { PROPOSAL_INTERRUPT_TYPES, PROPOSAL_DATA_KEY_MAP, resolvePendingHistoryInterrupt, setCardStatus } from '../interrupts/buckets';
+import { recordInterruptClaims, type HistoryInterruptClaim } from '../interrupts/claims';
 import { projectHistoryInterrupt } from '../interrupts/fromHistoryEvent';
 import type { HistoryRuntime } from '../runtime';
 
@@ -113,6 +114,13 @@ export async function loadConversationHistory(
 
     // Track pending HITL interrupts from history to resolve status on next user_message
     const pendingHistoryInterrupts: HistoryInterruptInfo[] = [];
+    // What each still-running resume turn answered, kept for the whole replay
+    // because the claim can arrive BEFORE the interrupt it answers: the tip
+    // interrupt is appended once at the end of a checkpoint replay carrying no
+    // turn_index, so a reload taken before the resume commits its boundary
+    // replays it last — after the stamp that already answered it. See
+    // interrupts/claims.ts for why only a live resume records one.
+    const claimedInterrupts = new Map<string, HistoryInterruptClaim>();
 
     // Track subagent events by task ID for this history load
     // Map<taskId, { messages: Array, events: Array, description?: string, type?: string }>
@@ -310,6 +318,10 @@ export async function loadConversationHistory(
           // History replays chronologically, so the last write wins = most recent query's model.
           rt.setLastThreadModel(llmModel);
         }
+        // The resolvers below settle the cards already on screen; this keeps
+        // the same evidence for the interrupts still ahead of us.
+        recordInterruptClaims(claimedInterrupts, event);
+
         // Resolve pending plan_approval interrupt from content (empty = approved, non-empty = rejected).
         resolvePendingHistoryInterrupt(
           pendingHistoryInterrupts,
@@ -826,7 +838,7 @@ export async function loadConversationHistory(
       // Handle interrupt events during history replay
       if (eventType === 'interrupt') {
         projectHistoryInterrupt(rt, event, {
-          currentActivePairIndex, assistantMessagesByPair, pairStateByPair, pendingHistoryInterrupts,
+          currentActivePairIndex, assistantMessagesByPair, pairStateByPair, pendingHistoryInterrupts, claimedInterrupts,
         });
         return;
       }
