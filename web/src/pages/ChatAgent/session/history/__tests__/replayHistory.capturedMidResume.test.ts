@@ -37,9 +37,6 @@ describe('replay captured mid-resume', () => {
       .filter((m) => m.role === 'assistant')
       .flatMap((m) => Object.entries((m as unknown as AssistantMessage).creditPauses ?? {}));
 
-    console.log('cards =', JSON.stringify(cards.map(([id, c]) => [id, (c as { status?: string }).status])));
-    console.log('unresolved =', JSON.stringify(rt.unresolvedHistoryInterruptRef.current));
-
     expect(cards.length).toBeGreaterThan(0);
     // The whole point: nothing still offers a live control.
     for (const [, card] of cards) {
