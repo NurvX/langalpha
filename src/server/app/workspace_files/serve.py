@@ -40,8 +40,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 #
 # Gives `.html` deliverables true served semantics: a document served at
-# `/wsfiles/{ws}/results/report.html` can reference `charts/foo.png` and the
-# browser resolves it relatively to `/wsfiles/{ws}/results/charts/foo.png`.
+# `/wsfiles/{ws}/work/task/report.html` can reference `charts/foo.png` and the
+# browser resolves it relatively to `/wsfiles/{ws}/work/task/charts/foo.png`.
 # The workspace UUID (128-bit) is the access credential, mirroring the
 # `preview_redirect_router` posture: uniform 404 for missing/unauthorized,
 # and never wake a stopped sandbox (denial-of-wallet protection).

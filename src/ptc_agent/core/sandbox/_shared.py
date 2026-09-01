@@ -56,8 +56,6 @@ class ExecutionResult:
     stdout: str
     stderr: str
     duration: float
-    files_created: list[str]
-    files_modified: list[str]
     execution_id: str
     code_hash: str
     charts: list[ChartData] = field(default_factory=list)

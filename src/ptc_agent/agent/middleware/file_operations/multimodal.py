@@ -733,7 +733,7 @@ class MultimodalMiddleware(AgentMiddleware):
             # The Read tool reaches the sandbox through SandboxBackend, which
             # normalizes first; this middleware holds the sandbox itself, whose
             # adownload_file_bytes does not. Without this, a virtual path the
-            # tool resolved fine ("/results/chart.png") misses here and replaces
+            # tool resolved fine ("/work/task/charts/c.png") misses here and replaces
             # the tool's success with a not-found error.
             file_bytes = await self.sandbox.adownload_file_bytes(
                 self.sandbox.normalize_path(file_path)
