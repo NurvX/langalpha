@@ -33,13 +33,14 @@ from ptc_agent.agent.middleware.skills.registry import (
 )
 from ptc_agent.agent.middleware.runtime_context import RuntimeContextMiddleware
 from ptc_agent.agent.state import DeltaAgentState
-from ptc_agent.agent.prompts import format_current_time, get_loader
+from ptc_agent.agent.prompts import (
+    format_current_time,
+    get_loader,
+    guidance_template_vars,
+)
 from ptc_agent.config import AgentConfig
 
-from ptc_agent.agent.middleware.model_resilience import (
-    ModelResilienceMiddleware,
-    build_fallback_pairs,
-)
+from ptc_agent.agent.turn import build_model_resilience_middleware, turn_model
 
 # External tools only (no sandbox, no MCP)
 from src.tools.web.search import get_web_search_tool
@@ -156,22 +157,18 @@ class FlashAgent:
 
         return tools
 
-    def _build_system_prompt(
-        self,
-        tools: list[Any],
-    ) -> str:
+    def _build_system_prompt(self, tools: list[Any], guidance: str) -> str:
         """Build the static system prompt (excludes time/profile for cacheability).
 
-        Args:
-            tools: List of available tools
-
-        Returns:
-            Rendered system prompt string
+        ``guidance`` is resolved for the flash model, not the main one: a
+        deployment running Haiku on Flash and Opus on PTC sizes each prompt for
+        the model that renders it.
         """
         loader = get_loader()
         return loader.render(
             "flash_system.md.j2",
             tools=tools,
+            **guidance_template_vars(guidance),
         )
 
     def create_agent(
@@ -196,7 +193,7 @@ class FlashAgent:
         Returns:
             Configured LangGraph agent
         """
-        model = llm if llm is not None else self.llm
+        turn = turn_model(self.config, llm, self.llm, flash=True)
 
         # Freeze current time for this request (refreshes on each new query)
         request_time = datetime.now(tz=UTC)
@@ -207,7 +204,7 @@ class FlashAgent:
         tools = self._build_tools()
 
         # Build system prompt (time + profile injected by RuntimeContextMiddleware)
-        system_prompt = self._build_system_prompt(tools)
+        system_prompt = self._build_system_prompt(tools, turn.guidance)
 
         # Leak detector wired into provenance so web/market/SEC snippets are
         # scrubbed before they're emitted/persisted, mirroring the main agent.
@@ -294,23 +291,12 @@ class FlashAgent:
             )
 
         # Model resilience middleware (retry + fallback + progress events)
-        fallbacks = build_fallback_pairs(self.config)
-        main_middleware.append(
-            ModelResilienceMiddleware(
-                primary_name=self.config.llm.flash or self.config.llm.name,
-                primary_client=self.llm,
-                fallbacks=fallbacks,
-                max_retries=3,
-                backoff_factor=2.0,
-                initial_delay=1.0,
-                max_delay=60.0,
-                jitter=True,
-            )
-        )
+        model_resilience = build_model_resilience_middleware(self.config, turn)
+        main_middleware.append(model_resilience)
         logger.info(
             "Flash model resilience enabled",
             max_retries=3,
-            fallback_models=[name for name, _ in fallbacks],
+            fallback_models=[name for name, _ in model_resilience.fallbacks],
         )
 
         # Only the read-side strip is live here: Flash exposes no filesystem
@@ -321,7 +307,7 @@ class FlashAgent:
         main_middleware.append(
             MultimodalMiddleware(
                 sandbox=None,
-                model_name=self.config.llm.flash or self.config.llm.name,
+                model_name=self.config.llm.flash_name,
                 custom_modalities=self.config.input_modalities,
             )
         )
@@ -375,7 +361,7 @@ class FlashAgent:
             create_kwargs["response_format"] = response_format
 
         agent = create_agent(
-            model,
+            turn.client,
             **create_kwargs,
         ).with_config({"recursion_limit": 500})
 

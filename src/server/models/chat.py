@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from src.server.models.additional_context import AdditionalContext
 
+from src.llms.reasoning import ReasoningLevel
+
 # Roles the chat path can VALIDLY persist into the ``messages`` channel. The
 # chat path writes ``{"role", "content"}`` dicts straight in; under DeltaChannel
 # that raw write is stored BEFORE the reducer runs, so a role must clear TWO bars:
@@ -330,11 +332,13 @@ class ChatRequest(BaseModel):
     )
 
     # Reasoning effort override (optional - defaults to model's configured level)
-    # xhigh is honored only by Anthropic adaptive thinking (Opus 4.7+); other
-    # providers clamp it to high in src/llms/reasoning.py.
-    reasoning_effort: Optional[Literal["low", "medium", "high", "xhigh"]] = Field(
+    # The full canonical vocabulary, not a subset: a level the chosen model does
+    # not declare is clamped in LLM.__init__, which is the only layer that can
+    # see the model's enum. Narrowing here instead turns an unsupported level
+    # into a 422 the caller cannot act on.
+    reasoning_effort: Optional[ReasoningLevel] = Field(
         default=None,
-        description="Override reasoning effort for this request (low/medium/high/xhigh)",
+        description="Override reasoning effort for this request.",
     )
 
     fast_mode: Optional[bool] = Field(

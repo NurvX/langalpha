@@ -137,20 +137,23 @@ _EXCLUDED_STATE_KEYS = {"messages", "todos", "structured_response"}
 
 TASK_TOOL_DESCRIPTION = """Launch a subagent for complex, multi-step tasks.
 
+Use for: Complex tasks, isolated research, context-heavy operations.
+NOT for: Simple 1-2 tool operations (do directly).
+
 Args:
-    description: Short 1-2 sentence summary of the task (displayed as title)
-    prompt: Detailed instructions for the subagent to execute
-    subagent_type: Agent type to use
-    action: "init" (new task, default), "update" (instruct running task), "resume" (resume completed task)
-    task_id: Required for "update" and "resume" actions
+    description: Short 1-2 sentence title shown on the task card. Think commit subject line.
+    prompt: The subagent's complete instructions. It sees nothing of this conversation, so include all the context, data and expected output format it needs.
+    subagent_type: Which subagent to use (e.g. "general-purpose"). Required for "init".
+    action: "init" (new task, default), "update" (instruct a running task), "resume" (continue a completed or stopped task from its checkpoint, with its prior context intact)
+    task_id: The target task's short alphanumeric ID. Required for "update" and "resume".
 
-Usage:
-- Use for: Complex tasks, isolated research, context-heavy operations
-- NOT for: Simple 1-2 tool operations (do directly)
-- Parallel: Launch multiple agents in single message for concurrent tasks
-- Results: Subagent returns final report only (intermediate steps hidden)
+Returns:
+    A task ID immediately, not the subagent's work. The subagent runs
+    autonomously and reports only its final result; intermediate steps stay
+    hidden.
 
-The subagent works autonomously. Provide clear, complete instructions in the prompt."""
+Keep working. The report arrives through TaskOutput once a completion
+notification names the task."""
 
 
 def _get_subagents(

@@ -58,7 +58,7 @@ export async function sendChatMessageStream(
   }
   if (llmModel) body.llm_model = llmModel;
   if (reasoningEffort) body.reasoning_effort = reasoningEffort;
-  if (fastMode) body.fast_mode = true;
+  if (fastMode != null) body.fast_mode = fastMode;
   if (platform) body.platform = platform;
   // Use /threads/{id}/messages for existing thread, /threads/messages for new
   const isNewThread = !threadId || threadId === '__default__';
@@ -89,7 +89,7 @@ export async function sendRetryStream(
   const body: Record<string, unknown> = { workspace_id: workspaceId };
   if (llmModel) body.llm_model = llmModel;
   if (reasoningEffort) body.reasoning_effort = reasoningEffort;
-  if (fastMode) body.fast_mode = true;
+  if (fastMode != null) body.fast_mode = fastMode;
   if (requestKey) body.request_key = requestKey;
   return await postSSEStream(`/api/v1/threads/${threadId}/retry`, body, { onEvent, onRunIdResolved, signal });
 }
@@ -574,7 +574,7 @@ export async function sendHitlResponse(
   };
   if (modelOptions?.model) body.llm_model = modelOptions.model;
   if (modelOptions?.reasoningEffort) body.reasoning_effort = modelOptions.reasoningEffort;
-  if (modelOptions?.fastMode) body.fast_mode = true;
+  if (modelOptions?.fastMode != null) body.fast_mode = modelOptions.fastMode;
   if (requestKey) body.request_key = requestKey;
   return await postSSEStream(`/api/v1/threads/${threadId}/messages`, body, { onEvent, onRunIdResolved, signal });
 }

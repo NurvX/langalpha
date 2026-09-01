@@ -1620,7 +1620,7 @@ export function useChatMessages(
     currentPlanModeRef.current = planMode;
 
     // Store model options so HITL resume can forward them
-    lastModelOptionsRef.current = { model: model || null, reasoningEffort: reasoningEffort || null, fastMode: fastMode || null };
+    lastModelOptionsRef.current = { model: model || null, reasoningEffort: reasoningEffort || null, fastMode: fastMode ?? null };
 
     // Intercept: if a plan was rejected, route this message as rejection feedback
     if (pendingRejection) {
@@ -1766,7 +1766,7 @@ export function useChatMessages(
         userLocale, userTimezone, undefined, undefined,
         model || null,
         reasoningEffort || null,
-        fastMode || null,
+        fastMode ?? null,
         platform,
         // Latch run_id AND the server-assigned thread_id from Content-Location
         // BEFORE the first SSE body byte. run_id closes the reconnect race
@@ -2532,7 +2532,7 @@ export function useChatMessages(
             processEvent,
             modelOptions.model || null,
             modelOptions.reasoningEffort || null,
-            modelOptions.fastMode || null,
+            modelOptions.fastMode ?? null,
             latchRunId,
             abortController.signal,
             requestKey,
@@ -2552,7 +2552,7 @@ export function useChatMessages(
             forkFromTurn,
             modelOptions.model || null,
             modelOptions.reasoningEffort || null,
-            modelOptions.fastMode || null,
+            modelOptions.fastMode ?? null,
             platform,
             latchRunId,
             abortController.signal,

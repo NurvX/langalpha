@@ -13,6 +13,16 @@ logger = logging.getLogger(__name__)
 
 _USER_PROFILE_TTL = 86400  # 24h — freshness via explicit invalidation
 
+# Cached-shape version, part of the key so a bump retires every entry the
+# previous shape wrote. Bump it whenever the dict below changes keys: a
+# migration can move preference data in raw SQL, under no application write
+# path, and nothing invalidates a profile cached before it ran.
+_USER_PROFILE_SHAPE = 1
+
+
+def _user_profile_cache_key(user_id: str) -> str:
+    return f"user_profile_prompt:v{_USER_PROFILE_SHAPE}:{user_id}"
+
 
 async def fetch_user_data_counts(user_id: str | None) -> dict[str, Any] | None:
     """Lightweight counts for the static `<user_profile>` block.
@@ -48,7 +58,7 @@ async def get_user_profile_for_prompt(user_id: str) -> dict[str, Any] | None:
     """
     import json as _json
 
-    cache_key = f"user_profile_prompt:{user_id}"
+    cache_key = _user_profile_cache_key(user_id)
     try:
         from src.utils.cache.redis_cache import get_cache_client
 
@@ -101,7 +111,7 @@ async def invalidate_user_profile_cache(user_id: str) -> None:
 
         cache = get_cache_client()
         if cache.enabled and cache.client:
-            await cache.client.delete(f"user_profile_prompt:{user_id}")
+            await cache.client.delete(_user_profile_cache_key(user_id))
     except Exception:
         pass
 

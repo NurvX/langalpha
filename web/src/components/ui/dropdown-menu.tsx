@@ -46,15 +46,27 @@ const DropdownMenuContent = React.forwardRef<
 ))
 DropdownMenuContent.displayName = DropdownMenuPrimitive.Content.displayName
 
+// The only focus indication a menu item gets. Items wear no ring by design, so
+// this tint answers pointer and keyboard alike, and it is written once: a value
+// that clears contrast has to reach every shape of item at the same time.
+const ITEM_HIGHLIGHT = "data-[highlighted]:bg-accent/15"
+
+// "Label ... value >": the label at the left, whatever it currently reads
+// right-aligned against the chevron. A setting row exists in two shapes, an
+// item where the options expand in place and a sub-trigger where they fly out,
+// so the geometry belongs here rather than restated at both call sites.
+const SETTING_ROW = "justify-between text-[0.8125rem]"
+
 const itemVariants: Record<string, string> = {
-  default: "data-[highlighted]:bg-accent/15",
+  default: ITEM_HIGHLIGHT,
   destructive: "text-destructive data-[highlighted]:bg-destructive/10 data-[highlighted]:text-destructive",
+  setting: `${SETTING_ROW} ${ITEM_HIGHLIGHT}`,
 }
 
 const DropdownMenuItem = React.forwardRef<
   React.ComponentRef<typeof DropdownMenuPrimitive.Item>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item> & {
-    variant?: "default" | "destructive"
+    variant?: "default" | "destructive" | "setting"
   }
 >(({ className, variant = "default", ...props }, ref) => (
   <DropdownMenuPrimitive.Item
@@ -98,12 +110,16 @@ const DropdownMenuSub = DropdownMenuPrimitive.Sub
 
 const DropdownMenuSubTrigger = React.forwardRef<
   React.ComponentRef<typeof DropdownMenuPrimitive.SubTrigger>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger> & {
+    variant?: "default" | "setting"
+  }
+>(({ className, children, variant = "default", ...props }, ref) => (
   <DropdownMenuPrimitive.SubTrigger
     ref={ref}
     className={cn(
-      "flex cursor-default select-none items-center gap-2 rounded-sm px-2.5 py-1.5 text-sm outline-none data-[highlighted]:bg-accent/15 data-[state=open]:bg-accent/15",
+      "flex cursor-default select-none items-center gap-2 rounded-sm px-2.5 py-1.5 text-sm outline-none data-[state=open]:bg-accent/15",
+      ITEM_HIGHLIGHT,
+      variant === "setting" && SETTING_ROW,
       className
     )}
     {...props}

@@ -34,7 +34,13 @@ SCAN_FILES = (
 # matching would otherwise leave zero sites and pass.
 MIN_SITES = 3
 
-_RESILIENCE_NAMES = frozenset({"model_resilience", "ModelResilienceMiddleware"})
+_RESILIENCE_NAMES = frozenset(
+    {
+        "model_resilience",
+        "ModelResilienceMiddleware",
+        "build_model_resilience_middleware",
+    }
+)
 _MULTIMODAL_NAMES = frozenset({"multimodal", "MultimodalMiddleware"})
 
 

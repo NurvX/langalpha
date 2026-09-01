@@ -87,7 +87,8 @@ from src.config.settings import get_flash_recursion_limit
 
 from .admission_gate import admission_conflict_detail, wait_or_steer
 from .error_handling import handle_workflow_error
-from src.server.services.llm.config import is_own_key_turn, resolve_llm_config
+from src.server.services.llm.clients import is_own_key_turn
+from src.server.services.llm.config import resolve_llm_config
 from .steering import (
     drain_steering_return_event,
     steer_thread,
@@ -244,7 +245,10 @@ async def astream_flash_workflow(
         # Persist query start (with attachment and context metadata for display
         # in history).  This block is flash-specific because of multimodal guard
         # differences vs PTC.
-        effective_model = config.llm.flash if config and config.llm else None
+        # ``flash_name``, not ``flash``: an unset flash model means the turn
+        # runs the main one, and reporting None there left the history row
+        # and the run metadata blank for a turn that had a model all along.
+        effective_model = config.llm.flash_name if config and config.llm else None
         # Off the resolved credential, not off ``is_byok``: that flag answers
         # which ladder to try, and an automation with only an OAuth token
         # passes it false while still paying its own vendor bill.
@@ -474,7 +478,6 @@ async def astream_flash_workflow(
             token_callback=token_callback,
             request=request,
             effective_model=effective_model,
-            is_byok=is_byok,
             recursion_limit=get_flash_recursion_limit(),
             skill_contexts=skill_contexts,
             skill_dirs=skill_dirs,

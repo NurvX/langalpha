@@ -753,7 +753,6 @@ class TestBuildGraphConfig:
                 platform=None,
             ),
             effective_model="gpt-4o",
-            is_byok=False,
             recursion_limit=100,
         )
         defaults.update(kwargs)
@@ -801,6 +800,46 @@ class TestBuildGraphConfig:
     def test_extra_configurable_merged(self):
         config = self._build(extra_configurable={"plan_mode": True})
         assert config["configurable"]["plan_mode"] is True
+
+    def test_graph_metadata_stays_turn_identity(self):
+        """A subagent inherits this dict wholesale while running its own model at
+        its own effort, so anything the LLM owns is asserted for calls it was
+        never true of. Those keys live on the client (see ``LLM.get_llm``)."""
+        from src.config.settings import get_langsmith_metadata
+        from src.server.handlers.chat.request_prep import build_graph_config
+
+        with (
+            patch(f"{PREP}.get_langsmith_tags", return_value=[]),
+            patch(f"{PREP}.get_langsmith_metadata", side_effect=get_langsmith_metadata),
+        ):
+            config = build_graph_config(
+                thread_id="t-1",
+                user_id="u-1",
+                workspace_id="ws-1",
+                mode="ptc",
+                timezone_str="UTC",
+                token_callback=None,
+                request=MagicMock(
+                    locale=None, checkpoint_id=None, reasoning_effort="high",
+                    fast_mode=True, platform=None,
+                ),
+                effective_model="claude-sonnet-5",
+                recursion_limit=100,
+            )
+
+        metadata = config["metadata"]
+        assert metadata["user_id"] == "u-1"
+        # The turn's own selection, which is a different question from what any
+        # one call hit; cost and latency charts group on it.
+        assert metadata["llm_model"] == "claude-sonnet-5"
+        for llm_owned in (
+            "reasoning_effort",
+            "prompt_guidance",
+            "compaction_profile",
+            "fast_mode",
+            "is_byok",
+        ):
+            assert llm_owned not in metadata
 
     def test_timezone_in_configurable(self):
         config = self._build(timezone_str="UTC")

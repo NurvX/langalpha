@@ -59,6 +59,12 @@ class CompactionConfig(BaseModel):
     truncate_args_keep_messages: int = 20
     truncate_args_max_length: int = 2000
 
+    #: Which named preset the numbers above came from, stamped by
+    #: ``resolve_llm_config``. None means they are the deployment's own YAML
+    #: values, which is the honest answer for a model that declares no context
+    #: window. Reported, never read: the knobs are the behavior.
+    profile: str | None = None
+
 
 # Named presets that bundle the three user-facing compaction knobs
 # (token_threshold, truncate_args_trigger_messages, keep_messages). Applied at
@@ -213,6 +219,16 @@ class LLMConfig(BaseModel):
     fetch: str | None = None  # LLM for web content extraction (fetch tool)
     fallback: list[str] | None = None  # Fallback model names for retry exhaustion
 
+    @property
+    def flash_name(self) -> str:
+        """The model a flash turn actually runs on, resolving the ``name`` fallback.
+
+        Callers outside the flash agent (metadata, tuning lookups) have to agree
+        with it on which model that is, so the rule lives here rather than being
+        spelled out at each site.
+        """
+        return self.flash or self.name
+
 
 class AgentConfig(BaseModel):
     """Agent-specific configuration.
@@ -245,6 +261,12 @@ class AgentConfig(BaseModel):
 
     # Compaction middleware configuration
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
+
+    #: How much prompt scaffolding the main model gets, resolved per model and
+    #: stamped by ``resolve_llm_config``, the twin of ``CompactionConfig
+    #: .profile``. None means nobody resolved it, and the agents fall back to
+    #: what the deployment and the manifest declare.
+    prompt_guidance: str | None = None
 
     # Search API provider (tavily, serper, bocha, exa, parallel)
     search_api: str = "tavily"
@@ -286,6 +308,10 @@ class AgentConfig(BaseModel):
         default=CredentialSource.NONE, exclude=True
     )
     subsidiary_llm_clients: dict[str, Any] = Field(default_factory=dict, exclude=True)
+    # Scaffolding level per role key, for the model that role actually runs.
+    # Written alongside the clients above, because a role without a client of
+    # its own still runs a model: by name, or by inheriting the main one.
+    role_prompt_guidance: dict[str, str] = Field(default_factory=dict, exclude=True)
     fallback_llm_clients: list[Any] | None = Field(default=None, exclude=True)  # Pre-resolved fallback instances
     # Display names aligned index-for-index with ``fallback_llm_clients``
     # (skipped fallbacks drop from both lists).
@@ -575,6 +601,14 @@ class AgentConfig(BaseModel):
             return None
         main = self.llm_client
         return main.model_copy() if main is not None else None
+
+    def prompt_guidance_for_role(self, role: str) -> str | None:
+        """Scaffolding level for the model this role actually runs.
+
+        Pinned roles run their own model, so sizing their prompt for the main
+        one is the drift ``resolve_llm_config`` records this to prevent.
+        """
+        return self.role_prompt_guidance.get(role) or self.prompt_guidance
 
     def to_core_config(self) -> CoreConfig:
         """Convert to CoreConfig for use with SessionManager.

@@ -403,7 +403,7 @@ SKILL_REGISTRY: dict[str, SkillDefinition] = {
     ),
     "html-report": SkillDefinition(
         name="html-report",
-        description="Self-contained styled HTML reports written to results/: PDF-exportable research documents with inline data, charts, and theme-aware CSS",
+        description="Self-contained styled HTML reports written to the task directory: PDF-exportable research documents with inline data, charts, and theme-aware CSS",
         tools=[],
         skill_md_path="skills/html-report/SKILL.md",
         exposure="ptc",

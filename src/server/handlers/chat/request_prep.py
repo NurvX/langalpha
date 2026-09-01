@@ -507,7 +507,6 @@ def build_graph_config(
     token_callback,
     request: ChatRequest,
     effective_model: str | None,
-    is_byok: bool,
     recursion_limit: int,
     plan_mode: bool | None = None,
     extra_configurable: dict | None = None,
@@ -540,9 +539,6 @@ def build_graph_config(
         locale=request.locale,
         timezone=timezone_str,
         llm_model=effective_model,
-        reasoning_effort=getattr(request, "reasoning_effort", None),
-        fast_mode=getattr(request, "fast_mode", None),
-        is_byok=is_byok,
         platform=request.platform,
         **({"plan_mode": plan_mode} if plan_mode is not None else {}),
     )

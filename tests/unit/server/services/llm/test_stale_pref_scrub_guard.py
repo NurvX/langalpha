@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.server.services.llm.availability import _cleanup_stale_model_preferences
+from src.server.services.llm.availability import cleanup_stale_model_preferences
 
 STORED_PREFS = {
     "preferred_model": "some-model",
@@ -34,14 +34,13 @@ async def _run(catalog_names):
     with (
         patch("src.llms.llm.LLM.get_model_config", return_value=_catalog(catalog_names)),
         patch(
-            "src.server.services.llm.config.get_model_preference",
+            "src.server.services.llm.user_models.get_model_preference",
             AsyncMock(return_value=dict(STORED_PREFS)),
         ),
         patch("src.server.database.user.invalidate_user_prefs_cache", AsyncMock()),
         patch("src.server.database.user.upsert_user_preferences", upsert),
-        patch("ptc_agent.agent.graph.invalidate_user_profile_cache", AsyncMock()),
     ):
-        removed = await _cleanup_stale_model_preferences("user-1")
+        removed = await cleanup_stale_model_preferences("user-1")
     return removed, upsert
 
 
@@ -59,5 +58,41 @@ async def test_a_loaded_manifest_still_scrubs_what_really_vanished():
     removed, upsert = await _run(["something-else"])
     assert removed, "a populated catalog should still scrub names it does not contain"
     upsert.assert_awaited_once()
-    written = upsert.await_args.kwargs["other_preference"]
+    written = upsert.await_args.kwargs["model_preference"]
     assert written["preferred_model"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_scrub_states_the_delete_and_leaves_the_columns_to_the_merge():
+    """Regression: a delete that only clears the model column is not a delete.
+
+    ``get_model_preference`` reads ``other_preference`` underneath that column,
+    so a stale name left there reappears on the very next read, is raised on,
+    is scrubbed again, a loop that repeats every turn. Carrying the delete
+    across to the pre-move copy is the merge-upsert's job for every writer
+    (``TestMovedKeyDeletes`` in the database suite), so what is pinned here is
+    that the scrub asks for the delete and does not hand-roll the other half.
+    """
+    _, upsert = await _run(["something-else"])
+    kwargs = upsert.await_args.kwargs
+    assert kwargs["model_preference"]["preferred_model"] is None
+    assert "other_preference" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_the_legacy_column_still_answers_for_a_key_the_column_never_set():
+    """The rollback window the legacy read exists for stays open."""
+    from src.server.services.llm.user_models import get_model_preference
+
+    with patch(
+        "src.server.database.user.get_user_preferences",
+        AsyncMock(
+            return_value={
+                "other_preference": {"preferred_model": "pre-move-model"},
+                "model_preference": {"preferred_flash_model": "flash"},
+            }
+        ),
+    ):
+        pref = await get_model_preference("user-1")
+    assert pref["preferred_model"] == "pre-move-model"
+    assert pref["preferred_flash_model"] == "flash"

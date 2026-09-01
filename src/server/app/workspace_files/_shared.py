@@ -214,7 +214,7 @@ async def _acquire_sandbox(workspace_id: str, user_id: str) -> Any:
 def _to_client_path(sandbox: Any, absolute_path: str) -> str:
     """Convert an absolute sandbox path into a virtual client path.
 
-    The CLI and web UX prefer paths like "results/foo.txt" (no leading slash),
+    The CLI and web UX prefer paths like "work/task/foo.txt" (no leading slash),
     while still preserving true absolute /tmp paths.
     """
 

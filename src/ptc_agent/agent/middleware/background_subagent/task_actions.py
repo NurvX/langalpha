@@ -66,7 +66,7 @@ async def handle_task_action(
     """Route an intercepted Task tool call by its ``action`` argument.
 
     1. ``action="update"`` + ``task_id`` → queue follow-up via Redis to running task
-    2. ``action="resume"`` + ``task_id`` → reset completed task and respawn in background
+    2. ``action="resume"`` + ``task_id`` → reset a completed or stopped task and respawn it
     3. ``action="init"`` (default) → new task spawn
     """
     tool_call = request.tool_call
@@ -261,7 +261,7 @@ async def _handle_update(
 
     if not task.is_pending:
         return ToolMessage(
-            content=f"Error: Task-{target_task_id} is not running. Use action='resume' to resume a completed task.",
+            content=f"Error: Task-{target_task_id} is not running. Use action='resume' to resume a completed or stopped task.",
             tool_call_id=tool_call_id,
             name="Task",
         )
@@ -542,8 +542,7 @@ async def _handle_resume(
         f"- Status: Running (resumed with full previous context)\n\n"
         f"You can:\n"
         f"- Continue with other work\n"
-        f'- Use `TaskOutput(task_id="{task.task_id}")` to get progress or result\n'
-        f'- Use `TaskOutput(task_id="{task.task_id}", timeout=60)` to wait until complete'
+        f'- Use `TaskOutput(task_id="{task.task_id}")` to get progress or result'
     )
 
     return ToolMessage(
@@ -677,9 +676,7 @@ async def _handle_init(
         f"- Status: Running in background\n\n"
         f"You can:\n"
         f"- Continue with other work\n"
-        f'- Use `TaskOutput(task_id="{task.task_id}")` to get progress or result\n'
-        f'- Use `TaskOutput(task_id="{task.task_id}", timeout=60)` to wait until complete\n'
-        f"- Use `TaskOutput(timeout=60)` to wait for all background tasks"
+        f'- Use `TaskOutput(task_id="{task.task_id}")` to get progress or result'
     )
 
     return ToolMessage(

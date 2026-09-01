@@ -13,9 +13,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.server.services.llm.config import _resolve_custom_model_byok
+from src.server.services.llm.clients import _resolve_custom_model_byok
 
 H = "src.server.services.llm.config"
+USER_MODELS = "src.server.services.llm.user_models"
+CLIENTS = "src.server.services.llm.clients"
 DBK = "src.server.database.api_keys"
 
 
@@ -35,7 +37,7 @@ def _patches(provider_def, key=None):
         return provider_def if name == provider_def["name"] else None
 
     return (
-        patch(f"{H}.get_custom_provider_config", new_callable=AsyncMock, side_effect=get_cp),
+        patch(f"{USER_MODELS}.get_custom_provider_config", new_callable=AsyncMock, side_effect=get_cp),
         patch(f"{DBK}.get_byok_config_for_provider", new_callable=AsyncMock, return_value=key),
         patch(f"{DBK}.get_byok_configs_for_providers", new_callable=AsyncMock, return_value={}),
     )
