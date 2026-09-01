@@ -20,55 +20,8 @@ vi.mock('../../../utils/api', () => ({
 }));
 
 import { loadConversationHistory } from '../replayHistory';
-import type { HistoryRuntime } from '../../runtime';
-import type { HistoryInterruptInfo, MessageRecord } from '../../types';
-
-type Ref<T> = { current: T };
-const ref = <T,>(current: T): Ref<T> => ({ current });
-
-function buildRuntime() {
-  let messages: MessageRecord[] = [];
-  const rt = {
-    workspaceId: 'ws-1',
-    threadId: 'thread-1',
-    get messages() { return messages; },
-    t: (key: string) => key,
-    updateTodoListCard: null,
-    setMessages: ((updater: (prev: MessageRecord[]) => MessageRecord[]) => {
-      messages = updater(messages);
-    }) as HistoryRuntime['setMessages'],
-    setIsLoadingHistory: vi.fn(),
-    setIsCompacting: vi.fn(),
-    setMessageError: vi.fn(),
-    setFallbackSuggestion: vi.fn(),
-    setThreadModels: vi.fn(),
-    setLastThreadModel: vi.fn(),
-    setTokenUsage: vi.fn(),
-    setReloadTrigger: vi.fn(),
-    setThreadId: vi.fn(),
-    historyLoadingRef: ref(false),
-    replayedRunIdsRef: ref([] as string[]),
-    historyLoadedKeyRef: ref<string | null>(null),
-    historyHasUnresolvedInterruptRef: ref(false),
-    unresolvedHistoryInterruptRef: ref([] as HistoryInterruptInfo[]),
-    lastRenderedTurnIndexRef: ref<number | null>(null),
-    newMessagesStartIndexRef: ref(0),
-    historyPendingTaskToolCallIdsRef: ref([] as string[]),
-    currentMessageRef: ref<string | null>(null),
-    lastEventIdRef: ref<number | string | null>(null),
-    renderedInterruptIdsRef: ref(new Set<string>()),
-    toolCallIdToTaskIdMapRef: ref(new Map<string, string>()),
-    recentlySentTrackerRef: ref({ isRecentlySent: () => false }),
-    offloadBatchRef: ref(null),
-  } as unknown as HistoryRuntime;
-  return { rt, read: () => messages };
-}
-
-const deps = {
-  applyFallbackSuggestion: vi.fn(),
-  loadFeedback: vi.fn().mockResolvedValue(undefined),
-  projectSubagentHistory: vi.fn(),
-};
+import type { MessageRecord } from '../../types';
+import { buildRuntime, makeDeps, replayOf } from './replayHarness';
 
 /** Turn 0 asks a question and ends on a credit-pause interrupt. */
 const PAUSED_TURN = [
@@ -97,14 +50,6 @@ const RESUME_TURN = [
   },
 ];
 
-function replayOf(items: Array<Record<string, unknown>>) {
-  return async (_threadId: string, onEvent: (e: Record<string, unknown>) => void) => {
-    for (const item of items) {
-      onEvent({ event: item.event, ...(item.data as Record<string, unknown>) });
-    }
-  };
-}
-
 function pauseOn(messages: MessageRecord[]) {
   const bubble = messages.find((m) => m.id === 'history-assistant-0') as unknown as AssistantMessage;
   return bubble?.creditPauses?.['int-1'];
@@ -117,7 +62,7 @@ describe('history replay — credit pause resolution', () => {
     const { rt, read } = buildRuntime();
     api.replayThreadHistory.mockImplementation(replayOf([...PAUSED_TURN, ...RESUME_TURN]));
 
-    await loadConversationHistory(rt, deps);
+    await loadConversationHistory(rt, makeDeps());
 
     expect(pauseOn(read())?.status).toBe('resumed');
     // The re-arm path in useChatMessages reads exactly these two.
@@ -129,7 +74,7 @@ describe('history replay — credit pause resolution', () => {
     const { rt, read } = buildRuntime();
     api.replayThreadHistory.mockImplementation(replayOf(PAUSED_TURN));
 
-    await loadConversationHistory(rt, deps);
+    await loadConversationHistory(rt, makeDeps());
 
     expect(pauseOn(read())?.links).toEqual([
       {
@@ -151,13 +96,36 @@ describe('history replay — credit pause resolution', () => {
     const { rt, read } = buildRuntime();
     api.replayThreadHistory.mockImplementation(replayOf(PAUSED_TURN));
 
-    await loadConversationHistory(rt, deps);
+    await loadConversationHistory(rt, makeDeps());
 
     expect(pauseOn(read())?.status).toBe('pending');
     expect(rt.historyHasUnresolvedInterruptRef.current).toBe(true);
     expect(rt.unresolvedHistoryInterruptRef.current).toEqual([
       expect.objectContaining({ type: 'credit_pause', interruptId: 'int-1', proposalId: 'int-1' }),
     ]);
+  });
+
+  it('resolves a pause that replays after the resume that answered it', async () => {
+    // The reload-mid-resume ordering. Checkpoint replay is the source while
+    // the resume run is in flight (the SSE fallback only takes over once the
+    // turn is persisted), and it appends the thread's tip interrupt once at
+    // the very end, carrying no turn_index to place it — the resume commits
+    // the boundary that would place it only when the graph consumes the
+    // Command. So the pause arrives AFTER the stamp that answered it. The
+    // resume turn carrying no run_id is what says it is still running, and
+    // therefore that this pause is the original, replayed late.
+    const { rt, read } = buildRuntime();
+    api.replayThreadHistory.mockImplementation(
+      replayOf([PAUSED_TURN[0], ...RESUME_TURN, PAUSED_TURN[1]]),
+    );
+
+    await loadConversationHistory(rt, makeDeps());
+
+    expect(pauseOn(read())?.status).toBe('resumed');
+    // Nothing to re-arm: a queued entry here is a Resume button offered on a
+    // turn that is already running again.
+    expect(rt.historyHasUnresolvedInterruptRef.current).toBe(false);
+    expect(rt.unresolvedHistoryInterruptRef.current).toEqual([]);
   });
 
   it('un-resolves a pause the resume turn raised again', async () => {
@@ -183,7 +151,7 @@ describe('history replay — credit pause resolution', () => {
       ]),
     );
 
-    await loadConversationHistory(rt, deps);
+    await loadConversationHistory(rt, makeDeps());
 
     expect(pauseOn(read())?.status).toBe('pending');
     // Still one card: the re-raise restores, it never renders a second.
@@ -230,7 +198,7 @@ describe('history replay — credit pause resolution', () => {
       ]),
     );
 
-    await loadConversationHistory(rt, deps);
+    await loadConversationHistory(rt, makeDeps());
 
     expect(pauseOn(read())?.status).toBe('resumed');
     expect(rt.historyHasUnresolvedInterruptRef.current).toBe(false);
@@ -254,7 +222,7 @@ describe('history replay — credit pause resolution', () => {
       ]),
     );
 
-    await loadConversationHistory(rt, deps);
+    await loadConversationHistory(rt, makeDeps());
 
     expect(pauseOn(read())?.status).toBe('pending');
     expect(rt.historyHasUnresolvedInterruptRef.current).toBe(true);
