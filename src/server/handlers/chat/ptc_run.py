@@ -93,7 +93,8 @@ from src.config.settings import get_ptc_recursion_limit
 
 from .admission_gate import wait_or_steer
 from .error_handling import handle_workflow_error
-from src.server.services.llm.config import is_own_key_turn, resolve_llm_config
+from src.server.services.llm.clients import is_own_key_turn
+from src.server.services.llm.config import resolve_llm_config
 from .steering import drain_steering_return_event
 from .run_stream_reader import stream_from_log
 from .detached import fire_and_forget as _fire_and_forget
@@ -758,7 +759,6 @@ async def astream_ptc_workflow(
             token_callback=token_callback,
             request=request,
             effective_model=effective_model,
-            is_byok=is_byok,
             recursion_limit=get_ptc_recursion_limit(),
             plan_mode=effective_plan_mode,
             skill_contexts=skill_contexts,
