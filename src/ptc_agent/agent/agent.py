@@ -90,6 +90,7 @@ from ptc_agent.agent.prompts import (
     format_current_time,
     format_subagent_summary,
     get_loader,
+    guidance_template_vars,
 )
 from ptc_agent.agent.subagents import (
     SubagentCompiler,
@@ -129,10 +130,7 @@ try:
 except ImportError:
     HumanInTheLoopMiddleware = None  # type: ignore[misc,assignment]
 
-from ptc_agent.agent.middleware.model_resilience import (
-    ModelResilienceMiddleware,
-    build_fallback_pairs,
-)
+from ptc_agent.agent.turn import build_model_resilience_middleware, turn_model
 
 try:
     from langgraph.types import Checkpointer
@@ -143,8 +141,6 @@ logger = structlog.get_logger(__name__)
 
 
 DEFAULT_MAX_CONCURRENT_TASK_UNITS = 3
-DEFAULT_MAX_TASK_ITERATIONS = 3
-DEFAULT_MAX_GENERAL_ITERATIONS = 10
 
 
 @dataclass(frozen=True)
@@ -216,20 +212,25 @@ class PTCAgent:
         self,
         tool_summary: str,
         subagent_summary: str,
+        guidance: str,
         plan_mode: bool = False,
         thread_id: str | None = None,
         memory_enabled: bool = True,
         memo_enabled: bool = True,
         crawl_enabled: bool = False,
     ) -> str:
-        """Build the static system prompt (excludes time/profile for cacheability)."""
-        loader = get_loader()
+        """Build the static system prompt (excludes time/profile for cacheability).
 
+        ``guidance`` shapes the cached prefix, so the prefix varies by (model,
+        guidance) rather than (model), which only splits when a user pins the
+        level themselves.
+        """
+        loader = get_loader()
         return loader.get_system_prompt(
+            **guidance_template_vars(guidance),
             tool_summary=tool_summary,
             subagent_summary=subagent_summary,
             max_concurrent_task_units=DEFAULT_MAX_CONCURRENT_TASK_UNITS,
-            max_task_iterations=DEFAULT_MAX_TASK_ITERATIONS,
             ask_user_enabled=True,
             plan_mode=plan_mode,
             include_examples=True,
@@ -241,27 +242,6 @@ class PTCAgent:
             market_watch_enabled=self.config.feature_enabled("market_watch"),
             crawl_enabled=crawl_enabled,
         )
-
-    def _build_model_resilience_middleware(self) -> list[Any]:
-        """Retry + fallback + client-visible progress in a single middleware."""
-        fallbacks = build_fallback_pairs(self.config)
-        if fallbacks:
-            logger.debug(
-                "Model fallback enabled",
-                fallback_models=[name for name, _ in fallbacks],
-            )
-        return [
-            ModelResilienceMiddleware(
-                primary_name=self.config.llm.name,
-                primary_client=self.llm,
-                fallbacks=fallbacks,
-                max_retries=3,
-                backoff_factor=2.0,
-                initial_delay=1.0,
-                max_delay=60.0,
-                jitter=True,
-            )
-        ]
 
     def _get_tool_summary(self, mcp_registry: MCPRegistry) -> str:
         return build_tool_summary_from_registry(
@@ -481,7 +461,7 @@ class PTCAgent:
         Returns:
             Configured BackgroundSubagentOrchestrator wrapping the deepagent.
         """
-        model = llm if llm is not None else self.llm
+        turn = turn_model(self.config, llm, self.llm, flash=False)
 
         # Freeze current time for this request (refreshes on each new query)
         request_time = datetime.now(tz=UTC)
@@ -780,6 +760,7 @@ class PTCAgent:
         system_prompt = self._build_system_prompt(
             tool_summary,
             subagent_summary,
+            turn.guidance,
             plan_mode=plan_mode,
             thread_id=short_thread_id,
             memory_enabled=gates.memory,
@@ -803,7 +784,7 @@ class PTCAgent:
             compaction_config["_llm_client"] = client
         compaction = CompactionMiddleware.from_config(config=compaction_config, backend=backend)
 
-        model_resilience = self._build_model_resilience_middleware()
+        model_resilience = [build_model_resilience_middleware(self.config, turn)]
 
         # Inside model_resilience so it strips against the post-fallback model:
         # a vision primary falling back to a text-only candidate would otherwise
@@ -876,7 +857,7 @@ class PTCAgent:
         # RunWorkflow drops with it below.
         subagent_task_middleware = (
             SubAgentMiddleware(
-                default_model=model,
+                default_model=turn.client,
                 default_tools=list(tools),
                 subagents=subagents if subagents else [],
                 default_middleware=subagent_middleware,
@@ -959,7 +940,7 @@ class PTCAgent:
         ]
 
         agent: Any = create_agent(
-            model,
+            turn.client,
             system_prompt=system_prompt,
             tools=tools,
             middleware=deepagent_middleware,

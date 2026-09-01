@@ -30,6 +30,15 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+TASK_OUTPUT_DESCRIPTION = """Get the output of a background subagent task, or an overview of all of them.
+
+Args:
+    task_id: A specific task's ID, e.g. "k7Xm2p". Omit to see every task.
+    timeout: Seconds to block waiting for completion. Default 0, return now.
+
+Returns:
+    The task's result once it has completed, or its progress so far."""
+
 
 def _settled_label(task: BackgroundTask) -> str:
     """How a settled task is labeled in the aggregate views."""
@@ -584,14 +593,7 @@ def create_task_output_tool(middleware: BackgroundSubagentMiddleware) -> Structu
 
     return StructuredTool.from_function(
         name="TaskOutput",
-        description=(
-            "Get the output of background subagent tasks. Returns the result "
-            "if the task is completed, or shows progress if still running. "
-            "Use TaskOutput(task_id=\"k7Xm2p\") for a specific task or "
-            "TaskOutput() to see all tasks. "
-            "Set timeout (seconds) to block until completion: "
-            "TaskOutput(task_id=\"k7Xm2p\", timeout=60)."
-        ),
+        description=TASK_OUTPUT_DESCRIPTION,
         coroutine=task_output,
     )
 
