@@ -852,3 +852,53 @@ describe('ChatAgent API utilities', () => {
     });
   });
 });
+
+// The composer sends the tuning it is displaying, not the raw stored override,
+// because a tuning write is optimistic and not awaited. `false` and a cleared
+// level are answers, so the builder has to emit them: `resolve_turn_tuning`
+// reads `fast_mode if fast_mode is not None else tuning.fast_mode`, and an
+// omitted key sends the turn back to the row the pending write is replacing.
+describe('sendChatMessageStream — per-turn tuning is explicit', () => {
+  let originalFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: {
+        getReader: () => ({
+          read: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+        }),
+      },
+    });
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const send = async (effort: string | null, fast: boolean | null) => {
+    await sendChatMessageStream(
+      'hi', 'ws-1', 't-1', [], false, () => {}, null, 'ptc',
+      'en-US', 'America/New_York', null, null, 'gpt-5.5', effort, fast,
+    );
+    const [, opts] = (global.fetch as Mock).mock.calls[0];
+    return JSON.parse(opts.body) as Record<string, unknown>;
+  };
+
+  it('sends an explicit fast_mode false rather than dropping it', async () => {
+    expect(await send('low', false)).toMatchObject({ fast_mode: false, reasoning_effort: 'low' });
+  });
+
+  it('still sends fast_mode true', async () => {
+    expect(await send(null, true)).toMatchObject({ fast_mode: true });
+  });
+
+  it('omits both only when the turn names neither', async () => {
+    const body = await send(null, null);
+    expect(body.fast_mode).toBeUndefined();
+    expect(body.reasoning_effort).toBeUndefined();
+  });
+});

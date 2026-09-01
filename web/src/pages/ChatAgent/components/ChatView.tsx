@@ -12,6 +12,7 @@ import { useUpdatePreferences } from '@/hooks/useUpdatePreferences';
 import { useFeatureEnabled } from '@/hooks/useFeatures';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
+import { modelPrefs } from '@/lib/modelPreferences';
 import { updateCurrentUser } from '../../Dashboard/utils/api';
 import { getWorkspace, summarizeThread, offloadThread, getThreadShareStatus, updateThreadSharing, cancelSubagentTask } from '../utils/api';
 import { buildSharedServeUrl, buildWsfilesUrl } from './viewers/html/wsfilesUrl';
@@ -99,10 +100,10 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
 
   // The mode's currently-configured model — fallback initializer for the
   // suggestion pill's nextSendModel, mirroring ChatInput's own modePreferredModel.
-  const otherPreference = (preferences as Record<string, Record<string, unknown>> | null | undefined)?.other_preference;
+  const modelPreference = modelPrefs(preferences);
   const activePreferredModel = isFlashMode
-    ? ((otherPreference?.preferred_flash_model as string | undefined) || (otherPreference?.preferred_model as string | undefined) || null)
-    : ((otherPreference?.preferred_model as string | undefined) || null);
+    ? ((modelPreference.preferred_flash_model as string | undefined) || (modelPreference.preferred_model as string | undefined) || null)
+    : ((modelPreference.preferred_model as string | undefined) || null);
   // Live model selection reported by ChatInput (null until it reports in).
   const [inputModel, setInputModel] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState(initialWorkspaceName || '');
@@ -297,7 +298,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     chatInputRef.current?.setModel(model);
     try {
       await updatePreferencesAsync({
-        other_preference: isFlashMode ? { preferred_flash_model: model } : { preferred_model: model },
+        model_preference: isFlashMode ? { preferred_flash_model: model } : { preferred_model: model },
       });
       clearFallbackSuggestion();
       toast({ description: t('chat.modelSwitched', { model }) });
