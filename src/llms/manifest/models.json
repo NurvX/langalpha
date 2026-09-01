@@ -1,5 +1,6 @@
 {
   "gpt-5.5": {
+    "prompt_guidance": "lean",
     "model_id": "gpt-5.5",
     "provider": "openai",
     "display_name": "GPT-5.5",
@@ -17,9 +18,18 @@
         "effort": "medium",
         "summary": "auto"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "gpt-5.6-sol": {
+    "prompt_guidance": "lean",
     "model_id": "gpt-5.6-sol",
     "provider": "openai",
     "display_name": "GPT-5.6 Sol",
@@ -40,9 +50,19 @@
       "prompt_cache_options": {
         "mode": "implicit"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "gpt-5.6-terra": {
+    "prompt_guidance": "lean",
     "model_id": "gpt-5.6-terra",
     "provider": "openai",
     "display_name": "GPT-5.6 Terra",
@@ -63,7 +83,16 @@
       "prompt_cache_options": {
         "mode": "implicit"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "gpt-5.6-luna": {
     "model_id": "gpt-5.6-luna",
@@ -86,9 +115,19 @@
       "prompt_cache_options": {
         "mode": "implicit"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "claude-fable-5": {
+    "prompt_guidance": "lean",
     "model_id": "claude-fable-5",
     "provider": "anthropic",
     "visible": true,
@@ -109,9 +148,18 @@
       "output_config": {
         "effort": "high"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "high"
   },
   "claude-opus-5": {
+    "prompt_guidance": "lean",
     "model_id": "claude-opus-5",
     "provider": "anthropic",
     "visible": true,
@@ -132,9 +180,18 @@
       "output_config": {
         "effort": "high"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "high"
   },
   "claude-sonnet-5": {
+    "prompt_guidance": "lean",
     "model_id": "claude-sonnet-5",
     "provider": "anthropic",
     "visible": true,
@@ -155,9 +212,18 @@
       "output_config": {
         "effort": "medium"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "claude-opus-4-8": {
+    "prompt_guidance": "lean",
     "model_id": "claude-opus-4-8",
     "provider": "anthropic",
     "visible": true,
@@ -178,7 +244,15 @@
       "output_config": {
         "effort": "xhigh"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "xhigh"
   },
   "claude-sonnet-4-6": {
     "model_id": "claude-sonnet-4-6",
@@ -196,8 +270,18 @@
       "max_tokens": 64000,
       "thinking": {
         "type": "adaptive"
+      },
+      "output_config": {
+        "effort": "high"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "max"
+    ],
+    "reasoning_effort_default": "high"
   },
   "claude-haiku-4-5": {
     "model_id": "claude-haiku-4-5-20251001",
@@ -216,9 +300,16 @@
       "thinking": {
         "type": "enabled"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "gemini-3.1-pro": {
+    "prompt_guidance": "lean",
     "model_id": "gemini-3.1-pro-preview",
     "provider": "gemini",
     "visible": true,
@@ -234,7 +325,13 @@
     "parameters": {
       "include_thoughts": true,
       "thinking_level": "high"
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "reasoning_effort_default": "high"
   },
   "gemini-3.7-flash": {
     "model_id": "gemini-3.7-flash",
@@ -252,7 +349,13 @@
     "parameters": {
       "include_thoughts": true,
       "thinking_level": "medium"
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "gemini-3.1-flash-lite": {
     "model_id": "gemini-3.1-flash-lite-preview",
@@ -270,7 +373,14 @@
     "parameters": {
       "include_thoughts": true,
       "thinking_level": "medium"
-    }
+    },
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "gemini-3.1-flash-image": {
     "model_id": "gemini-3.1-flash-image-preview",
@@ -282,7 +392,16 @@
     "input_modalities": [
       "text",
       "image"
-    ]
+    ],
+    "parameters": {
+      "include_thoughts": true,
+      "thinking_level": "minimal"
+    },
+    "reasoning_efforts": [
+      "minimal",
+      "high"
+    ],
+    "reasoning_effort_default": "minimal"
   },
   "gpt-oss-120b": {
     "model_id": "gpt-oss-120b",
@@ -292,7 +411,13 @@
     },
     "input_modalities": [
       "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "reasoning_effort_default": "low"
   },
   "gpt-oss-20b": {
     "model_id": "gpt-oss-20b",
@@ -302,7 +427,13 @@
     },
     "input_modalities": [
       "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "reasoning_effort_default": "low"
   },
   "gpt-oss-20b-safe-groq": {
     "model_id": "openai/gpt-oss-safeguard-20b",
@@ -321,7 +452,13 @@
     },
     "input_modalities": [
       "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "reasoning_effort_default": "low"
   },
   "gpt-oss-20b-deepinfra": {
     "model_id": "openai/gpt-oss-20b",
@@ -340,7 +477,13 @@
     },
     "input_modalities": [
       "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "reasoning_effort_default": "low"
   },
   "gpt-oss-safeguard-20b-deepinfra": {
     "model_id": "openai/gpt-oss-safeguard-20b",
@@ -359,7 +502,13 @@
     },
     "input_modalities": [
       "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "reasoning_effort_default": "low"
   },
   "gpt-oss-120b-groq": {
     "model_id": "openai/gpt-oss-120b",
@@ -378,7 +527,13 @@
     },
     "input_modalities": [
       "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "reasoning_effort_default": "low"
   },
   "deepseek-v4-pro": {
     "model_id": "deepseek-v4-pro",
@@ -394,8 +549,18 @@
       "max_tokens": 384000,
       "thinking": {
         "type": "enabled"
+      },
+      "output_config": {
+        "effort": "high"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "high",
+      "max"
+    ],
+    "reasoning_effort_default": "high"
   },
   "deepseek-v4-flash": {
     "model_id": "deepseek-v4-flash",
@@ -411,8 +576,18 @@
       "max_tokens": 384000,
       "thinking": {
         "type": "enabled"
+      },
+      "output_config": {
+        "effort": "high"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "high",
+      "max"
+    ],
+    "reasoning_effort_default": "high"
   },
   "glm-5.1": {
     "model_id": "glm-5.1",
@@ -432,9 +607,15 @@
     },
     "input_modalities": [
       "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "none",
+      "high"
+    ],
+    "reasoning_effort_default": "high"
   },
   "glm-5.2": {
+    "prompt_guidance": "lean",
     "model_id": "glm-5.2",
     "provider": "z-ai",
     "visible": true,
@@ -453,7 +634,17 @@
     },
     "input_modalities": [
       "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "max"
   },
   "glm-5v-turbo": {
     "model_id": "glm-5v-turbo",
@@ -475,7 +666,12 @@
       "text",
       "image",
       "pdf"
-    ]
+    ],
+    "reasoning_efforts": [
+      "none",
+      "high"
+    ],
+    "reasoning_effort_default": "high"
   },
   "glm-5-turbo": {
     "model_id": "glm-5-turbo",
@@ -495,7 +691,12 @@
     },
     "input_modalities": [
       "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "none",
+      "high"
+    ],
+    "reasoning_effort_default": "high"
   },
   "glm-5-turbo-cn": {
     "model_id": "glm-5-turbo",
@@ -515,7 +716,12 @@
     },
     "input_modalities": [
       "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "none",
+      "high"
+    ],
+    "reasoning_effort_default": "high"
   },
   "glm-5.1-cn": {
     "model_id": "glm-5.1",
@@ -535,9 +741,15 @@
     },
     "input_modalities": [
       "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "none",
+      "high"
+    ],
+    "reasoning_effort_default": "high"
   },
   "glm-5.2-cn": {
+    "prompt_guidance": "lean",
     "model_id": "glm-5.2",
     "provider": "z-ai-cn",
     "visible": true,
@@ -556,7 +768,17 @@
     },
     "input_modalities": [
       "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "max"
   },
   "glm-5v-turbo-cn": {
     "model_id": "glm-5v-turbo",
@@ -578,7 +800,12 @@
       "text",
       "image",
       "pdf"
-    ]
+    ],
+    "reasoning_efforts": [
+      "none",
+      "high"
+    ],
+    "reasoning_effort_default": "high"
   },
   "minimax-m3": {
     "model_id": "MiniMax-M3",
@@ -590,49 +817,21 @@
     "parameters": {
       "max_tokens": 128000,
       "thinking": {
-        "type": "enabled"
+        "type": "adaptive"
       }
     },
     "input_modalities": [
       "text",
       "image"
-    ]
-  },
-  "minimax-m2.7": {
-    "model_id": "MiniMax-M2.7",
-    "provider": "minimax",
-    "visible": true,
-    "speed": 2,
-    "intelligence": 4,
-    "context": 200000,
-    "parameters": {
-      "max_tokens": 128000,
-      "thinking": {
-        "type": "enabled"
-      }
-    },
-    "input_modalities": [
-      "text"
-    ]
-  },
-  "minimax-m2.7-highspeed": {
-    "model_id": "MiniMax-M2.7-highspeed",
-    "provider": "minimax",
-    "visible": true,
-    "speed": 2,
-    "intelligence": 4,
-    "context": 200000,
-    "parameters": {
-      "max_tokens": 128000,
-      "thinking": {
-        "type": "enabled"
-      }
-    },
-    "input_modalities": [
-      "text"
-    ]
+    ],
+    "reasoning_efforts": [
+      "none",
+      "high"
+    ],
+    "reasoning_effort_default": "high"
   },
   "qwen3.8-max": {
+    "prompt_guidance": "lean",
     "model_id": "qwen3.8-max",
     "provider": "dashscope",
     "visible": true,
@@ -646,8 +845,20 @@
       "video"
     ],
     "extra_body": {
-      "enable_thinking": true
-    }
+      "reasoning": {
+        "effort": "xhigh"
+      }
+    },
+    "reasoning_efforts": [
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "xhigh"
   },
   "qwen3.7-plus": {
     "model_id": "qwen3.7-plus",
@@ -663,8 +874,20 @@
       "video"
     ],
     "extra_body": {
-      "enable_thinking": true
-    }
+      "reasoning": {
+        "effort": "xhigh"
+      }
+    },
+    "reasoning_efforts": [
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "xhigh"
   },
   "qwen3.7-flash": {
     "model_id": "qwen3.7-flash",
@@ -680,10 +903,19 @@
       "video"
     ],
     "extra_body": {
-      "enable_thinking": true
-    }
+      "reasoning": {
+        "effort": "medium"
+      }
+    },
+    "reasoning_efforts": [
+      "none",
+      "minimal",
+      "medium"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "qwen3.8-max-intl": {
+    "prompt_guidance": "lean",
     "model_id": "qwen3.8-max",
     "provider": "dashscope-intl",
     "visible": true,
@@ -697,8 +929,20 @@
       "video"
     ],
     "extra_body": {
-      "enable_thinking": true
-    }
+      "reasoning": {
+        "effort": "xhigh"
+      }
+    },
+    "reasoning_efforts": [
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "xhigh"
   },
   "qwen3.7-plus-intl": {
     "model_id": "qwen3.7-plus",
@@ -714,8 +958,20 @@
       "video"
     ],
     "extra_body": {
-      "enable_thinking": true
-    }
+      "reasoning": {
+        "effort": "xhigh"
+      }
+    },
+    "reasoning_efforts": [
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "xhigh"
   },
   "qwen3.7-flash-intl": {
     "model_id": "qwen3.7-flash",
@@ -731,10 +987,19 @@
       "video"
     ],
     "extra_body": {
-      "enable_thinking": true
-    }
+      "reasoning": {
+        "effort": "medium"
+      }
+    },
+    "reasoning_efforts": [
+      "none",
+      "minimal",
+      "medium"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "kimi-k3": {
+    "prompt_guidance": "lean",
     "model_id": "kimi-k3",
     "provider": "moonshot",
     "visible": true,
@@ -744,9 +1009,19 @@
     "input_modalities": [
       "text",
       "image"
-    ]
+    ],
+    "extra_body": {
+      "reasoning_effort": "max"
+    },
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "max"
+    ],
+    "reasoning_effort_default": "max"
   },
   "kimi-k3-coding": {
+    "prompt_guidance": "lean",
     "model_id": "kimi-k3",
     "provider": "moonshot-coding",
     "visible": true,
@@ -756,75 +1031,16 @@
     "input_modalities": [
       "text",
       "image"
-    ]
-  },
-  "kimi-k2.6": {
-    "model_id": "kimi-k2.6",
-    "provider": "moonshot",
-    "visible": true,
-    "speed": 2,
-    "intelligence": 4,
-    "context": 256000,
-    "input_modalities": [
-      "text",
-      "image"
     ],
-    "parameters": {
-      "thinking": {
-        "type": "enabled"
-      }
-    }
-  },
-  "kimi-k2.6-coding": {
-    "model_id": "kimi-k2.6",
-    "provider": "moonshot-coding",
-    "visible": true,
-    "speed": 2,
-    "intelligence": 4,
-    "context": 256000,
-    "input_modalities": [
-      "text",
-      "image"
+    "extra_body": {
+      "reasoning_effort": "max"
+    },
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "max"
     ],
-    "parameters": {
-      "thinking": {
-        "type": "enabled"
-      }
-    }
-  },
-  "kimi-k2.5": {
-    "model_id": "kimi-k2.5",
-    "provider": "moonshot",
-    "visible": true,
-    "speed": 1,
-    "intelligence": 3,
-    "context": 256000,
-    "input_modalities": [
-      "text",
-      "image"
-    ],
-    "parameters": {
-      "thinking": {
-        "type": "enabled"
-      }
-    }
-  },
-  "kimi-k2.5-coding": {
-    "model_id": "kimi-for-coding",
-    "provider": "moonshot-coding",
-    "visible": true,
-    "speed": 1,
-    "intelligence": 3,
-    "context": 256000,
-    "input_modalities": [
-      "text",
-      "image"
-    ],
-    "parameters": {
-      "thinking": {
-        "type": "enabled"
-      }
-    }
+    "reasoning_effort_default": "max"
   },
   "gpt-5.3-codex-spark-oauth": {
     "model_id": "gpt-5.3-codex-spark",
@@ -848,9 +1064,16 @@
         "reasoning.encrypted_content"
       ],
       "store": false
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "gpt-5.5-oauth": {
+    "prompt_guidance": "lean",
     "model_id": "gpt-5.5",
     "provider": "codex-oauth",
     "visible": true,
@@ -871,9 +1094,18 @@
         "reasoning.encrypted_content"
       ],
       "store": false
-    }
+    },
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "gpt-5.6-sol-oauth": {
+    "prompt_guidance": "lean",
     "model_id": "gpt-5.6-sol",
     "provider": "codex-oauth",
     "visible": true,
@@ -894,9 +1126,19 @@
         "reasoning.encrypted_content"
       ],
       "store": false
-    }
+    },
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "gpt-5.6-terra-oauth": {
+    "prompt_guidance": "lean",
     "model_id": "gpt-5.6-terra",
     "provider": "codex-oauth",
     "visible": true,
@@ -917,7 +1159,16 @@
         "reasoning.encrypted_content"
       ],
       "store": false
-    }
+    },
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "gpt-5.6-luna-oauth": {
     "model_id": "gpt-5.6-luna",
@@ -940,7 +1191,16 @@
         "reasoning.encrypted_content"
       ],
       "store": false
-    }
+    },
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "claude-sonnet-4-6-oauth": {
     "model_id": "claude-sonnet-4-6",
@@ -958,10 +1218,21 @@
       "max_tokens": 64000,
       "thinking": {
         "type": "adaptive"
+      },
+      "output_config": {
+        "effort": "high"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "max"
+    ],
+    "reasoning_effort_default": "high"
   },
   "claude-fable-5-oauth": {
+    "prompt_guidance": "lean",
     "model_id": "claude-fable-5",
     "provider": "claude-oauth",
     "visible": true,
@@ -982,9 +1253,18 @@
       "output_config": {
         "effort": "high"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "high"
   },
   "claude-opus-5-oauth": {
+    "prompt_guidance": "lean",
     "model_id": "claude-opus-5",
     "provider": "claude-oauth",
     "visible": true,
@@ -1005,9 +1285,18 @@
       "output_config": {
         "effort": "high"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "high"
   },
   "claude-sonnet-5-oauth": {
+    "prompt_guidance": "lean",
     "model_id": "claude-sonnet-5",
     "provider": "claude-oauth",
     "visible": true,
@@ -1028,9 +1317,18 @@
       "output_config": {
         "effort": "medium"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "claude-opus-4-8-oauth": {
+    "prompt_guidance": "lean",
     "model_id": "claude-opus-4-8",
     "provider": "claude-oauth",
     "visible": true,
@@ -1051,7 +1349,15 @@
       "output_config": {
         "effort": "xhigh"
       }
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "xhigh"
   },
   "claude-haiku-4-5-oauth": {
     "model_id": "claude-haiku-4-5-20251001",
@@ -1071,7 +1377,13 @@
         "type": "enabled",
         "budget_tokens": 8000
       }
-    }
+    },
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "reasoning_effort_default": "medium"
   },
   "embedding-small": {
     "model_id": "text-embedding-3-small",
@@ -1095,6 +1407,7 @@
     }
   },
   "claude-opus-4-8-oauth-1m": {
+    "prompt_guidance": "lean",
     "model_id": "claude-opus-4-8",
     "provider": "claude-oauth",
     "visible": true,
@@ -1119,6 +1432,14 @@
     "context_window": 1000000,
     "additional_betas": [
       "context-1m-2025-08-07"
-    ]
+    ],
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "xhigh"
   }
 }

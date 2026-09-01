@@ -662,39 +662,6 @@
           "cached_input": 0.12,
           "unit": "per_1m_tokens"
         }
-      },
-      {
-        "id": "minimax-m2.7",
-        "name": "MiniMax-M2.7",
-        "alias": [
-          "MiniMax-M2.7",
-          "minimax-m2.7"
-        ],
-        "is_reasoning": false,
-        "description": "MiniMax's M2.7 model for commercial use",
-        "pricing": {
-          "input": 0.3,
-          "output": 1.2,
-          "cached_input": 0.06,
-          "cache_storage": 0.375,
-          "unit": "per_1m_tokens"
-        }
-      },
-      {
-        "id": "minimax-m2.7-highspeed",
-        "name": "MiniMax-M2.7-Highspeed",
-        "alias": [
-          "MiniMax-M2.7-highspeed"
-        ],
-        "is_reasoning": false,
-        "description": "MiniMax's M2.7 Highspeed model with faster inference and higher output pricing",
-        "pricing": {
-          "input": 0.6,
-          "output": 2.4,
-          "cached_input": 0.06,
-          "cache_storage": 0.375,
-          "unit": "per_1m_tokens"
-        }
       }
     ],
     "dashscope": [
@@ -950,32 +917,6 @@
           "output": 15.0,
           "unit": "per_1m_tokens"
         }
-      },
-      {
-        "id": "kimi-k2.6",
-        "name": "Kimi K2.6",
-        "is_reasoning": true,
-        "description": "Moonshot AI's Kimi K2.6 multi-modal model with extended context",
-        "context_window": 262144,
-        "pricing": {
-          "input": 0.95,
-          "cached_input": 0.16,
-          "output": 4.0,
-          "unit": "per_1m_tokens"
-        }
-      },
-      {
-        "id": "kimi-k2.5",
-        "name": "Kimi K2.5",
-        "is_reasoning": true,
-        "description": "Moonshot AI's Kimi K2.5 multi-modal model with extended context",
-        "context_window": 262144,
-        "pricing": {
-          "input": 0.6,
-          "cached_input": 0.1,
-          "output": 3.0,
-          "unit": "per_1m_tokens"
-        }
       }
     ],
     "moonshot-coding": [
@@ -989,45 +930,6 @@
           "input": 3.0,
           "cached_input": 0.3,
           "output": 15.0,
-          "unit": "per_1m_tokens"
-        }
-      },
-      {
-        "id": "kimi-for-coding",
-        "name": "Kimi for Coding",
-        "is_reasoning": true,
-        "description": "Moonshot AI's Kimi model optimized for coding tasks",
-        "context_window": 262144,
-        "pricing": {
-          "input": 0.6,
-          "cached_input": 0.1,
-          "output": 3.0,
-          "unit": "per_1m_tokens"
-        }
-      },
-      {
-        "id": "kimi-k2.6",
-        "name": "Kimi K2.6",
-        "is_reasoning": true,
-        "description": "Moonshot AI's Kimi K2.6 multi-modal model with extended context",
-        "context_window": 262144,
-        "pricing": {
-          "input": 0.95,
-          "cached_input": 0.16,
-          "output": 4.0,
-          "unit": "per_1m_tokens"
-        }
-      },
-      {
-        "id": "kimi-k2.5",
-        "name": "Kimi K2.5",
-        "is_reasoning": true,
-        "description": "Moonshot AI's Kimi K2.5 multi-modal model with extended context",
-        "context_window": 262144,
-        "pricing": {
-          "input": 0.6,
-          "cached_input": 0.1,
-          "output": 3.0,
           "unit": "per_1m_tokens"
         }
       }
@@ -1135,7 +1037,7 @@
       "variants": {
         "dashscope": {
           "sdk": "openai",
-          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
+          "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
           "use_response_api": true,
           "default_headers": {
             "x-dashscope-session-cache": "enabled"

@@ -11,7 +11,15 @@ from langchain_deepseek import ChatDeepSeek
 from langchain_qwq import ChatQwen
 
 from .endpoints import is_official_openai_endpoint
+from .model_spec import (
+    ModelSpec,
+    canonical_reasoning_efforts,
+    clamp_reasoning_effort,
+    default_reasoning_effort,
+)
+from .preferences import compaction_profile_for
 from .pricing_utils import get_price_tier
+from .reasoning import apply_reasoning_effort
 from .reasoning_lineage import ROUTE_ENDPOINT_SEP
 
 load_dotenv()
@@ -187,6 +195,28 @@ class ModelConfig:
             ):
                 if key in model_info:
                     entry[key] = model_info[key]
+            # Reasoning levels this model actually honors. Absent = no selector
+            # at all, which is the truthful answer for a model with no reasoning
+            # parameters — the frontend must not synthesize a default ladder.
+            efforts = self.get_reasoning_efforts(model_name)
+            if efforts:
+                entry["reasoning_efforts"] = efforts
+                entry["reasoning_effort_default"] = self.get_reasoning_effort_default(
+                    model_name
+                )
+            # What the model itself asks for when the user has picked nothing —
+            # the frontend prints it so "Default" names a level rather than an
+            # unknown. Absent means the fail-safe (detailed) applies.
+            guidance = self.get_prompt_guidance(model_name)
+            if guidance:
+                entry["prompt_guidance"] = guidance
+            # Same contract for the compaction preset: the frontend prints it
+            # so a per-model row names its default instead of showing a bare
+            # "Default". Derived here, never in the client, so the band table
+            # has one home.
+            profile = self.get_compaction_profile(model_name)
+            if profile:
+                entry["compaction_profile"] = profile
             # Cost tier (1-5) derived live from canonical providers.json pricing —
             # not stored in models.json, so it auto-syncs when prices change.
             price_tier = get_price_tier(model_info.get("model_id", model_name), provider)
@@ -214,6 +244,60 @@ class ModelConfig:
             return ["text"]
         return model_config.get("input_modalities", ["text"])
 
+    def get_reasoning_efforts(self, model_name: str) -> list[str]:
+        """Reasoning levels this model actually honors, in canonical order.
+
+        Empty means the model has no reasoning control at all, which is the
+        truthful answer for an entry with no reasoning parameters and the
+        reason this returns a list rather than a default ladder.
+        """
+        entry = self.llm_config.get(model_name) or {}
+        return list(canonical_reasoning_efforts(entry.get("reasoning_efforts")))
+
+    def get_reasoning_effort_default(self, model_name: str) -> str | None:
+        """Manifest-entry wrapper over :func:`default_reasoning_effort`."""
+        entry = self.llm_config.get(model_name) or {}
+        return default_reasoning_effort(
+            self.get_reasoning_efforts(model_name),
+            entry.get("reasoning_effort_default"),
+        )
+
+    def resolve_reasoning_effort(self, model_name: str, requested: str) -> str | None:
+        """Manifest-entry wrapper over :func:`clamp_reasoning_effort`.
+
+        Unhonored input is normal here rather than a bug: the account-wide
+        default is chosen with no model in hand, and stored preferences outlive
+        manifest edits.
+        """
+        return clamp_reasoning_effort(
+            self.get_reasoning_efforts(model_name),
+            self.get_reasoning_effort_default(model_name),
+            requested,
+        )
+
+    def get_prompt_guidance(self, model_name: str) -> str | None:
+        """How much prompt scaffolding this model needs: ``"lean"``,
+        ``"detailed"``, or None when the manifest does not say.
+
+        Deliberately separate from the ``intelligence`` score, which is
+        editorial copy for the model picker — a wording change there must not
+        move agent behavior. Reads the raw entry (no ``visible`` gate) because
+        flash/compaction/fetch models are not all listed in the picker.
+        """
+        model_config = self.llm_config.get(model_name)
+        if not model_config:
+            return None
+        value = model_config.get("prompt_guidance")
+        return value if value in ("lean", "detailed") else None
+
+    def get_compaction_profile(self, model_name: str) -> str | None:
+        """Manifest-entry wrapper over :func:`compaction_profile_for`.
+
+        The rule itself lives in ``preferences`` so a user-defined model, which
+        has no manifest row to name here, resolves by the same one.
+        """
+        return compaction_profile_for(self.llm_config.get(model_name))
+
 
 _UNSET = object()  # Sentinel to distinguish "no override" from "override to None"
 
@@ -229,6 +313,19 @@ def _derive_codex_affinity(cache_key: str) -> str:
         return str(uuid.UUID(str(cache_key)))
     except ValueError:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"codex-session:{cache_key}"))
+
+
+def _client_service_tier(client) -> str | None:
+    """The service tier the built client will actually send, if any.
+
+    Read off the client rather than off the parameters we assembled: an SDK with
+    no first-class field relocates the value into ``model_kwargs``, and one that
+    discards it never sends it at all.
+    """
+    tier = getattr(client, "service_tier", None)
+    if tier:
+        return tier
+    return (getattr(client, "model_kwargs", None) or {}).get("service_tier")
 
 
 def _merged_default_headers(params: dict, *bases: dict | None) -> dict:
@@ -270,12 +367,6 @@ class LLM:
     # Class-level model config instance
     _model_config = None
 
-    # Both real constructors set this; the default only covers instances built
-    # attribute-by-attribute off ``__new__``. Downstream reads fail closed
-    # (get_input_modalities treats an unknown model as text-only), so a missing
-    # stamp costs a stripped image block, never a rejected request.
-    custom_model_name: str | None = None
-
     @classmethod
     def get_model_config(cls) -> ModelConfig:
         """Get or create the model configuration singleton."""
@@ -285,7 +376,7 @@ class LLM:
 
     def __init__(
         self,
-        model: str,
+        model: str | ModelSpec,
         api_key: str | None = None,
         base_url_override=_UNSET,
         reasoning_effort: str | None = None,
@@ -295,7 +386,8 @@ class LLM:
         Initializes the LLM factory.
 
         Args:
-            model: The customized model name (key in llm_config.json).
+            model: A models.json key, or a :class:`ModelSpec` for a model that
+                has no manifest row (user-defined).
             api_key: Optional API key override (e.g. from BYOK).
             base_url_override: Override base URL. Use _UNSET (default) for no override,
                 None to clear to SDK default, or a string for a custom URL.
@@ -303,43 +395,59 @@ class LLM:
             **override_params: Additional parameters to override defaults.
         """
         self.model_config = self.get_model_config()
+        spec = (
+            model
+            if isinstance(model, ModelSpec)
+            else ModelSpec.from_manifest(self.model_config, model)
+        )
 
-        # Get model configuration from models.json
-        model_info = self.model_config.get_model_config(model)
-        if not model_info:
-            raise ValueError(f"Model {model} not found in models.json")
-
-        self.custom_model_name = model  # Store the custom name
-        self.model = model_info["model_id"]  # Use model_id for API calls
-        self.provider = model_info["provider"]
+        self.custom_model_name = spec.name  # Store the custom name
+        self.model = spec.model_id  # Use model_id for API calls
+        self.provider = spec.provider
 
         # System serving: route through platform proxy when no BYOK key
-        if not api_key and model_info.get("system_provider"):
-            self.provider = model_info["system_provider"]
+        if not api_key and spec.system_provider:
+            self.provider = spec.system_provider
 
         # Deep copy: reasoning-effort overrides mutate nested dicts (e.g.
-        # extra_body.thinking); a shallow copy would contaminate the
-        # process-wide manifest for every subsequent request.
-        self.parameters = copy.deepcopy(model_info.get("parameters", {}))
-        self.extra_body = copy.deepcopy(model_info.get("extra_body", {}))
+        # extra_body.thinking); a shallow copy would contaminate the spec, and
+        # through it the process-wide manifest, for every subsequent request.
+        self.parameters = copy.deepcopy(spec.parameters)
+        self.extra_body = copy.deepcopy(spec.extra_body)
 
         # Override with any provided parameters
         self.parameters.update(override_params)
 
-        # Apply reasoning effort override (before provider resolution)
+        # Apply reasoning effort override (before provider resolution).
+        # Validation lives here because this is the only point that sees both
+        # the requested level and the model's declared enum; past it the mapper
+        # is pure translation. A level the model does not honor steps down to
+        # the nearest one it does, rather than reaching the provider as a hard
+        # error; only a level outside the vocabulary falls back to the default.
+        # The clamp reads the spec's own ladder rather than a manifest lookup,
+        # which is what a user-defined model would miss.
+        # The resolved level, not the requested one, is what the call reports:
+        # a request above the model's ladder is stepped down here, so the two
+        # differ. With no request at all the parameters already encode the
+        # model's own default, which is what that case reports.
         if reasoning_effort:
-            from src.llms.reasoning import apply_reasoning_effort
-
-            apply_reasoning_effort(reasoning_effort, self.parameters, self.extra_body)
+            effort = clamp_reasoning_effort(
+                spec.reasoning_efforts, spec.reasoning_effort_default, reasoning_effort
+            )
+            if effort:
+                apply_reasoning_effort(effort, self.parameters, self.extra_body)
+            self.resolved_reasoning_effort = effort
+        else:
+            self.resolved_reasoning_effort = spec.reasoning_effort_default
 
         # Store optional API key override (BYOK)
         self.api_key_override = api_key
 
-        # Get provider info from manifest
+        # Get provider info from manifest (empty for a provider it does not list)
         self.provider_info = self.model_config.get_provider_info(self.provider)
 
         # Extract provider configuration
-        self.sdk = self.provider_info.get("sdk")
+        self.sdk = self.provider_info.get("sdk") or spec.sdk_fallback
         self.env_key = self.provider_info.get("env_key")
         self.base_url = self.provider_info.get("base_url")
 
@@ -348,7 +456,12 @@ class LLM:
             self.base_url = base_url_override
 
         # Store response API flags for OpenAI SDK
-        self.use_response_api = self.provider_info.get("use_response_api", False) if self.sdk in ("openai", "codex") else False
+        response_api = (
+            self.provider_info.get("use_response_api", False)
+            if spec.use_response_api_override is None
+            else spec.use_response_api_override
+        )
+        self.use_response_api = bool(response_api) and self.sdk in ("openai", "codex")
         self.use_previous_response_id = self.provider_info.get("use_previous_response_id", False) if self.sdk == "openai" else False
         # prompt_cache_key: opt-in for sdk="openai"; codex applies it always-on.
         self.prompt_cache_key_enabled = (
@@ -357,7 +470,7 @@ class LLM:
 
         # Optional default headers from provider config, with model-level beta merging
         self.default_headers = self.provider_info.get("default_headers")
-        self._merge_additional_betas(model_info.get("additional_betas"))
+        self._merge_additional_betas(spec.additional_betas)
 
     def _merge_additional_betas(self, additional_betas: list[str] | None) -> None:
         """Merge model-level additional_betas into the anthropic-beta header."""
@@ -375,6 +488,7 @@ class LLM:
         api_key: str | None = None,
         base_url_override=_UNSET,
         cache_key: str | None = None,
+        reasoning_effort: str | None = None,
         **override_params,
     ):
         """
@@ -390,54 +504,24 @@ class LLM:
             cache_key: Session-stable key sent as ``prompt_cache_key`` on
                 OpenAI/Codex requests (always-on for Codex, which also derives
                 session-affinity headers from it; opt-in for OpenAI).
+            reasoning_effort: Optional reasoning effort level, clamped against
+                the ladder the config declares, or the one it inherits from the
+                built-in whose name it took.
             **override_params: Additional parameters to override defaults.
 
         Returns:
             A LangChain chat model instance.
         """
-        instance = cls.__new__(cls)
-        instance.model_config = cls.get_model_config()
-        instance.custom_model_name = config.get("name", config["model_id"])
-        instance.model = config["model_id"]
-        instance.provider = config["provider"]
-        instance.parameters = copy.deepcopy(config.get("parameters") or {})
-        instance.extra_body = copy.deepcopy(config.get("extra_body") or {})
-        instance.parameters.update(override_params)
-        instance.api_key_override = api_key
-
-        # Get provider info from manifest (empty dict for unknown providers)
-        instance.provider_info = instance.model_config.get_provider_info(instance.provider)
-
-        # Extract provider configuration; default to openai SDK for unknown providers
-        # (most custom endpoints are OpenAI-compatible)
-        instance.sdk = instance.provider_info.get("sdk") or "openai"
-        instance.env_key = instance.provider_info.get("env_key")
-        instance.base_url = instance.provider_info.get("base_url")
-
-        if base_url_override is not _UNSET:
-            instance.base_url = base_url_override
-
-        # use_response_api: explicit config override > provider_info > False
-        if config.get("_use_response_api") is not None:
-            instance.use_response_api = bool(config["_use_response_api"]) and instance.sdk in ("openai", "codex")
-        else:
-            instance.use_response_api = (
-                instance.provider_info.get("use_response_api", False)
-                if instance.sdk in ("openai", "codex")
-                else False
-            )
-        instance.use_previous_response_id = (
-            instance.provider_info.get("use_previous_response_id", False)
-            if instance.sdk == "openai"
-            else False
+        name = config.get("name")
+        instance = cls(
+            ModelSpec.from_custom(
+                config, cls.get_model_config().get_model_config(name) if name else None
+            ),
+            api_key=api_key,
+            base_url_override=base_url_override,
+            reasoning_effort=reasoning_effort,
+            **override_params,
         )
-        instance.prompt_cache_key_enabled = (
-            bool(instance.provider_info.get("prompt_cache_key", False))
-            if instance.sdk == "openai"
-            else False
-        )
-        instance.default_headers = instance.provider_info.get("default_headers")
-        instance._merge_additional_betas(config.get("additional_betas"))
         return instance.get_llm(cache_key=cache_key)
 
     def _resolve_billing_type(self) -> str:
@@ -508,6 +592,7 @@ class LLM:
         # off-manifest endpoints by base_url to keep reasoning lineage separate,
         # so it identifies a trust boundary, not a set of rates.
         billing_type = self._resolve_billing_type()
+        service_tier = _client_service_tier(client)
         existing = client.metadata or {}
         client.metadata = {
             **existing,
@@ -516,6 +601,21 @@ class LLM:
             "manifest_model": self.custom_model_name,
             "pricing_model_id": self.model,
             "pricing_provider": self.provider,
+            # Tuning that shapes this call rather than the turn. On the graph
+            # run these would be the parent's, inherited unchanged by every
+            # subagent call that ran a different model at a different level.
+            #
+            # The two are independent readings, not one signal. The effort is
+            # the level that went out, stepped down from the request where the
+            # ladder is shorter. The tier is present only when this client
+            # carries the parameter, which most routes never pass at all, so its
+            # absence says nothing about how the call was served.
+            **(
+                {"reasoning_effort": self.resolved_reasoning_effort}
+                if self.resolved_reasoning_effort
+                else {}
+            ),
+            **({"service_tier": service_tier} if service_tier else {}),
         }
 
         return client
@@ -798,6 +898,22 @@ class LLM:
         return ChatGoogleGenerativeAI(**params)
 
 
+def stamp_call_metadata(client: Any, **fields: Any) -> None:
+    """Add turn-shaping facts to a built client's metadata, in place.
+
+    The counterpart to the stamp in ``LLM.get_llm``, for facts the factory does
+    not see (the resolved prompt guidance, the compaction preset). They belong
+    on the client rather than the graph run because a subagent inherits graph
+    metadata wholesale while running its own model, so a value put there is
+    asserted for calls it was never true of. Clients are built per turn, so the
+    added keys stay local to this one. ``None`` fields are dropped: an absent
+    key reads as "not resolved", where a null reads as a resolved nothing.
+    """
+    populated = {k: v for k, v in fields.items() if v is not None}
+    if populated:
+        client.metadata = {**(client.metadata or {}), **populated}
+
+
 # Backward compatibility functions
 def create_llm(
     model: str,
@@ -844,6 +960,7 @@ def create_llm_from_custom(
     api_key: str | None = None,
     base_url=_UNSET,
     cache_key: str | None = None,
+    reasoning_effort: str | None = None,
     **kwargs,
 ):
     """
@@ -856,13 +973,20 @@ def create_llm_from_custom(
         cache_key: Session-stable key sent as ``prompt_cache_key`` on
             OpenAI/Codex requests (always-on for Codex, which also derives
             session-affinity headers from it; opt-in for OpenAI).
+        reasoning_effort: Optional reasoning effort level, clamped against the
+            ladder the config itself declares.
         **kwargs: Additional parameters to override.
 
     Returns:
         A LangChain chat model instance.
     """
     return LLM.from_custom_config(
-        config, api_key=api_key, base_url_override=base_url, cache_key=cache_key, **kwargs
+        config,
+        api_key=api_key,
+        base_url_override=base_url,
+        cache_key=cache_key,
+        reasoning_effort=reasoning_effort,
+        **kwargs,
     )
 
 
