@@ -251,7 +251,7 @@ def main() -> None:
 
     matched, unmatched, changes = [], [], 0
     print(f"basis={args.basis}  fields={','.join(sorted(write_fields))}\n")
-    print(f"{'model':30s} {'cur s/i':>7}  {'AA II':>6} {'AA tps':>7}  {'new s/i':>7}  AA row (effort matched)")
+    print(f"{'model':30s} {'cur s/i':>7}  {'AA II':>6} {'AA tps':>7}  {'new s/i':>7}  AA row ({args.basis})")
     print("-" * 100)
     for k in sorted(visible):
         cur = manifest[k]
