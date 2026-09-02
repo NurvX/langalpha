@@ -1,7 +1,7 @@
 """Tests for src.llms.reasoning — the declared-surface effort mapper.
 
 The mapper no longer guesses a vendor from the keys an entry happens to carry.
-Each entry names its own ``reasoning_surface``, so what is worth locking here is
+Each entry names its own surface, so what is worth locking here is
 the block's contract: ``write`` takes the level verbatim, ``on`` layers under it,
 ``off`` replaces both rather than layering over them, and a path outside the
 allowlists is refused rather than written somewhere the vendor ignores.
@@ -70,7 +70,7 @@ class TestWrite:
         p, _ = run(level, {"write": "parameters.reasoning.effort"})
         assert p == {"reasoning": {"effort": level}}
 
-    @pytest.mark.parametrize("path", sorted(WRITE_PATHS))
+    @pytest.mark.parametrize("path", WRITE_PATHS)
     def test_every_allowed_path_is_reachable(self, path):
         """A path in the allowlist no branch can reach would be a dead
         declaration that reports a level and sends nothing."""
@@ -278,3 +278,44 @@ class TestValidateSurface:
         buttons, and no path for the chosen one to be written to."""
         with pytest.raises(ReasoningSurfaceError, match="nowhere to write"):
             validate_surface("m", {"efforts": ["low", "high"], "default": "high"})
+
+    def test_a_dial_is_not_a_patch_target(self):
+        """The two allowlists are disjoint: an `off` free to name the entry's
+        own graded write is how a switch and a dial end up contradicting each
+        other in one payload."""
+        assert not set(WRITE_PATHS) & PATCH_PATHS
+        with pytest.raises(ReasoningSurfaceError, match="not a known patch path"):
+            validate_surface("m", {"off": {"parameters.output_config.effort": "high"}})
+
+    def test_an_on_without_an_off_is_refused(self):
+        """Verified against the mapper before it was refused: at `none` this
+        emits `thinking.type: enabled` beside `effort: none`, which is the
+        surface enabling thinking on the rung that asks for none."""
+        with pytest.raises(ReasoningSurfaceError, match="declares no `off`"):
+            validate_surface(
+                "m",
+                {
+                    "efforts": ["none", "high"],
+                    "write": "parameters.output_config.effort",
+                    "on": {"parameters.thinking.type": "enabled"},
+                },
+            )
+
+    def test_an_unreachable_off_is_refused(self):
+        """The clamp never hands the mapper a level outside the ladder, so an
+        `off` with no off rung above it is a branch no request can enter."""
+        with pytest.raises(ReasoningSurfaceError, match="never be applied"):
+            validate_surface(
+                "m",
+                {
+                    "efforts": ["low", "high"],
+                    "write": "parameters.output_config.effort",
+                    "off": {"parameters.thinking.type": "disabled"},
+                },
+            )
+
+    def test_a_surface_with_no_ladder_skips_the_rung_checks(self):
+        """An inferred surface carries no efforts, so there is no rung for the
+        cross-field checks to be about."""
+        validate_surface("m", {"off": {"parameters.thinking.type": "disabled"}})
+        validate_surface("m", {"on": {"parameters.thinking.type": "enabled"}})

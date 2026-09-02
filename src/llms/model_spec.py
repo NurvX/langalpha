@@ -90,13 +90,6 @@ def clamp_reasoning_effort(
     return at_or_below[-1] if at_or_below else efforts[0]
 
 
-#: What a custom entry inherits from a built-in whose name it takes. Routing --
-#: model_id, provider, parameters -- is the entry's whole reason to exist and
-#: never inherits. These say what the model honors, and a shadow is the same
-#: model reached through the user's own key. ``context`` is here because it is
-#: the only compaction declaration the manifest actually makes:
-#: ``compaction_profile_for`` reads the named profile first and the window's
-#: band second, and every manifest row answers by window.
 #: The keys of a ``reasoning`` block that say where a level is written, as
 #: opposed to which levels exist.
 SURFACE_KEYS = ("write", "on", "off")
@@ -105,8 +98,10 @@ SURFACE_KEYS = ("write", "on", "off")
 def _checked_surface(name: str, reasoning: dict | None) -> dict:
     """Just the write half of a ``reasoning`` block, validated.
 
-    Validated at spec-build time rather than on the request path so an unknown
-    path is a startup error naming the model, not a silent no-op on the wire.
+    Raises rather than dropping the bad path, so a typo is a loud error naming
+    the model instead of a silent no-op on the wire. Spec-building is per
+    request, so for manifest rows the suite is what catches one first:
+    ``test_reasoning_efforts_manifest`` builds every entry.
     """
     if not reasoning:
         return {}
@@ -114,9 +109,16 @@ def _checked_surface(name: str, reasoning: dict | None) -> dict:
     return {k: reasoning[k] for k in SURFACE_KEYS if k in reasoning}
 
 
-#: ``reasoning`` is inherited whole: a borrowed ladder needs somewhere to be
-#: written, and an entry taking the levels but not the write path would resolve
-#: a level that lands nowhere.
+#: What a custom entry inherits from a built-in whose name it takes. Routing --
+#: model_id, provider, parameters -- is the entry's whole reason to exist and
+#: never inherits. These say what the model honors, and a shadow is the same
+#: model reached through the user's own key. ``context`` is here because it is
+#: the only compaction declaration the manifest actually makes:
+#: ``compaction_profile_for`` reads the named profile first and the window's
+#: band second, and every manifest row answers by window. ``reasoning`` is
+#: inherited whole: a borrowed ladder needs somewhere to be written, and an
+#: entry taking the levels but not the write path would resolve a level that
+#: lands nowhere.
 SHADOW_INHERITED = (
     "reasoning",
     "prompt_guidance",
@@ -203,7 +205,7 @@ class ModelSpec:
         # control at all, not the shadowed model's surface. Inference is the
         # last resort, for a standalone entry that predates the block.
         surface = reasoning if efforts else None
-        if efforts and not (reasoning.get("write") or reasoning.get("on") or reasoning.get("off")):
+        if efforts and not any(k in reasoning for k in SURFACE_KEYS):
             surface = infer_surface(parameters, extra_body)
         default = default_reasoning_effort(efforts, reasoning.get("default"))
         return cls(
@@ -216,7 +218,7 @@ class ModelSpec:
             reasoning_efforts=efforts,
             reasoning_effort_default=default,
             reasoning_surface=_checked_surface(
-                config.get("name", config["model_id"]), copy.deepcopy(surface)
+                config.get("name", config["model_id"]), surface
             ),
             sdk_fallback="openai",
             use_response_api_override=(

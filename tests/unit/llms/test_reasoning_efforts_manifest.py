@@ -124,6 +124,28 @@ class TestUnhonoredLevelsDegrade:
                     assert got == efforts[0], f"{name}: {level} -> {got}"
 
 
+class TestEveryEntryBuilds:
+    """``ModelSpec.from_manifest`` is where a declared surface is checked, and
+    it runs per request, so a typo in a rarely-picked model would otherwise
+    first surface as a 500 for whoever picked it. Walking the whole catalog
+    here is what makes the allowlist a load-time guarantee."""
+
+    def test_every_entry_builds_a_spec(self, config):
+        from src.llms.model_spec import ModelSpec
+
+        for name in config.llm_config:
+            ModelSpec.from_manifest(config, name)
+
+    def test_every_declared_ladder_has_somewhere_to_write(self, config):
+        """The failure the block exists to make loud, checked against the real
+        catalog rather than a fixture: buttons with no path behind them."""
+        from src.llms.model_spec import ModelSpec
+
+        for name in config.llm_config:
+            spec = ModelSpec.from_manifest(config, name)
+            assert bool(spec.reasoning_efforts) == bool(spec.reasoning_surface), name
+
+
 class TestManifestAgreesWithTheMapper:
     """A declared level must actually reach the provider. These two drifting
     apart is the failure the enum exists to prevent."""
@@ -134,15 +156,18 @@ class TestManifestAgreesWithTheMapper:
         import copy
         import json
 
-        for name, entry in config.llm_config.items():
+        from src.llms.model_spec import ModelSpec
+
+        for name in config.llm_config:
             efforts = config.get_reasoning_efforts(name)
             if len(efforts) < 2:
                 continue
+            spec = ModelSpec.from_manifest(config, name)
             seen = {}
             for level in efforts:
-                params = copy.deepcopy(entry.get("parameters", {}))
-                extra = copy.deepcopy(entry.get("extra_body", {}))
-                apply_reasoning_effort(level, params, extra, entry.get("reasoning"))
+                params = copy.deepcopy(spec.parameters)
+                extra = copy.deepcopy(spec.extra_body)
+                apply_reasoning_effort(level, params, extra, spec.reasoning_surface)
                 seen[level] = json.dumps([params, extra], sort_keys=True)
             assert len(set(seen.values())) == len(efforts), (
                 f"{name}: levels emit duplicate payloads -> {seen}"

@@ -1,9 +1,9 @@
 """Unified reasoning effort mapper.
 
 Translates a level the manifest has **already guaranteed** the model accepts into
-that provider's native parameter. Each entry names its own surface in a
-``reasoning_surface`` block, so the mapping is a declaration rather than a guess
-about which key the entry happened to carry.
+that provider's native parameter. Each entry names its own surface in its
+``reasoning`` block, so the mapping is a declaration rather than a guess about
+which key the entry happened to carry.
 
 Nothing is clamped here. A level outside the model's declared
 ``reasoning_efforts`` is resolved upstream by ``clamp_reasoning_effort`` in
@@ -34,24 +34,25 @@ OFF_LEVELS = frozenset({"none"})
 #: Closed on purpose. A dotted string makes a typo look structurally valid, and
 #: a write to a misspelled path lands somewhere the vendor ignores and returns
 #: 200 for, which is the exact silent failure this block exists to remove.
-WRITE_PATHS = frozenset(
-    {
-        "parameters.reasoning.effort",
-        "parameters.output_config.effort",
-        "parameters.reasoning_effort",
-        "parameters.thinking_level",
-        "extra_body.reasoning_effort",
-    }
+#:
+#: Ordered, not a set: :func:`infer_surface` takes the first seed it finds, so
+#: an entry seeded on two dials resolves to the ``parameters`` lane, where a
+#: typed SDK field lives, rather than to whichever path sorts first.
+WRITE_PATHS = (
+    "parameters.reasoning.effort",
+    "parameters.output_config.effort",
+    "parameters.thinking_level",
+    "parameters.reasoning_effort",
+    "extra_body.reasoning_effort",
 )
 
-#: Paths an ``on``/``off`` patch may target. Wider than :data:`WRITE_PATHS`
-#: because a patch also flips mode switches, and narrower in intent: a patch
-#: carries a literal from the manifest, never the level.
+#: Paths an ``on``/``off`` patch may target: mode switches, which take a vendor
+#: literal rather than a level. Disjoint from :data:`WRITE_PATHS` on purpose --
+#: a patch that could name a dial is how an ``off`` block ends up restating the
+#: entry's own graded write, which then contradicts the switch beside it.
 PATCH_PATHS = frozenset(
     {
-        "parameters.output_config.effort",
         "parameters.thinking.type",
-        "extra_body.reasoning_effort",
         "extra_body.thinking.type",
         "extra_body.thinking.clear_thinking",
     }
@@ -63,7 +64,12 @@ class ReasoningSurfaceError(ValueError):
 
 
 def validate_surface(name: str, surface: dict) -> None:
-    """Reject an unknown path at load time, where the manifest author sees it."""
+    """Reject a block that cannot do what its ladder advertises.
+
+    Runs where the author is still holding it: the manifest suite builds every
+    entry, and the preferences endpoint checks a custom one on save. Past here
+    a bad path is a 200 the vendor ignores.
+    """
     write = surface.get("write")
     if write is not None and write not in WRITE_PATHS:
         raise ReasoningSurfaceError(
@@ -80,6 +86,23 @@ def validate_surface(name: str, surface: dict) -> None:
             f"{name}: reasoning declares efforts with nowhere to write them"
         )
 
+    # Checked against the ladder, which only a full block carries: an inferred
+    # surface has no efforts and no rung to be wrong about.
+    efforts = surface.get("efforts") or ()
+    if not efforts:
+        return
+    off_rungs = sorted(OFF_LEVELS.intersection(efforts))
+    if surface.get("on") and not surface.get("off") and off_rungs:
+        raise ReasoningSurfaceError(
+            f"{name}: reasoning offers {off_rungs} but declares no `off`, so the "
+            f"off rung would apply `on` and turn thinking on"
+        )
+    if surface.get("off") and not off_rungs:
+        raise ReasoningSurfaceError(
+            f"{name}: reasoning declares `off` but no level in efforts means off, "
+            f"so the patch can never be applied"
+        )
+
 
 def infer_surface(parameters: dict | None, extra_body: dict | None) -> dict:
     """Guess the surface of a user-supplied entry that declared none.
@@ -91,7 +114,7 @@ def infer_surface(parameters: dict | None, extra_body: dict | None) -> dict:
     no seed value that distinguishes one from a dial's starting point.
     """
     lanes = {"parameters": parameters or {}, "extra_body": extra_body or {}}
-    for path in sorted(WRITE_PATHS):
+    for path in WRITE_PATHS:
         lane, *rest = path.split(".")
         node = lanes[lane]
         for segment in rest[:-1]:
@@ -130,8 +153,8 @@ def apply_reasoning_effort(
             the model's declared ``reasoning_efforts``.
         parameters: Model parameters dict (mutated in place).
         extra_body: Extra body dict (mutated in place).
-        surface: The model's ``reasoning_surface`` block. Absent means the model
-            offers no effort control, and nothing is written.
+        surface: The write half of the model's ``reasoning`` block. Absent means
+            the model offers no effort control, and nothing is written.
 
     Returns:
         Tuple of (parameters, extra_body) — the same objects, mutated.
@@ -143,12 +166,11 @@ def apply_reasoning_effort(
     off_patch = surface.get("off")
 
     if level in OFF_LEVELS and off_patch:
-        # `off` states the whole reasoning payload rather than layering over
-        # what is there: a mode switch sits in a discriminated union whose
-        # disabled variant rejects the siblings the enabled one requires, so a
-        # caller-supplied `budget_tokens` must not survive next to it. Cleared
-        # in its own pass first, or two paths sharing a container would wipe
-        # each other's write.
+        # Each container the patch touches is reset, not merged into: a mode
+        # switch sits in a discriminated union whose disabled variant rejects
+        # the siblings the enabled one requires, so a caller-supplied
+        # `budget_tokens` must not survive next to it. Reset in its own pass
+        # first, or two paths sharing a container would wipe each other's write.
         for path in off_patch:
             lane, *rest = path.split(".")
             if len(rest) > 1:
