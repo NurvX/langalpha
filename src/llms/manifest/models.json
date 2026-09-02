@@ -1390,27 +1390,6 @@
       }
     }
   },
-  "embedding-small": {
-    "model_id": "text-embedding-3-small",
-    "provider": "openai",
-    "parameters": {
-      "dimensions": 1536
-    }
-  },
-  "embedding-large": {
-    "model_id": "text-embedding-3-large",
-    "provider": "openai",
-    "parameters": {
-      "dimensions": 3072
-    }
-  },
-  "embedding-cn": {
-    "model_id": "text-embedding-v4",
-    "provider": "dashscope",
-    "parameters": {
-      "dimensions": 1536
-    }
-  },
   "claude-opus-4-8-oauth-1m": {
     "prompt_guidance": "lean",
     "model_id": "claude-opus-4-8",

@@ -1,43 +1,4 @@
 {
-  "embedding_models": {
-    "openai": [
-      {
-        "id": "text-embedding-3-small",
-        "name": "Text Embedding 3 Small",
-        "description": "OpenAI's latest small embedding model with 1536 dimensions",
-        "dimensions": 1536,
-        "max_tokens": 8191,
-        "pricing": {
-          "input": 0.02,
-          "unit": "per_1m_tokens"
-        }
-      },
-      {
-        "id": "text-embedding-3-large",
-        "name": "Text Embedding 3 Large",
-        "description": "OpenAI's latest large embedding model with 3072 dimensions for higher accuracy",
-        "dimensions": 3072,
-        "max_tokens": 8191,
-        "pricing": {
-          "input": 0.13,
-          "unit": "per_1m_tokens"
-        }
-      }
-    ],
-    "dashscope": [
-      {
-        "id": "text-embedding-v4",
-        "name": "Text Embedding V4",
-        "description": "Alibaba's latest multilingual embedding model (Qwen3-Embedding) with flexible dimensions",
-        "dimensions": 1536,
-        "max_tokens": 8192,
-        "pricing": {
-          "input": 0.007,
-          "unit": "per_1m_tokens"
-        }
-      }
-    ]
-  },
   "models": {
     "openai": [
       {
