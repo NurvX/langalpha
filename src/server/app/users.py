@@ -384,7 +384,11 @@ def _validate_custom_models(custom_models: list, custom_providers: list | None =
 
         # Either shape: a `reasoning` block, or the flat keys entries saved
         # before it existed still carry. Whichever it used is written back to.
-        declared = cm.get("reasoning") if isinstance(cm.get("reasoning"), dict) else cm
+        # Truthiness, not isinstance: `reasoning: {}` declares nothing, and
+        # binding to it would leave the entry's flat keys unread by every check
+        # below while `reasoning_block` still preferred the empty dict.
+        block = cm.get("reasoning")
+        declared = block if isinstance(block, dict) and block else cm
         efforts_key = "efforts" if declared is not cm else "reasoning_efforts"
         default_key = "default" if declared is not cm else "reasoning_effort_default"
 
@@ -408,7 +412,7 @@ def _validate_custom_models(custom_models: list, custom_providers: list | None =
         if default_effort is not None and default_effort not in effective_efforts:
             raise HTTPException(
                 status_code=400,
-                detail=f"custom_models[{idx}]: reasoning_effort_default must be one of {sorted(effective_efforts)}",
+                detail=f"custom_models[{idx}]: {default_key} must be one of {sorted(effective_efforts)}",
             )
 
 

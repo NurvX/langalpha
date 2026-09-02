@@ -31,13 +31,22 @@ def config():
 
 class TestDeclaredSetsAreWellFormed:
     def test_every_declared_level_exists(self, config):
-        bad = {
-            name: [
-                lvl for lvl in entry["reasoning_efforts"] if lvl not in REASONING_LEVELS
-            ]
+        """Read through ``reasoning_block``, not off a fixed key: a typo inside
+        the block is dropped by ``canonical_reasoning_efforts`` without a word,
+        so a check reading a key no entry carries any more passes on an empty
+        set and proves nothing."""
+        from src.llms.model_spec import reasoning_block
+
+        ladders = {
+            name: reasoning_block(entry).get("efforts")
             for name, entry in config.llm_config.items()
             if isinstance(entry, dict)
-            and isinstance(entry.get("reasoning_efforts"), list)
+        }
+        assert any(ladders.values()), "no entry declares a ladder -- check is vacuous"
+        bad = {
+            name: [lvl for lvl in efforts if lvl not in REASONING_LEVELS]
+            for name, efforts in ladders.items()
+            if isinstance(efforts, list)
         }
         assert not {k: v for k, v in bad.items() if v}
 
@@ -211,8 +220,24 @@ class TestWhoWinsWhenTwoThingsNameTheLevel:
         assert client.parameters["reasoning"]["effort"] == "low"
         assert client.resolved_reasoning_effort == "low"
 
-    def test_the_default_is_still_written_when_nothing_overrides_it(self):
+    def test_the_default_is_still_written_when_nothing_overrides_it(self, config):
         """The level is no longer sitting in `parameters` waiting to be sent, so
-        skipping the mapper here reports a level the request never carried."""
-        client = LLM("gpt-5.5")
-        assert client.parameters["reasoning"]["effort"] == client.resolved_reasoning_effort
+        skipping the mapper on this path reports a level the request never
+        carried. Walked over the catalog rather than one model: dropping the
+        no-request apply leaves every other test in this file green."""
+        from src.llms.model_spec import ModelSpec
+
+        checked = 0
+        for name in config.llm_config:
+            spec = ModelSpec.from_manifest(config, name)
+            write = spec.reasoning_surface.get("write")
+            if not (write and spec.reasoning_effort_default):
+                continue  # no dial, or no ladder to have a default on
+            client = LLM(name, api_key="dummy-key")
+            lanes = {"parameters": client.parameters, "extra_body": client.extra_body}
+            node = lanes[write.split(".")[0]]
+            for segment in write.split(".")[1:]:
+                node = node[segment]
+            assert node == client.resolved_reasoning_effort == spec.reasoning_effort_default, name
+            checked += 1
+        assert checked > 10, f"only {checked} models exercised the no-request path"

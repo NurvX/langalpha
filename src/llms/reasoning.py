@@ -43,6 +43,7 @@ WRITE_PATHS = (
     "parameters.output_config.effort",
     "parameters.thinking_level",
     "parameters.reasoning_effort",
+    "extra_body.reasoning.effort",
     "extra_body.reasoning_effort",
 )
 
@@ -57,6 +58,12 @@ PATCH_PATHS = frozenset(
         "extra_body.thinking.clear_thinking",
     }
 )
+
+
+#: The keys that say *where* a level goes, as opposed to which levels exist.
+#: Beside the allowlists they partition, because a key added to the mapper and
+#: not to this tuple is dropped by ``_checked_surface`` without a word.
+SURFACE_KEYS = ("write", "on", "off")
 
 
 class ReasoningSurfaceError(ValueError):

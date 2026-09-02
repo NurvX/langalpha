@@ -10,7 +10,12 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .reasoning import REASONING_LEVELS, infer_surface, validate_surface
+from .reasoning import (
+    REASONING_LEVELS,
+    SURFACE_KEYS,
+    infer_surface,
+    validate_surface,
+)
 
 
 class ManifestSource(Protocol):
@@ -90,9 +95,16 @@ def clamp_reasoning_effort(
     return at_or_below[-1] if at_or_below else efforts[0]
 
 
-#: The keys of a ``reasoning`` block that say where a level is written, as
-#: opposed to which levels exist.
-SURFACE_KEYS = ("write", "on", "off")
+def _seeded_level(surface: dict | None, parameters: dict, extra_body: dict) -> Any:
+    """The level already sitting at a surface's own write path, if any."""
+    write = (surface or {}).get("write")
+    if not isinstance(write, str):
+        return None
+    lane, *rest = write.split(".")
+    node = {"parameters": parameters, "extra_body": extra_body}.get(lane)
+    for segment in rest:
+        node = node.get(segment) if isinstance(node, dict) else None
+    return node
 
 
 def _checked_surface(name: str, reasoning: dict | None) -> dict:
@@ -205,8 +217,8 @@ class ModelSpec:
         reasoning = reasoning_block(declared)
         efforts = canonical_reasoning_efforts(reasoning.get("efforts"))
         declared_response_api = config.get("_use_response_api")
-        # Deep-copied because the borrowed block shares its nested dicts with
-        # the process-wide manifest, and the mapper writes into these.
+        # Deep-copied because the mapper writes into these in place, and they
+        # would otherwise be the caller's own stored preference dicts.
         parameters = copy.deepcopy(config.get("parameters") or {})
         extra_body = copy.deepcopy(config.get("extra_body") or {})
         # Gated on the ladder: an entry declaring no levels wants no effort
@@ -215,7 +227,16 @@ class ModelSpec:
         surface = reasoning if efforts else None
         if efforts and not any(k in reasoning for k in SURFACE_KEYS):
             surface = infer_surface(parameters, extra_body)
-        default = default_reasoning_effort(efforts, reasoning.get("default"))
+        # An entry that seeded a level into its own parameters and named no
+        # default has already said which rung it runs: the mapper used to skip
+        # the no-request turn entirely, so that seed was what went out. Reading
+        # it back keeps that turn on the same rung instead of the ladder's
+        # midpoint. Only graded dials seed a level name, which is the whole of
+        # WRITE_PATHS, so there is nothing here to misread.
+        declared_default = reasoning.get("default")
+        if declared_default is None:
+            declared_default = _seeded_level(surface, parameters, extra_body)
+        default = default_reasoning_effort(efforts, declared_default)
         return cls(
             name=config.get("name", config["model_id"]),
             model_id=config["model_id"],

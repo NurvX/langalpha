@@ -18,6 +18,7 @@ from src.llms.reasoning import (
     WRITE_PATHS,
     ReasoningSurfaceError,
     apply_reasoning_effort,
+    infer_surface,
     validate_surface,
 )
 
@@ -244,6 +245,39 @@ class TestPassthrough:
             "high", params, extra, {"write": "parameters.reasoning.effort"}
         )
         assert out_p is params and out_b is extra
+
+
+# ---------------------------------------------------------------------------
+# infer_surface
+# ---------------------------------------------------------------------------
+
+
+class TestInferSurface:
+    """Entries stored before the block existed name no surface, so the seed
+    they carry is the only evidence of where their level goes."""
+
+    @pytest.mark.parametrize("path", WRITE_PATHS)
+    def test_every_dial_is_recognized_from_its_seed(self, path):
+        lane, *rest = path.split(".")
+        seed = "medium"
+        for segment in reversed(rest):
+            seed = {segment: seed}
+        lanes = {"parameters": {}, "extra_body": {}}
+        lanes[lane] = seed
+        assert infer_surface(lanes["parameters"], lanes["extra_body"]) == {"write": path}
+
+    def test_two_seeded_dials_resolve_to_the_typed_lane(self):
+        """WRITE_PATHS is ordered for exactly this: `parameters` holds typed SDK
+        fields, so an entry seeded in both lanes writes there rather than
+        wherever the paths happen to sort."""
+        surface = infer_surface({"reasoning_effort": "low"}, {"reasoning_effort": "low"})
+        assert surface == {"write": "parameters.reasoning_effort"}
+
+    def test_a_seed_the_allowlist_does_not_name_infers_nothing(self):
+        """A mode switch and a token budget are not dials, so no seed value of
+        theirs distinguishes one from a dial's starting point."""
+        assert infer_surface({"thinking": {"type": "enabled"}}, {}) == {}
+        assert infer_surface({"max_tokens": 8}, {}) == {}
 
 
 # ---------------------------------------------------------------------------
