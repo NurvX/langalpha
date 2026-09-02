@@ -59,11 +59,13 @@ def reasoning_block(entry: dict | None) -> dict:
     The manifest states it as a single ``reasoning`` block. Custom models saved
     before that block existed carry the same facts as flat ``reasoning_efforts``
     / ``reasoning_effort_default`` keys, so both are read here rather than
-    migrating a preferences column.
+    migrating a preferences column. An empty block declares nothing and so does
+    not answer for the entry: preferring it would strand a stored entry's flat
+    keys, unread by everything downstream of a save that validated them.
     """
     entry = entry or {}
     block = entry.get("reasoning")
-    if isinstance(block, dict):
+    if isinstance(block, dict) and block:
         return block
     flat = {}
     if "reasoning_efforts" in entry:
@@ -222,11 +224,17 @@ class ModelSpec:
         parameters = copy.deepcopy(config.get("parameters") or {})
         extra_body = copy.deepcopy(config.get("extra_body") or {})
         # Gated on the ladder: an entry declaring no levels wants no effort
-        # control at all, not the shadowed model's surface. Inference is the
-        # last resort, for a standalone entry that predates the block.
+        # control at all, not the shadowed model's surface.
         surface = reasoning if efforts else None
-        if efforts and not any(k in reasoning for k in SURFACE_KEYS):
+        if efforts and not any(k in reasoning_block(config) for k in SURFACE_KEYS):
+            # Read against the entry's own block, not the merged one, so the
+            # order below is seed first and borrowed path second. An entry that
+            # spelled a control in its own parameters is routing somewhere that
+            # reads it; writing the level to the built-in's path instead leaves
+            # that seed stale and puts a second control on the wire beside it.
             surface = infer_surface(parameters, extra_body)
+            if not surface and any(k in reasoning for k in SURFACE_KEYS):
+                surface = reasoning
         # An entry that seeded a level into its own parameters and named no
         # default has already said which rung it runs: the mapper used to skip
         # the no-request turn entirely, so that seed was what went out. Reading

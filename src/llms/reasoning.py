@@ -102,9 +102,27 @@ def validate_surface(name: str, surface: dict) -> None:
     efforts = surface.get("efforts") or ()
     if not efforts:
         return
+    # Before any set operation: the levels arrive from a stored preferences bag,
+    # and one unhashable element would raise out of the intersection below,
+    # turning a save this function exists to answer with a 400 into a 500.
+    unknown = [lv for lv in efforts if not isinstance(lv, str) or lv not in REASONING_LEVELS]
+    if unknown:
+        raise ReasoningSurfaceError(
+            f"{name}: reasoning.efforts must be drawn from {list(REASONING_LEVELS)}, "
+            f"got {unknown!r}"
+        )
     if write is None and not (surface.get("on") or surface.get("off")):
         raise ReasoningSurfaceError(
             f"{name}: reasoning declares efforts with nowhere to write them"
+        )
+    # A patch is one payload, so a surface with no graded write can tell exactly
+    # two states apart. More rungs than that is the lie the block exists to
+    # remove: buttons the UI renders as distinct that emit the same request.
+    on_rungs = [lv for lv in efforts if lv not in OFF_LEVELS]
+    if write is None and len(on_rungs) > 1:
+        raise ReasoningSurfaceError(
+            f"{name}: reasoning declares no `write`, so {on_rungs} all apply the "
+            f"same `on` patch and reach the provider identically"
         )
     off_rungs = sorted(OFF_LEVELS.intersection(efforts))
     if surface.get("on") and not surface.get("off") and off_rungs:
@@ -181,6 +199,19 @@ def apply_reasoning_effort(
     off_patch = surface.get("off")
 
     if level in OFF_LEVELS and off_patch:
+        # The graded write goes first, wherever it came from -- the entry's own
+        # seed or a caller override merged in above. Leaving it is the payload
+        # this branch exists to prevent: a live effort beside the instruction
+        # not to think. Only that one key, since its container is the entry's
+        # own transport config.
+        write = surface.get("write")
+        if write:
+            lane, *rest = write.split(".")
+            node = lanes[lane]
+            for segment in rest[:-1]:
+                node = node.get(segment) if isinstance(node, dict) else None
+            if isinstance(node, dict):
+                node.pop(rest[-1], None)
         # Each container the patch touches is reset, not merged into: a mode
         # switch sits in a discriminated union whose disabled variant rejects
         # the siblings the enabled one requires, so a caller-supplied

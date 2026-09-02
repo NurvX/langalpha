@@ -383,10 +383,10 @@ def _validate_custom_models(custom_models: list, custom_providers: list | None =
             )
 
         # Either shape: a `reasoning` block, or the flat keys entries saved
-        # before it existed still carry. Whichever it used is written back to.
-        # Truthiness, not isinstance: `reasoning: {}` declares nothing, and
-        # binding to it would leave the entry's flat keys unread by every check
-        # below while `reasoning_block` still preferred the empty dict.
+        # before it existed still carry. Whichever it used is written back to,
+        # which is why the shapes are read apart here rather than through
+        # `reasoning_block`: its normalized view cannot say which key to
+        # rewrite. Empty means unused, on the same terms as that function.
         block = cm.get("reasoning")
         declared = block if isinstance(block, dict) and block else cm
         efforts_key = "efforts" if declared is not cm else "reasoning_efforts"

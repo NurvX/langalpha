@@ -232,12 +232,18 @@ interface CustomModelEntry {
 // The ladder an entry declares, from either shape it may be stored in. Mirrors
 // `reasoning_block` on the server, precedence included: a `reasoning` object
 // answers for the whole declaration, so an entry carrying both does not get
-// its flat keys read as a fallback for the block's missing ones.
+// its flat keys read as a fallback for the block's missing ones. An empty
+// object is not such an answer, and `{}` being truthy here is what would have
+// made this side read one anyway.
 function declaredLadder(cm: CustomModelEntry): {
   efforts?: string[];
   effortDefault?: string;
 } {
-  if (cm.reasoning && typeof cm.reasoning === 'object') {
+  if (
+    cm.reasoning &&
+    typeof cm.reasoning === 'object' &&
+    Object.keys(cm.reasoning).length > 0
+  ) {
     return {
       ...('efforts' in cm.reasoning ? { efforts: cm.reasoning.efforts } : {}),
       ...('default' in cm.reasoning ? { effortDefault: cm.reasoning.default } : {}),

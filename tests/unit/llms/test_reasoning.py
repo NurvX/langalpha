@@ -136,6 +136,25 @@ class TestOnAndOff:
         p, _ = run("none", self.SURFACE)
         assert p == {"thinking": {"type": "disabled"}}
 
+    def test_off_clears_a_level_the_caller_supplied_at_the_write_path(self):
+        """The manifest no longer seeds one, but a caller override lands in the
+        same place and is merged in before the mapper runs. Left alone it is
+        the payload this branch exists to prevent, arriving by the one route
+        the seed's removal did not close."""
+        p, _ = run("none", self.SURFACE, parameters={"output_config": {"effort": "high"}})
+        assert p["thinking"] == {"type": "disabled"}
+        assert "effort" not in p["output_config"]
+
+    def test_off_leaves_the_containers_own_siblings_alone(self):
+        """Only the graded key is the contradiction. The rest of that container
+        is the entry's transport config, which the switch says nothing about."""
+        p, _ = run(
+            "none",
+            self.SURFACE,
+            parameters={"output_config": {"effort": "high", "verbosity": "low"}},
+        )
+        assert p["output_config"] == {"verbosity": "low"}
+
     def test_off_without_an_off_patch_is_just_the_level(self):
         """A surface whose vendor accepts `none` as an effort needs no patch."""
         p, _ = run("none", {"write": "parameters.reasoning.effort"})
@@ -372,6 +391,32 @@ class TestValidateSurface:
         a 500 on data the save accepted."""
         with pytest.raises(ReasoningSurfaceError, match=f"reasoning.{wrong} must be"):
             validate_surface("m", block)
+
+    def test_an_unhashable_effort_is_refused_before_the_set_math(self):
+        """The ladder arrives from a stored preferences bag, so an element can
+        be any JSON value. One unhashable one raised out of the ``OFF_LEVELS``
+        intersection: a 500 from the function whose job is the 400."""
+        with pytest.raises(ReasoningSurfaceError, match="reasoning.efforts must be drawn"):
+            validate_surface("m", {"efforts": [{}], "write": "parameters.reasoning.effort"})
+
+    def test_a_bare_switch_may_not_wear_more_than_two_rungs(self):
+        """A patch is one payload, so every non-off rung on a surface with no
+        graded write emits the same request. Three buttons, two outcomes, and
+        nothing downstream can tell -- the shape the block exists to refuse."""
+        with pytest.raises(ReasoningSurfaceError, match="all apply the same `on` patch"):
+            validate_surface("m", {
+                "efforts": ["none", "high", "max"],
+                "on": {"parameters.thinking.type": "adaptive"},
+                "off": {"parameters.thinking.type": "disabled"},
+            })
+
+    def test_a_two_rung_switch_is_still_fine(self):
+        """The shape `minimax-m3` actually ships: off, and on."""
+        validate_surface("m", {
+            "efforts": ["none", "high"],
+            "on": {"parameters.thinking.type": "adaptive"},
+            "off": {"parameters.thinking.type": "disabled"},
+        })
 
     def test_a_surface_with_no_ladder_skips_the_rung_checks(self):
         """An inferred surface carries no efforts, so there is no rung for the

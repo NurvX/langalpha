@@ -176,6 +176,22 @@ class TestValidateCustomModels:
                 },
             }])
 
+    def test_an_empty_block_does_not_strand_the_flat_ladder(self):
+        """Accepted as declaring a ladder, then read as declaring none: the
+        level the user had already picked was cleared on the next save."""
+        from src.server.app.users import _clear_unhonored_efforts
+
+        entry = {
+            "name": "my-gpt", "model_id": "gpt-4o", "provider": "openai",
+            "reasoning": {}, "reasoning_efforts": ["low", "high"],
+        }
+        self._validate([dict(entry)])
+        written = {}
+        _clear_unhonored_efforts(
+            written, {"custom_models": [entry]}, {"my-gpt": {"reasoning_effort": "high"}}
+        )
+        assert written == {}
+
     def test_text_auto_prepended(self):
         """If input_modalities is provided without 'text', it should be auto-added."""
         models = [{"name": "my-llava", "model_id": "llava", "provider": "openai", "input_modalities": ["image"]}]

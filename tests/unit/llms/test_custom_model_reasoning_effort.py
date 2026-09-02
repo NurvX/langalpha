@@ -140,3 +140,46 @@ class TestAShadowInheritsTheHalfItDidNotDeclare:
             reasoning_effort="max",
         )
         assert client.reasoning == {"effort": "high"}
+
+    def test_the_entrys_own_seed_outranks_the_borrowed_write_path(self):
+        """A shadow that spelled its control itself routes somewhere that reads
+        it. Borrowing the built-in's path put the level there instead and left
+        the entry's seed stale, so two controls went out and the endpoint read
+        the wrong one -- the case the pre-block code guarded outright."""
+        client = _build(
+            {**self.SHADOW, "parameters": {"reasoning_effort": "high"}},
+            reasoning_effort="low",
+        )
+        assert client.reasoning_effort == "low"
+        assert client.reasoning is None
+
+
+class TestAnEmptyBlockDoesNotAnswerForTheEntry:
+    """``reasoning: {}`` declares nothing, so an entry's flat keys are still its
+    declaration. Reading the block on presence stranded them: the save
+    validated the flat ladder, and every reader after it saw no ladder at all,
+    down to wiping the level the user had already picked.
+    """
+
+    ENTRY = {
+        "name": "my-own-gpt",
+        "model_id": "gpt-5.5",
+        "provider": "openai",
+        "parameters": {"reasoning": {"effort": "medium"}},
+        "reasoning": {},
+        "reasoning_efforts": ["low", "medium", "high"],
+        "reasoning_effort_default": "medium",
+    }
+
+    def test_the_flat_ladder_is_read_past_it(self):
+        client = _build(self.ENTRY, reasoning_effort="high")
+        assert client.reasoning == {"effort": "high"}
+        assert client.metadata["reasoning_effort"] == "high"
+
+    def test_an_empty_ladder_is_a_declaration_and_still_wins(self):
+        """The distinction the check has to keep: an empty block is an absent
+        declaration, an empty ``efforts`` is a declared one. Only the seed the
+        entry wrote itself goes out."""
+        client = _build({**self.ENTRY, "reasoning_efforts": []}, reasoning_effort="high")
+        assert client.reasoning == {"effort": "medium"}
+        assert client.metadata.get("reasoning_effort") is None
