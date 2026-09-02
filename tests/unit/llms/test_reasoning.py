@@ -123,7 +123,16 @@ class TestOnAndOff:
     def test_off_replaces_the_write_rather_than_layering_over_it(self):
         """On a surface carrying both a switch and a dial, only the switch
         reliably means off; emitting both puts a live effort next to the
-        instruction not to think."""
+        instruction not to think.
+
+        Verified live on 2026-09-02, one turn per rung. deepseek-v4-flash at
+        `none` takes `thinking.type: disabled` with no `output_config` at all
+        and returns no thinking block; at `high` it takes both and does. GLM
+        5.2 at `none` takes `thinking.type: disabled` with no `reasoning_effort`
+        and returns no reasoning; at `high` it takes the pair plus
+        `clear_thinking: false` and reads 234 characters of reasoning back, so
+        the gate still works carried per request rather than seeded.
+        """
         p, _ = run("none", self.SURFACE)
         assert p == {"thinking": {"type": "disabled"}}
 
