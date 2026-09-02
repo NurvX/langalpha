@@ -637,11 +637,7 @@
     ],
     "reasoning_efforts": [
       "none",
-      "minimal",
-      "low",
-      "medium",
       "high",
-      "xhigh",
       "max"
     ],
     "reasoning_effort_default": "max"
@@ -829,11 +825,7 @@
     ],
     "reasoning_efforts": [
       "none",
-      "minimal",
-      "low",
-      "medium",
       "high",
-      "xhigh",
       "max"
     ],
     "reasoning_effort_default": "max"
