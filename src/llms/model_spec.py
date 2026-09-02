@@ -217,6 +217,9 @@ class ModelSpec:
         """
         declared = with_inherited_declarations(config, shadowed)
         reasoning = reasoning_block(declared)
+        # The entry's own half of that, kept apart: what it says about itself
+        # outranks anything it borrowed from the name it took.
+        own = reasoning_block(config)
         efforts = canonical_reasoning_efforts(reasoning.get("efforts"))
         declared_response_api = config.get("_use_response_api")
         # Deep-copied because the mapper writes into these in place, and they
@@ -226,7 +229,7 @@ class ModelSpec:
         # Gated on the ladder: an entry declaring no levels wants no effort
         # control at all, not the shadowed model's surface.
         surface = reasoning if efforts else None
-        if efforts and not any(k in reasoning_block(config) for k in SURFACE_KEYS):
+        if efforts and not any(k in own for k in SURFACE_KEYS):
             # Read against the entry's own block, not the merged one, so the
             # order below is seed first and borrowed path second. An entry that
             # spelled a control in its own parameters is routing somewhere that
@@ -241,9 +244,14 @@ class ModelSpec:
         # it back keeps that turn on the same rung instead of the ladder's
         # midpoint. Only graded dials seed a level name, which is the whole of
         # WRITE_PATHS, so there is nothing here to misread.
-        declared_default = reasoning.get("default")
+        # It is read before the shadowed default for the same reason the surface
+        # is: a borrowed default belongs to the wider ladder this entry narrowed,
+        # so taking it first moves a default turn off the rung the entry ran.
+        declared_default = own.get("default")
         if declared_default is None:
             declared_default = _seeded_level(surface, parameters, extra_body)
+        if declared_default is None:
+            declared_default = reasoning.get("default")
         default = default_reasoning_effort(efforts, declared_default)
         return cls(
             name=config.get("name", config["model_id"]),

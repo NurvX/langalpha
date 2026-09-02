@@ -141,6 +141,15 @@ class TestAShadowInheritsTheHalfItDidNotDeclare:
         )
         assert client.reasoning == {"effort": "high"}
 
+    def test_a_seeded_rung_outranks_the_shadowed_default(self):
+        """The entry seeded the rung it runs and named no default of its own,
+        so the built-in's default is not its answer: taking that first resolves
+        to the narrowed ladder's midpoint and moves every default turn up a
+        rung. The pre-block code never did, having skipped the no-request apply
+        entirely and sent the seed."""
+        client = _build({**self.SHADOW, "parameters": {"reasoning_effort": "low"}})
+        assert client.reasoning_effort == "low"
+
     def test_the_entrys_own_seed_outranks_the_borrowed_write_path(self):
         """A shadow that spelled its control itself routes somewhere that reads
         it. Borrowing the built-in's path put the level there instead and left
