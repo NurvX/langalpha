@@ -193,3 +193,26 @@ class TestManifestAgreesWithTheMapper:
                     f"{name}: declares {sorted(top)} on provider "
                     f"{entry.get('provider')!r}, which is not known to serve them"
                 )
+
+
+class TestWhoWinsWhenTwoThingsNameTheLevel:
+    """The manifest used to seed its default level straight into
+    ``parameters``, which put a caller's own ``parameters`` override above the
+    default and below an explicit request. The mapper writes what that seed
+    held, so it has to keep the same two rungs.
+    """
+
+    def test_an_override_beats_the_manifest_default(self):
+        client = LLM("gpt-5.5", reasoning={"effort": "high"})
+        assert client.parameters["reasoning"]["effort"] == "high"
+
+    def test_a_requested_level_beats_an_override(self):
+        client = LLM("gpt-5.5", reasoning_effort="low", reasoning={"effort": "high"})
+        assert client.parameters["reasoning"]["effort"] == "low"
+        assert client.resolved_reasoning_effort == "low"
+
+    def test_the_default_is_still_written_when_nothing_overrides_it(self):
+        """The level is no longer sitting in `parameters` waiting to be sent, so
+        skipping the mapper here reports a level the request never carried."""
+        client = LLM("gpt-5.5")
+        assert client.parameters["reasoning"]["effort"] == client.resolved_reasoning_effort

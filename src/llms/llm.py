@@ -416,9 +416,6 @@ class LLM:
         self.parameters = copy.deepcopy(spec.parameters)
         self.extra_body = copy.deepcopy(spec.extra_body)
 
-        # Override with any provided parameters
-        self.parameters.update(override_params)
-
         # Apply reasoning effort override (before provider resolution).
         # Validation lives here because this is the only point that sees both
         # the requested level and the model's declared enum; past it the mapper
@@ -436,11 +433,24 @@ class LLM:
                 spec.reasoning_efforts, spec.reasoning_effort_default, reasoning_effort
             )
         else:
+            # Not a request, so it is written *under* the caller's own
+            # parameters. The manifest used to seed its default level into
+            # `parameters`, where an override naming that key directly replaced
+            # it; the mapper now writes what the seed held, and inherits its
+            # place in the order.
             effort = spec.reasoning_effort_default
+            if effort:
+                apply_reasoning_effort(
+                    effort, self.parameters, self.extra_body, spec.reasoning_surface
+                )
 
-        # Applied on both paths. The entry carries no pre-set level of its own,
-        # so a turn that skipped the mapper would report a default it never sent.
-        if effort:
+        # Override with any provided parameters
+        self.parameters.update(override_params)
+
+        # A level the caller asked for outright is the request being answered,
+        # so it goes over the overrides -- where it already went when the mapper
+        # ran on this side of the update and the seed sat underneath.
+        if reasoning_effort and effort:
             apply_reasoning_effort(
                 effort, self.parameters, self.extra_body, spec.reasoning_surface
             )

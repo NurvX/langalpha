@@ -151,6 +151,31 @@ class TestValidateCustomModels:
             {"name": "my-gpt", "model_id": "gpt-4o", "provider": "openai"},
         ])
 
+    def test_a_block_carrying_only_a_surface_is_still_checked(self):
+        """The save-time check used to run only when the block declared levels,
+        so a block that named nothing but a path was stored unread. Nothing
+        writes it today, which is exactly why a typo in it would sit there."""
+        with pytest.raises(HTTPException):
+            self._validate([{
+                "name": "my-gpt", "model_id": "gpt-4o", "provider": "openai",
+                "reasoning": {"write": "parmeters.reasoning.effort"},
+            }])
+
+    def test_a_wrongly_typed_block_is_a_400_not_a_500(self):
+        """`on` as a list survives the path check -- iterating it yields the
+        same strings a dict would -- then raises AttributeError in the mapper,
+        once per turn, for every turn."""
+        with pytest.raises(HTTPException):
+            self._validate([{
+                "name": "my-gpt", "model_id": "gpt-4o", "provider": "openai",
+                "reasoning": {
+                    "efforts": ["none", "high"],
+                    "write": "parameters.output_config.effort",
+                    "on": ["parameters.thinking.type"],
+                    "off": {"parameters.thinking.type": "disabled"},
+                },
+            }])
+
     def test_text_auto_prepended(self):
         """If input_modalities is provided without 'text', it should be auto-added."""
         models = [{"name": "my-llava", "model_id": "llava", "provider": "openai", "input_modalities": ["image"]}]

@@ -94,3 +94,49 @@ class TestSurfaceResolution:
         )
         assert client.reasoning == {"effort": "high"}
         assert client.metadata["reasoning_effort"] == "high"
+
+
+class TestAShadowInheritsTheHalfItDidNotDeclare:
+    """A ``reasoning`` block bundles two declarations -- which levels exist and
+    where the chosen one is written -- so a shadow inherits it key by key. The
+    regression these pin came from inheriting it whole: an entry storing its
+    ladder in the flat shape carries no ``reasoning`` key to block that, so the
+    built-in's block arrived intact and answered for the ladder too.
+    """
+
+    #: Its own ladder is a strict subset of the built-in's, so a level only the
+    #: built-in offers is what tells the two apart.
+    SHADOW = {
+        "name": "gpt-5.6-sol",
+        "model_id": "gpt-5.6-sol",
+        "provider": "openai",
+        "reasoning_efforts": ["low", "high"],
+    }
+
+    def test_a_flat_ladder_is_not_replaced_by_the_built_ins(self):
+        client = _build(self.SHADOW, reasoning_effort="max")
+        assert client.reasoning == {"effort": "high"}
+        assert client.metadata["reasoning_effort"] == "high"
+
+    def test_an_empty_flat_ladder_still_means_no_control(self):
+        """Presence, not truthiness: the entry is answering "no levels", and a
+        borrowed ladder must not overrule the answer."""
+        client = _build({**self.SHADOW, "reasoning_efforts": []}, reasoning_effort="high")
+        assert client.reasoning is None
+        assert client.metadata.get("reasoning_effort") is None
+
+    def test_a_block_naming_only_a_default_keeps_the_built_ins_ladder(self):
+        """The other half of the same seam: naming one key of the block used to
+        block the whole inheritance, leaving the entry with no ladder at all."""
+        client = _build(
+            {**self.SHADOW, "reasoning_efforts": None, "reasoning": {"default": "low"}},
+            reasoning_effort="xhigh",
+        )
+        assert client.reasoning == {"effort": "xhigh"}
+
+    def test_a_block_naming_only_a_ladder_still_borrows_the_write_path(self):
+        client = _build(
+            {**self.SHADOW, "reasoning_efforts": None, "reasoning": {"efforts": ["low", "high"]}},
+            reasoning_effort="max",
+        )
+        assert client.reasoning == {"effort": "high"}

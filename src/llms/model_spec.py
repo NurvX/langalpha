@@ -116,11 +116,9 @@ def _checked_surface(name: str, reasoning: dict | None) -> dict:
 #: the only compaction declaration the manifest actually makes:
 #: ``compaction_profile_for`` reads the named profile first and the window's
 #: band second, and every manifest row answers by window. ``reasoning`` is
-#: inherited whole: a borrowed ladder needs somewhere to be written, and an
-#: entry taking the levels but not the write path would resolve a level that
-#: lands nowhere.
+#: handled separately by :func:`with_inherited_declarations`, because it is the
+#: one declaration that is really two.
 SHADOW_INHERITED = (
-    "reasoning",
     "prompt_guidance",
     "compaction_profile",
     "context",
@@ -133,10 +131,20 @@ def with_inherited_declarations(entry: dict, shadowed: dict | None) -> dict:
     Presence, not truthiness: an entry declaring ``reasoning_efforts: []`` is
     saying the model honors no levels, and the shadowed ladder must not
     overwrite that answer.
+
+    ``reasoning`` fills in key by key rather than whole, because the block
+    bundles two declarations -- which levels exist, and where the chosen one is
+    written -- and an entry that names one still needs the other. Inheriting it
+    whole discards a ladder stored in the flat shape, which carries no
+    ``reasoning`` key to block the inheritance; inheriting nothing when the
+    entry names any key at all strands a partial block with no surface.
     """
     if not shadowed:
         return entry
     inherited = {k: shadowed[k] for k in SHADOW_INHERITED if k not in entry and k in shadowed}
+    reasoning = {**reasoning_block(shadowed), **reasoning_block(entry)}
+    if reasoning:
+        inherited["reasoning"] = reasoning
     return {**entry, **inherited} if inherited else entry
 
 

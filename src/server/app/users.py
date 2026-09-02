@@ -349,7 +349,7 @@ def _validate_custom_models(custom_models: list, custom_providers: list | None =
         # Rejected here rather than at request time: an unknown write path is
         # accepted by the vendor and ignored, so the entry would render an
         # effort control that reports a level and sends nothing.
-        if isinstance(cm.get("reasoning"), dict) and cm["reasoning"].get("efforts"):
+        if isinstance(cm.get("reasoning"), dict) and cm["reasoning"]:
             try:
                 validate_surface(f"custom_models[{idx}]", cm["reasoning"])
             except ReasoningSurfaceError as exc:

@@ -68,8 +68,16 @@ def validate_surface(name: str, surface: dict) -> None:
 
     Runs where the author is still holding it: the manifest suite builds every
     entry, and the preferences endpoint checks a custom one on save. Past here
-    a bad path is a 200 the vendor ignores.
+    a bad path is a 200 the vendor ignores, and a wrongly typed one is an
+    exception raised on every turn from data that was accepted once.
     """
+    for key, expected in (("write", str), ("on", dict), ("off", dict), ("efforts", list)):
+        value = surface.get(key)
+        if value is not None and not isinstance(value, expected):
+            raise ReasoningSurfaceError(
+                f"{name}: reasoning.{key} must be a {expected.__name__}, "
+                f"got {type(value).__name__}"
+            )
     write = surface.get("write")
     if write is not None and write not in WRITE_PATHS:
         raise ReasoningSurfaceError(
@@ -81,16 +89,16 @@ def validate_surface(name: str, surface: dict) -> None:
                 raise ReasoningSurfaceError(
                     f"{name}: reasoning.{key} path {path!r} is not a known patch path"
                 )
+    # The rest is the block checked against its own ladder. Only a full block
+    # carries one -- an inferred surface has no efforts and no rung to be wrong
+    # about -- and a surface with no levels behind it writes nothing anyway.
+    efforts = surface.get("efforts") or ()
+    if not efforts:
+        return
     if write is None and not (surface.get("on") or surface.get("off")):
         raise ReasoningSurfaceError(
             f"{name}: reasoning declares efforts with nowhere to write them"
         )
-
-    # Checked against the ladder, which only a full block carries: an inferred
-    # surface has no efforts and no rung to be wrong about.
-    efforts = surface.get("efforts") or ()
-    if not efforts:
-        return
     off_rungs = sorted(OFF_LEVELS.intersection(efforts))
     if surface.get("on") and not surface.get("off") and off_rungs:
         raise ReasoningSurfaceError(

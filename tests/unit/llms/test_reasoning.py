@@ -314,6 +314,22 @@ class TestValidateSurface:
                 },
             )
 
+    @pytest.mark.parametrize(
+        "block, wrong",
+        [
+            ({"efforts": 1, "write": "parameters.reasoning.effort"}, "efforts"),
+            ({"write": ["parameters.reasoning.effort"]}, "write"),
+            ({"on": ["parameters.thinking.type"]}, "on"),
+            ({"off": "parameters.thinking.type"}, "off"),
+        ],
+    )
+    def test_a_wrongly_typed_key_is_refused(self, block, wrong):
+        """The block is user input on the preferences path, and every one of
+        these otherwise reaches the mapper as an exception raised per turn --
+        a 500 on data the save accepted."""
+        with pytest.raises(ReasoningSurfaceError, match=f"reasoning.{wrong} must be"):
+            validate_surface("m", block)
+
     def test_a_surface_with_no_ladder_skips_the_rung_checks(self):
         """An inferred surface carries no efforts, so there is no rung for the
         cross-field checks to be about."""
