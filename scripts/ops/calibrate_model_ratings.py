@@ -52,8 +52,12 @@ MANIFEST = REPO / "src/llms/manifest/models.json"
 DEFAULT_ENV = REPO / ".env"
 
 # Frontier-calibrated bands. (lower_bound_inclusive, tier) high->low.
-INTEL_BANDS = [(56, 5), (49, 4), (42, 3), (35, 2), (0, 1)]   # <- AA intelligence index
-SPEED_BANDS = [(150, 5), (110, 4), (75, 3), (50, 2), (0, 1)]  # <- AA output tokens/sec
+# Placed in the GAPS of the observed distribution, not at round numbers: a
+# threshold sitting on top of a model flips that badge on the next AA refresh.
+# Intelligence has no clean cut above 50 (17 of 23 models fall in 51.5..63.1),
+# so band 5 stays crowded on purpose and 54 is only the widest gap available.
+INTEL_BANDS = [(54, 5), (49, 4), (42, 3), (35, 2), (0, 1)]   # <- AA intelligence index
+SPEED_BANDS = [(150, 5), (100, 4), (65, 3), (45, 2), (0, 1)]  # <- AA output tokens/sec
 
 # Our access/region/serving variants that map onto a base model's AA rating.
 VARIANT_SUFFIXES = (
@@ -68,6 +72,27 @@ STOP_TOKENS = {"preview", "experimental", "exp"}
 # base, and only for the fields present (so AA-derived fields survive otherwise).
 MANUAL: dict[str, dict] = {}
 
+# Our model key -> AA slug, where AA files a model under its research release
+# name and the vendor sells it under another. The opposite of a MANUAL entry:
+# it removes hand-set numbers by letting AA's own row reach the model.
+AA_SLUG_ALIASES = {
+    # DashScope's `qwen3.8-flash` is the productionised Qwen3.8-Flash-Next
+    # (same weights, 262k native context served extended to 1M).
+    "qwen3.8-flash": "qwen3-8-flash-next",
+}
+
+
+def _keep_inline_arrays(text: str, original: str) -> str:
+    """Re-collapse the short arrays the manifest hand-keeps on one line.
+
+    ``json.dumps`` expands every array, which would bury a values-only rewrite
+    under whitespace noise in the diff.
+    """
+    for m in re.finditer(r'^([ \t]*)"([^"]+)": (\[[^\[\]]*\])(,?)$', original, re.M):
+        indent, key, inline, comma = m.groups()
+        expanded = json.dumps(json.loads(inline), indent=2).replace("\n", "\n" + indent)
+        text = text.replace(f'{indent}"{key}": {expanded}{comma}', m.group(0))
+    return text
 
 def band(value: float, bands: list[tuple[float, int]]) -> int:
     for lo, tier in bands:
@@ -204,7 +229,9 @@ def main() -> None:
 
     aa = fetch_aa(get_key(args.env_file), use_cache=not args.no_cache)
     by_tokens: dict[frozenset[str], list[dict]] = {}
+    by_slug: dict[str, dict] = {}
     for m in aa:
+        by_slug[m["slug"]] = m
         for label in (m["slug"], m["name"]):
             by_tokens.setdefault(tokens(label), []).append(m)
 
@@ -223,7 +250,9 @@ def main() -> None:
     for k in sorted(visible):
         cur = manifest[k]
         cur_s, cur_i = cur.get("speed"), cur.get("intelligence")
-        rows = by_tokens.get(tokens(k)) or by_tokens.get(tokens(base_name(k)))
+        alias = by_slug.get(AA_SLUG_ALIASES.get(collapse_base(k), ""))
+        rows = [alias] if alias else (
+            by_tokens.get(tokens(k)) or by_tokens.get(tokens(base_name(k))))
         row = pick_row(rows, target_effort_rank(cur), args.basis) if rows else {}
         if not row:
             ov = overrides.get(k, {})
@@ -268,7 +297,8 @@ def main() -> None:
                 if f in ov and f in write_fields:
                     manifest[k][f] = ov[f]
         # Match the manifest's canonical format exactly so the diff is values-only.
-        MANIFEST.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+        rendered = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+        MANIFEST.write_text(_keep_inline_arrays(rendered, MANIFEST.read_text()))
         print(f"\nWROTE {MANIFEST} — fields={','.join(sorted(write_fields))}; "
               f"{len(matched)} AA models + {len(overrides)} manual-override variants")
     else:
