@@ -8,6 +8,8 @@ declared, or a write filed where a reader belongs.
 
 import pytest
 
+from src.server.services import brokerage_capabilities as capabilities
+from src.server.services import brokerages
 from src.server.services.brokerage_capabilities import (
     GROUPS,
     UNCURATED,
@@ -67,6 +69,41 @@ def test_a_server_we_curate_nothing_for_has_no_policy() -> None:
     assert tools_for("some_users_own_server", ["market_data"]) is None
 
 
+def test_a_shipped_brokerage_we_have_not_curated_yet_permits_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The window between listing a brokerage and curating it has to fail closed.
+
+    Listing one in BROKERAGES is what puts a Connect button on it, and that
+    lands before anyone has seen the vendor's tool list to group it. Reading
+    curation as the test for "is this a brokerage" would answer None here,
+    which the relay reads as no policy and waves every tool through on a live
+    trading connection.
+
+    The window is staged rather than found among the shipped names. Every
+    brokerage is curated today, so looking for a real one makes this pass by
+    finding nothing to check -- green while testing the opposite of its name.
+    """
+    shipped = brokerages.Brokerage(
+        name="not_curated_yet",
+        label="Not Curated Yet",
+        url="https://api.example.com/mcp",
+        site="example.com",
+        description="A brokerage listed ahead of its curation.",
+    )
+    monkeypatch.setattr(
+        capabilities,
+        "brokerage_by_name",
+        lambda name: shipped if name == shipped.name else None,
+    )
+
+    assert shipped.name not in _CURATION
+    assert tools_for(shipped.name, []) == frozenset()
+    assert tools_for(shipped.name, ["market_data", "trading"]) == frozenset()
+    # No toggles to offer, which is what keeps the consent dialog away.
+    assert group_keys_for(shipped.name) == ()
+
+
 @pytest.mark.parametrize("vendor", VENDORS)
 def test_uncurated_tools_are_in_no_group(vendor: str) -> None:
     every = tools_for(vendor, group_keys_for(vendor))
@@ -97,6 +134,22 @@ def test_placing_an_order_takes_the_trading_group() -> None:
         assert tool in tools_for(vendor, ["trading"])
 
 
-def test_ibkr_is_never_asked_about_trading() -> None:
-    """Nothing in its published set places an order, so the toggle would lie."""
-    assert "trading" not in group_keys_for("ibkr")
+@pytest.mark.parametrize("vendor", ["ibkr", "webull"])
+def test_a_broker_that_places_nothing_is_never_asked_about_trading(
+    vendor: str,
+) -> None:
+    """Neither publishes a tool that places an order, so the toggle would lie."""
+    assert "trading" not in group_keys_for(vendor)
+
+
+def test_webull_has_no_rung_at_all() -> None:
+    """Read-only by the vendor's own line, not by our reading of a tool list.
+
+    Webull's consent screen offers account, order query, market data and
+    instruments, and no trading capability, so the write scope is not grantable
+    and nothing published places, previews or stages an order. IBKR by contrast
+    stops one rung down rather than at zero, with a staged order a human submits.
+    """
+    rungs = {g.key for g in GROUPS if g.rung}
+    assert not rungs & set(group_keys_for("webull"))
+    assert "staged_orders" in set(group_keys_for("ibkr")) & rungs

@@ -44,6 +44,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from src.server.services.brokerages import brokerage_by_name
+
 
 @dataclass(frozen=True)
 class CapabilityGroup:
@@ -81,7 +83,7 @@ _BY_KEY: dict[str, CapabilityGroup] = {g.key: g for g in GROUPS}
 
 # Tool names exactly as the vendor publishes them, which is what the relay
 # compares against. Counted against live discovery: moomoo 88, Robinhood 67,
-# IBKR 34, one of IBKR's deliberately left out.
+# IBKR 34, Webull 71, one of IBKR's deliberately left out.
 _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
     "moomoo": {
         "market_data": (
@@ -309,6 +311,92 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
             "get_order_instructions",
         ),
     },
+    # No rung of any kind here, and the line is the vendor's rather than ours.
+    # Webull's consent screen offers exactly four capabilities -- account infos,
+    # order query, market data, security infos -- and no trading checkbox, so the
+    # write scope is not grantable at all and nothing published places, previews
+    # or stages an order. The order tools below read.
+    "webull": {
+        "market_data": (
+            "get_52_week_high_low",
+            "get_analyst_rating",
+            "get_analyst_target_price",
+            "get_balance_sheet",
+            "get_cash_flow",
+            "get_company_profile",
+            "get_crypto_bars",
+            "get_crypto_instruments",
+            "get_crypto_snapshot",
+            "get_event_bars",
+            "get_event_categories",
+            "get_event_depth",
+            "get_event_events",
+            "get_event_instruments",
+            "get_event_series",
+            "get_event_snapshot",
+            "get_event_tick",
+            # Risk indicators published about a security, not an alert the user
+            # owns, which is why this is data rather than the ``alerts`` group.
+            "get_financial_alert",
+            "get_financial_indicators",
+            "get_fund_allocation",
+            "get_fund_brief",
+            "get_fund_dividends",
+            "get_fund_files",
+            "get_fund_holdings",
+            "get_fund_net_value",
+            "get_fund_performance",
+            "get_fund_rating",
+            "get_fund_splits",
+            "get_futures_bars",
+            "get_futures_depth",
+            "get_futures_footprint",
+            "get_futures_instruments",
+            "get_futures_product_class",
+            "get_futures_products",
+            "get_futures_snapshot",
+            "get_futures_tick",
+            "get_gainers_losers",
+            "get_high_dividend",
+            "get_income_statement",
+            "get_instruments",
+            "get_market_sectors",
+            "get_market_sectors_detail",
+            "get_most_active",
+            "get_stock_bars",
+            "get_stock_bars_single",
+            "get_stock_capital_flow",
+            "get_stock_dividend_calendar",
+            "get_stock_earnings_calendar",
+            "get_stock_filings",
+            "get_stock_footprint",
+            "get_stock_forecast_eps",
+            "get_stock_industry_comparison",
+            "get_stock_noii_bars",
+            "get_stock_noii_snapshot",
+            "get_stock_quotes",
+            "get_stock_snapshot",
+            "get_stock_tick",
+        ),
+        "watchlists": (
+            "add_watchlist_instruments",
+            "create_watchlist",
+            "delete_watchlist",
+            "get_watchlist_instruments",
+            "get_watchlists",
+            "remove_watchlist_instruments",
+            "update_watchlist",
+            "update_watchlist_instruments",
+        ),
+        "account": (
+            "get_account_balance",
+            "get_account_list",
+            "get_account_positions",
+            "get_open_orders",
+            "get_order_detail",
+            "get_order_history",
+        ),
+    },
 }
 
 # Named so a reader can see it was a decision, not an omission: this submits a
@@ -343,10 +431,19 @@ def tools_for(brokerage: str, granted: Iterable[str]) -> frozenset[str] | None:
     server is not one we have a map for, and the caller decides. For a brokerage
     the answer is always a set, empty if nothing was granted, which is why
     ``policy_required`` can insist on one.
+
+    That "always" is what the registry lookup below buys. A brokerage becomes
+    connectable the moment it is listed in ``BROKERAGES``, which is necessarily
+    before anyone has seen its tool list to curate it, and the two edits are far
+    enough apart that the window is a real one rather than a theoretical gap.
+    Reading curation as the test for "is this a brokerage" fails open in exactly
+    that window: no map, so no policy, so the relay waves every tool through on
+    a live trading connection. Keying on the registry instead makes the same
+    window grant nothing.
     """
     curated = _CURATION.get(brokerage)
     if curated is None:
-        return None
+        return frozenset() if brokerage_by_name(brokerage) else None
     wanted = set(granted)
     return frozenset(
         tool for key, tools in curated.items() if key in wanted for tool in tools

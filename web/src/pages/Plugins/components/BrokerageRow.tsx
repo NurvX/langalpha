@@ -18,7 +18,7 @@ import {
   ServerRowShell,
 } from '@/pages/ChatAgent/components/mcp/McpPrimitives';
 import type { CatalogServer } from '@/pages/ChatAgent/utils/api';
-import { type Brokerage } from '../brokerages';
+import { settledGrant, type Brokerage } from '../brokerages';
 import { isPluginOwned } from '../utils/provenance';
 import {
   ConnectButton,
@@ -98,6 +98,9 @@ export function BrokerageRow({
   // to ask, and what it would create is always http.
   const oauthEligible = !row || row.transport === 'http';
   const unconnected = oauthEligible && needsOauthConnect(status);
+  // One reading of the grant for the whole row: the badges and the note
+  // below both draw it, and they used to disagree about null.
+  const granted = settledGrant(row?.granted_capabilities, status);
   const rowKey = `brokerage-${brokerage.name}`;
   // Their row, their address: once it exists the URL is editable in the MCP
   // tab, and a row pointing somewhere else is no longer this broker whatever
@@ -160,13 +163,15 @@ export function BrokerageRow({
                 anyone wants off a brokerage row and the last thing the page
                 could say. Before a connection they are what it offers; after
                 one they are what it may actually do. */}
-            <OrderCapabilityBadges
-              vendor={vendor}
-              granted={row?.granted_capabilities ?? null}
-            />
+            <OrderCapabilityBadges vendor={vendor} granted={granted} />
             {/* Connected and granted nothing: every tool is refused, and the
-                only other sign of it is the agent failing to call one. */}
-            {row?.granted_capabilities?.length === 0 && (
+                only other sign of it is the agent failing to call one.
+
+                Read off `settledGrant`, the same value the badges above draw,
+                so the row cannot say "offered" and "granted nothing" in the
+                same breath -- which is what it did for a brokerage connected
+                before its tools were curated, whose stored answer is null. */}
+            {granted?.length === 0 && (
               <RowNote icon={AlertTriangle} tone="warning">
                 {t('plugins.brokerages.grantedNone')}
               </RowNote>

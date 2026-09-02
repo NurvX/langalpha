@@ -656,6 +656,52 @@ describe('the brokerages tab', () => {
     });
   });
 
+  describe('a connection that was granted nothing', () => {
+    it('says so when the grant is an empty list', async () => {
+      catalogServers = [
+        catalogRow({
+          name: 'ibkr',
+          url: IBKR.url,
+          oauth_status: 'connected',
+          granted_capabilities: [],
+        }),
+      ];
+      await renderTab();
+
+      expect(
+        screen.getByText(/granted nothing/i),
+      ).toBeInTheDocument();
+    });
+
+    it('says so when it stored no grant at all', async () => {
+      // A brokerage connected before its tools were curated: the dialog had no
+      // groups to offer, so nothing was stored. The relay refuses every call on
+      // it exactly as it does for an empty list, and testing only for the empty
+      // list left the one connection that permits nothing the one that says so.
+      catalogServers = [
+        catalogRow({
+          name: 'ibkr',
+          url: IBKR.url,
+          oauth_status: 'connected',
+          granted_capabilities: null,
+        }),
+      ];
+      await renderTab();
+
+      expect(
+        screen.getByText(/granted nothing/i),
+      ).toBeInTheDocument();
+    });
+
+    it('stays quiet on a broker with no connection to read', async () => {
+      // Null before a connection is the offer, not a refusal.
+      catalogServers = [];
+      await renderTab();
+
+      expect(screen.queryByText(/granted nothing/i)).toBeNull();
+    });
+  });
+
   describe('what it says before the click', () => {
     it('warns that an exclusive connection takes the account slot', async () => {
       await renderTab();

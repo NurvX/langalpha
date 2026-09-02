@@ -79,6 +79,18 @@ BROKERAGES: tuple[Brokerage, ...] = (
         exclusive_connection=True,
     ),
     Brokerage(
+        name="webull",
+        label="Webull",
+        url="https://api.webull.com/mcp",
+        site="webull.com",
+        description=(
+            "Webull brokerage account: balances, positions and buying power, "
+            "order history and placement, real-time quotes, and instrument "
+            "reference data. Covers equities, options, futures, event "
+            "contracts and crypto."
+        ),
+    ),
+    Brokerage(
         name="moomoo",
         label="moomoo",
         url="https://mcp.moomoo.com/mcp",

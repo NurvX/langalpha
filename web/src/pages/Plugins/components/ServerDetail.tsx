@@ -12,7 +12,7 @@ import {
   useMcpCatalogServerTools,
 } from '@/hooks/useMcpServers';
 import { brokerageArt, mcpServerArt } from '@/lib/brandArt';
-import { brokerageForUrl, type Brokerage } from '../brokerages';
+import { brokerageForUrl, settledGrant, type Brokerage } from '../brokerages';
 import { createDateFormatter } from '@/lib/format';
 import type {
   BuiltinMcpServer,
@@ -107,7 +107,7 @@ export function ServerDetail({
   // Off the pill's own exhaustive table: a status added later is a compile
   // error there rather than a label that silently goes missing here.
   const oauthLabel = oauthLabelKey(catalog?.oauth_status);
-  const granted = catalog?.granted_capabilities ?? null;
+  const granted = settledGrant(catalog?.granted_capabilities, catalog?.oauth_status);
   const groups = vendor?.capabilities ?? [];
 
   // A brokerage wears the vendor's label until its row is pointed elsewhere,
