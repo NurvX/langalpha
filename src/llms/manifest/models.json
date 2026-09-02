@@ -805,7 +805,7 @@
       "pdf",
       "video"
     ],
-    "extra_body": {
+    "parameters": {
       "reasoning": {
         "effort": "xhigh"
       }
@@ -834,7 +834,7 @@
       "pdf",
       "video"
     ],
-    "extra_body": {
+    "parameters": {
       "reasoning": {
         "effort": "medium"
       }
@@ -863,7 +863,7 @@
       "pdf",
       "video"
     ],
-    "extra_body": {
+    "parameters": {
       "reasoning": {
         "effort": "xhigh"
       }
@@ -893,7 +893,7 @@
       "pdf",
       "video"
     ],
-    "extra_body": {
+    "parameters": {
       "reasoning": {
         "effort": "xhigh"
       }
@@ -922,7 +922,7 @@
       "pdf",
       "video"
     ],
-    "extra_body": {
+    "parameters": {
       "reasoning": {
         "effort": "medium"
       }
@@ -951,7 +951,7 @@
       "pdf",
       "video"
     ],
-    "extra_body": {
+    "parameters": {
       "reasoning": {
         "effort": "xhigh"
       }
