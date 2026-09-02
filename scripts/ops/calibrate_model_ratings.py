@@ -10,11 +10,17 @@ model-detail flyout:
 AA lists one row PER reasoning-effort per model (xhigh/high/medium/low/
 non-reasoning). Two ways to read an "intelligence" number off that:
 
-  --basis served  (default) pick the AA row whose effort matches how WE run the
-                  model (from manifest ``parameters``), nearest-effort fallback.
-                  Honest: gpt-5.4@medium rates below gpt-5.5, not tied to it.
-  --basis ceiling pick the highest-intelligence row. Simpler, but mid-tier
-                  "full" models look near-flagship.
+  --basis ceiling (default) pick the highest-intelligence row. Simpler, but
+                  mid-tier "full" models look near-flagship.
+  --basis served  pick the AA row whose effort matches how WE run the model
+                  (from manifest ``parameters``), nearest-effort fallback. The
+                  honest reading in principle, and not the default because the
+                  two rank functions below still disagree with the manifest:
+                  ``target_effort_rank`` never reads ``extra_body.reasoning_effort``
+                  and maps neither ``max`` nor ``none``, and ``aa_effort_rank``
+                  does not recognise a bare "(max)" suffix. Until those are
+                  fixed it silently falls back to the ceiling row, or worse,
+                  to a lower-effort one.
 
 The AA index spans the whole AA universe (~5..62 in v4); our manifest is all
 frontier models, so a global quantile collapses to 5. We bucket with
@@ -22,8 +28,8 @@ FRONTIER-CALIBRATED absolute thresholds (INTEL_BANDS / SPEED_BANDS) so a "5"
 always means the same thing and the lineup still spreads across 1-5.
 
 Usage:
-  python scripts/ops/calibrate_model_ratings.py                  # dry-run, served basis
-  python scripts/ops/calibrate_model_ratings.py --basis ceiling  # dry-run, ceiling
+  python scripts/ops/calibrate_model_ratings.py                  # dry-run, ceiling basis
+  python scripts/ops/calibrate_model_ratings.py --basis served   # dry-run, served
   python scripts/ops/calibrate_model_ratings.py --apply --fields intelligence
   python scripts/ops/calibrate_model_ratings.py --apply --fields intelligence,speed
   python scripts/ops/calibrate_model_ratings.py --no-cache       # force refetch
@@ -219,7 +225,7 @@ def pick_row(rows: list[dict], target: int | None, basis: str) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="write models.json (default: dry-run)")
-    ap.add_argument("--basis", choices=("served", "ceiling"), default="served")
+    ap.add_argument("--basis", choices=("served", "ceiling"), default="ceiling")
     ap.add_argument("--fields", default="intelligence,speed",
                     help="comma list of fields to write on --apply")
     ap.add_argument("--no-cache", action="store_true")
