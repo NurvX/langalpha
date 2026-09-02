@@ -51,3 +51,46 @@ class TestDeclaredLadderIsHonored:
         )
         assert getattr(client, "reasoning", None) is None
         assert "reasoning_effort" not in client.metadata
+
+
+class TestSurfaceResolution:
+    """Where a BYOK entry's level gets written, now that the manifest declares
+    it rather than leaving it to be guessed from the seed."""
+
+    def test_a_declared_surface_is_used(self):
+        client = _build(
+            {
+                **_CONFIG,
+                "parameters": {"reasoning": {"summary": "auto"}},
+                "reasoning": {
+                    "efforts": ["low", "medium", "high"],
+                    "default": "medium",
+                    "write": "parameters.reasoning.effort",
+                },
+            },
+            reasoning_effort="high",
+        )
+        assert client.reasoning == {"effort": "high", "summary": "auto"}
+
+    def test_a_seed_only_entry_still_works(self):
+        """Entries stored before the block existed carry only the flat keys and
+        the seed. They keep their effort control instead of going quiet."""
+        assert "reasoning" not in _CONFIG
+        client = _build(reasoning_effort="high")
+        assert client.reasoning == {"effort": "high", "summary": "auto"}
+
+    def test_a_shadowing_entry_borrows_the_built_ins_surface(self):
+        """It declares no surface of its own and has no seed to guess from, so
+        the built-in whose name it took is the only thing that can say where
+        the level goes."""
+        client = _build(
+            {
+                "name": "gpt-5.6-sol",
+                "model_id": "gpt-5.6-sol",
+                "provider": "openai",
+                "reasoning_efforts": ["low", "high"],
+            },
+            reasoning_effort="high",
+        )
+        assert client.reasoning == {"effort": "high"}
+        assert client.metadata["reasoning_effort"] == "high"

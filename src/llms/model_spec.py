@@ -10,7 +10,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .reasoning import REASONING_LEVELS, apply_reasoning_effort
+from .reasoning import REASONING_LEVELS, infer_surface, validate_surface
 
 
 class ManifestSource(Protocol):
@@ -48,6 +48,26 @@ def default_reasoning_effort(
     return efforts[len(efforts) // 2]
 
 
+def reasoning_block(entry: dict | None) -> dict:
+    """One model's reasoning declaration, from either shape it may be stored in.
+
+    The manifest states it as a single ``reasoning`` block. Custom models saved
+    before that block existed carry the same facts as flat ``reasoning_efforts``
+    / ``reasoning_effort_default`` keys, so both are read here rather than
+    migrating a preferences column.
+    """
+    entry = entry or {}
+    block = entry.get("reasoning")
+    if isinstance(block, dict):
+        return block
+    flat = {}
+    if "reasoning_efforts" in entry:
+        flat["efforts"] = entry["reasoning_efforts"]
+    if "reasoning_effort_default" in entry:
+        flat["default"] = entry["reasoning_effort_default"]
+    return flat
+
+
 def clamp_reasoning_effort(
     efforts: tuple[str, ...] | list[str], default: str | None, requested: str
 ) -> str | None:
@@ -77,31 +97,32 @@ def clamp_reasoning_effort(
 #: the only compaction declaration the manifest actually makes:
 #: ``compaction_profile_for`` reads the named profile first and the window's
 #: band second, and every manifest row answers by window.
+#: The keys of a ``reasoning`` block that say where a level is written, as
+#: opposed to which levels exist.
+SURFACE_KEYS = ("write", "on", "off")
+
+
+def _checked_surface(name: str, reasoning: dict | None) -> dict:
+    """Just the write half of a ``reasoning`` block, validated.
+
+    Validated at spec-build time rather than on the request path so an unknown
+    path is a startup error naming the model, not a silent no-op on the wire.
+    """
+    if not reasoning:
+        return {}
+    validate_surface(name, reasoning)
+    return {k: reasoning[k] for k in SURFACE_KEYS if k in reasoning}
+
+
+#: ``reasoning`` is inherited whole: a borrowed ladder needs somewhere to be
+#: written, and an entry taking the levels but not the write path would resolve
+#: a level that lands nowhere.
 SHADOW_INHERITED = (
-    "reasoning_efforts",
-    "reasoning_effort_default",
+    "reasoning",
     "prompt_guidance",
     "compaction_profile",
     "context",
 )
-
-
-#: Where a level is written, per vendor. ``apply_reasoning_effort`` dispatches on
-#: whichever of these the model already declares and has no default branch, so a
-#: shadow that borrowed a ladder has to borrow the surface too or the level it
-#: resolves lands nowhere.
-REASONING_SURFACE_KEYS = (
-    "reasoning",
-    "output_config",
-    "thinking",
-    "thinking_level",
-    "reasoning_effort",
-)
-
-
-def _surface_of(declared: dict | None) -> dict:
-    """Just the reasoning keys out of a model's parameters or extra_body."""
-    return {k: v for k, v in (declared or {}).items() if k in REASONING_SURFACE_KEYS}
 
 
 def with_inherited_declarations(entry: dict, shadowed: dict | None) -> dict:
@@ -129,6 +150,8 @@ class ModelSpec:
     additional_betas: tuple[str, ...] = ()
     reasoning_efforts: tuple[str, ...] = ()
     reasoning_effort_default: str | None = None
+    #: Where this model's effort level is written. Empty means no effort control.
+    reasoning_surface: dict[str, Any] = field(default_factory=dict)
     #: Platform proxy to route through when the caller brings no key of its own.
     system_provider: str | None = None
     #: SDK to assume when the provider is not in the manifest at all. A manifest
@@ -143,7 +166,8 @@ class ModelSpec:
         info = model_config.get_model_config(model_name)
         if not info:
             raise ValueError(f"Model {model_name} not found in models.json")
-        efforts = canonical_reasoning_efforts(info.get("reasoning_efforts"))
+        reasoning = reasoning_block(info)
+        efforts = canonical_reasoning_efforts(reasoning.get("efforts"))
         return cls(
             name=model_name,
             model_id=info["model_id"],
@@ -153,8 +177,9 @@ class ModelSpec:
             additional_betas=tuple(info.get("additional_betas") or ()),
             reasoning_efforts=efforts,
             reasoning_effort_default=default_reasoning_effort(
-                efforts, info.get("reasoning_effort_default")
+                efforts, reasoning.get("default")
             ),
+            reasoning_surface=_checked_surface(model_name, reasoning),
             system_provider=info.get("system_provider"),
         )
 
@@ -167,38 +192,20 @@ class ModelSpec:
         itself is the built-in's to declare.
         """
         declared = with_inherited_declarations(config, shadowed)
-        efforts = canonical_reasoning_efforts(declared.get("reasoning_efforts"))
+        reasoning = reasoning_block(declared)
+        efforts = canonical_reasoning_efforts(reasoning.get("efforts"))
         declared_response_api = config.get("_use_response_api")
-        own_params = config.get("parameters") or {}
-        own_extra = config.get("extra_body") or {}
-        # All or nothing, and across both containers, because one model can
-        # spell its control in either: an entry naming any reasoning key owns
-        # the surface, and filling in the vendors it left out would put a
-        # second, never-written control on the wire beside the one it declared.
-        # Gated on the ladder too -- an entry declaring no levels wants no
-        # reasoning key at all, not the shadowed model's default.
-        inherits_surface = (
-            bool(efforts)
-            and shadowed is not None
-            and not any(k in own_params or k in own_extra for k in REASONING_SURFACE_KEYS)
-        )
-        # Deep-copied before anything writes to them: the borrowed surface shares
-        # its nested dicts with the process-wide manifest.
-        parameters = copy.deepcopy(
-            {**own_params, **_surface_of(shadowed.get("parameters"))} if inherits_surface else own_params
-        )
-        extra_body = copy.deepcopy(
-            {**own_extra, **_surface_of(shadowed.get("extra_body"))} if inherits_surface else own_extra
-        )
-        default = default_reasoning_effort(efforts, declared.get("reasoning_effort_default"))
-        if inherits_surface and default:
-            # A borrowed surface carries the built-in's level, which is not this
-            # entry's answer: an entry may narrow the ladder or name its own
-            # default. Writing the resolved default into it keeps what a call
-            # with no request reports and what the wire carries from disagreeing,
-            # which is the invariant every manifest row already satisfies. Only
-            # for a surface we seeded; a level the entry typed itself is its own.
-            apply_reasoning_effort(default, parameters, extra_body)
+        # Deep-copied because the borrowed block shares its nested dicts with
+        # the process-wide manifest, and the mapper writes into these.
+        parameters = copy.deepcopy(config.get("parameters") or {})
+        extra_body = copy.deepcopy(config.get("extra_body") or {})
+        # Gated on the ladder: an entry declaring no levels wants no effort
+        # control at all, not the shadowed model's surface. Inference is the
+        # last resort, for a standalone entry that predates the block.
+        surface = reasoning if efforts else None
+        if efforts and not (reasoning.get("write") or reasoning.get("on") or reasoning.get("off")):
+            surface = infer_surface(parameters, extra_body)
+        default = default_reasoning_effort(efforts, reasoning.get("default"))
         return cls(
             name=config.get("name", config["model_id"]),
             model_id=config["model_id"],
@@ -208,6 +215,9 @@ class ModelSpec:
             additional_betas=tuple(config.get("additional_betas") or ()),
             reasoning_efforts=efforts,
             reasoning_effort_default=default,
+            reasoning_surface=_checked_surface(
+                config.get("name", config["model_id"]), copy.deepcopy(surface)
+            ),
             sdk_fallback="openai",
             use_response_api_override=(
                 None if declared_response_api is None else bool(declared_response_api)

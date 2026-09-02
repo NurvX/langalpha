@@ -72,12 +72,12 @@ class TestUnhonoredLevelsDegrade:
 
     def test_above_the_ceiling_steps_down_one(self, config):
         """max on a low/medium/high model runs high, not that model's middle."""
-        assert config.get_reasoning_efforts("claude-haiku-4-5") == [
+        assert config.get_reasoning_efforts("gemini-3.1-pro") == [
             "low",
             "medium",
             "high",
         ]
-        assert config.resolve_reasoning_effort("claude-haiku-4-5", "max") == "high"
+        assert config.resolve_reasoning_effort("gemini-3.1-pro", "max") == "high"
 
     def test_below_the_floor_takes_the_lowest(self, config):
         """Nothing at or under the request — the model's minimum is as close as it gets."""
@@ -141,7 +141,7 @@ class TestManifestAgreesWithTheMapper:
             for level in efforts:
                 params = copy.deepcopy(entry.get("parameters", {}))
                 extra = copy.deepcopy(entry.get("extra_body", {}))
-                apply_reasoning_effort(level, params, extra)
+                apply_reasoning_effort(level, params, extra, entry.get("reasoning"))
                 seen[level] = json.dumps([params, extra], sort_keys=True)
             assert len(set(seen.values())) == len(efforts), (
                 f"{name}: levels emit duplicate payloads -> {seen}"
@@ -157,7 +157,9 @@ class TestManifestAgreesWithTheMapper:
         for name, entry in config.llm_config.items():
             if not isinstance(entry, dict):
                 continue
-            if "reasoning" not in (entry.get("extra_body") or {}):
+            # Keyed off the provider family, not the surface shape: the surface
+            # is shared with OpenAI, which does serve the top of the ladder.
+            if not str(entry.get("provider", "")).startswith("dashscope"):
                 continue
             top = set(config.get_reasoning_efforts(name)) & {"xhigh", "max"}
             if top:
