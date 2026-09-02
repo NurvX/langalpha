@@ -66,12 +66,7 @@ STOP_TOKENS = {"preview", "experimental", "exp"}
 # Models AA's language endpoint doesn't track (or tracks without throughput).
 # Hand-grounded from the cited sources; applied to every visible variant of the
 # base, and only for the fields present (so AA-derived fields survive otherwise).
-MANUAL = {
-    # GLM turbo throughput <- OpenRouter/Fireworks (~48-70 tok/s). 'turbo' is
-    # cheap/agentic, not high-throughput. Intelligence stays AA-derived.
-    "glm-5-turbo":  {"speed": 2, "ref": "OpenRouter ~48 / Fireworks 70 tok/s -> band 2"},
-    "glm-5v-turbo": {"speed": 2, "ref": "GLM-turbo family throughput ~48-70 tok/s"},
-}
+MANUAL: dict[str, dict] = {}
 
 
 def band(value: float, bands: list[tuple[float, int]]) -> int:

@@ -2442,7 +2442,7 @@
     "addModel": "添加模型",
     "modelIdInputPlaceholder": "输入模型 ID（如 GPT-5.4）",
     "customModelNameLabel": "显示名称",
-    "customModelNamePlaceholder": "在菜单中如何显示（如 glm-5.1）",
+    "customModelNamePlaceholder": "在菜单中如何显示（如 glm-5.3）",
     "customModelNameSlugPreview": "将保存为：{{slug}}",
     "customModelNameSlugEmpty": "请输入字母或数字 — 空格和符号会被自动移除。",
     "customModelIdLabel": "上游模型 ID",

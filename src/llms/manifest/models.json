@@ -589,31 +589,6 @@
     ],
     "reasoning_effort_default": "high"
   },
-  "glm-5.1": {
-    "model_id": "glm-5.1",
-    "provider": "z-ai",
-    "visible": true,
-    "speed": 3,
-    "intelligence": 4,
-    "context": 200000,
-    "parameters": {
-      "max_tokens": 128000
-    },
-    "extra_body": {
-      "thinking": {
-        "type": "enabled",
-        "clear_thinking": false
-      }
-    },
-    "input_modalities": [
-      "text"
-    ],
-    "reasoning_efforts": [
-      "none",
-      "high"
-    ],
-    "reasoning_effort_default": "high"
-  },
   "glm-5.2": {
     "prompt_guidance": "lean",
     "model_id": "glm-5.2",
@@ -700,108 +675,6 @@
     ],
     "reasoning_effort_default": "max"
   },
-  "glm-5v-turbo": {
-    "model_id": "glm-5v-turbo",
-    "provider": "z-ai",
-    "visible": true,
-    "speed": 2,
-    "intelligence": 3,
-    "context": 200000,
-    "parameters": {
-      "max_tokens": 128000
-    },
-    "extra_body": {
-      "thinking": {
-        "type": "enabled",
-        "clear_thinking": false
-      }
-    },
-    "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-    ],
-    "reasoning_efforts": [
-      "none",
-      "high"
-    ],
-    "reasoning_effort_default": "high"
-  },
-  "glm-5-turbo": {
-    "model_id": "glm-5-turbo",
-    "provider": "z-ai",
-    "visible": true,
-    "speed": 2,
-    "intelligence": 3,
-    "context": 200000,
-    "parameters": {
-      "max_tokens": 128000
-    },
-    "extra_body": {
-      "thinking": {
-        "type": "enabled",
-        "clear_thinking": false
-      }
-    },
-    "input_modalities": [
-      "text"
-    ],
-    "reasoning_efforts": [
-      "none",
-      "high"
-    ],
-    "reasoning_effort_default": "high"
-  },
-  "glm-5-turbo-cn": {
-    "model_id": "glm-5-turbo",
-    "provider": "z-ai-cn",
-    "visible": true,
-    "speed": 2,
-    "intelligence": 3,
-    "context": 200000,
-    "parameters": {
-      "max_tokens": 128000
-    },
-    "extra_body": {
-      "thinking": {
-        "type": "enabled",
-        "clear_thinking": false
-      }
-    },
-    "input_modalities": [
-      "text"
-    ],
-    "reasoning_efforts": [
-      "none",
-      "high"
-    ],
-    "reasoning_effort_default": "high"
-  },
-  "glm-5.1-cn": {
-    "model_id": "glm-5.1",
-    "provider": "z-ai-cn",
-    "visible": true,
-    "speed": 3,
-    "intelligence": 4,
-    "context": 200000,
-    "parameters": {
-      "max_tokens": 128000
-    },
-    "extra_body": {
-      "thinking": {
-        "type": "enabled",
-        "clear_thinking": false
-      }
-    },
-    "input_modalities": [
-      "text"
-    ],
-    "reasoning_efforts": [
-      "none",
-      "high"
-    ],
-    "reasoning_effort_default": "high"
-  },
   "glm-5.2-cn": {
     "prompt_guidance": "lean",
     "model_id": "glm-5.2",
@@ -887,33 +760,6 @@
       "max"
     ],
     "reasoning_effort_default": "max"
-  },
-  "glm-5v-turbo-cn": {
-    "model_id": "glm-5v-turbo",
-    "provider": "z-ai-cn",
-    "visible": true,
-    "speed": 2,
-    "intelligence": 3,
-    "context": 200000,
-    "parameters": {
-      "max_tokens": 128000
-    },
-    "extra_body": {
-      "thinking": {
-        "type": "enabled",
-        "clear_thinking": false
-      }
-    },
-    "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-    ],
-    "reasoning_efforts": [
-      "none",
-      "high"
-    ],
-    "reasoning_effort_default": "high"
   },
   "minimax-m3": {
     "model_id": "MiniMax-M3",
