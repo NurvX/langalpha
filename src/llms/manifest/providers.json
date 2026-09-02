@@ -437,6 +437,43 @@
             "output": 0.66
           }
         }
+      },
+      {
+        "id": "deepseek-v4-flash-vision-exp",
+        "name": "DeepSeek V4 Flash Vision (Exp)",
+        "is_reasoning": true,
+        "description": "DeepSeek's V4 Flash with image input, priced identically to the text model; experimental, and the vendor may change or withdraw it",
+        "context_window": 1000000,
+        "max_output": 384000,
+        "pricing": {
+          "input": 0.44,
+          "cached_input": 0.014,
+          "output": 1.32,
+          "unit": "per_1m_tokens",
+          "peak_utc": [
+            [
+              1,
+              4
+            ],
+            [
+              6,
+              10
+            ]
+          ],
+          "peak_days": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "peak_days_utc_offset": 8,
+          "off_peak": {
+            "input": 0.22,
+            "cached_input": 0.007,
+            "output": 0.66
+          }
+        }
       }
     ],
     "vllm": [],
