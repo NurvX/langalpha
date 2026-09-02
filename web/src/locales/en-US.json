@@ -2463,7 +2463,7 @@
     "addModel": "Add model",
     "modelIdInputPlaceholder": "Enter model ID (e.g. GPT-5.4)",
     "customModelNameLabel": "Display name",
-    "customModelNamePlaceholder": "How this model appears in menus (e.g. glm-5.1)",
+    "customModelNamePlaceholder": "How this model appears in menus (e.g. glm-5.3)",
     "customModelNameSlugPreview": "Saved as: {{slug}}",
     "customModelNameSlugEmpty": "Add letters or numbers — spaces and symbols will be stripped.",
     "customModelIdLabel": "Upstream model ID",
