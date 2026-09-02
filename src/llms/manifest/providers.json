@@ -466,6 +466,30 @@
         }
       },
       {
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
+        "is_reasoning": true,
+        "description": "Z.AI's flagship GLM-5.3 model with 1M context and always-on thinking",
+        "pricing": {
+          "input": 1.4,
+          "cached_input": 0.26,
+          "output": 4.4,
+          "unit": "per_1m_tokens"
+        }
+      },
+      {
+        "id": "glm-5.3-flash",
+        "name": "GLM-5.3-Flash",
+        "is_reasoning": true,
+        "description": "Z.AI's natively multimodal GLM-5.3-Flash with 1M context",
+        "pricing": {
+          "input": 0.15,
+          "cached_input": 0.03,
+          "output": 0.5,
+          "unit": "per_1m_tokens"
+        }
+      },
+      {
         "id": "glm-5v-turbo",
         "name": "GLM-5V-Turbo",
         "is_reasoning": true,
@@ -544,6 +568,30 @@
           "input": 1.14,
           "cached_input": 0.29,
           "output": 4.0,
+          "unit": "per_1m_tokens"
+        }
+      },
+      {
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
+        "is_reasoning": true,
+        "description": "Z.AI's flagship GLM-5.3 model with 1M context, flat domestic pricing",
+        "pricing": {
+          "input": 1.14,
+          "cached_input": 0.29,
+          "output": 4.0,
+          "unit": "per_1m_tokens"
+        }
+      },
+      {
+        "id": "glm-5.3-flash",
+        "name": "GLM-5.3-Flash",
+        "is_reasoning": true,
+        "description": "Z.AI's natively multimodal GLM-5.3-Flash with 1M context, flat domestic pricing",
+        "pricing": {
+          "input": 0.114,
+          "cached_input": 0.033,
+          "output": 0.4,
           "unit": "per_1m_tokens"
         }
       },

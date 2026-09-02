@@ -646,6 +646,64 @@
     ],
     "reasoning_effort_default": "max"
   },
+  "glm-5.3": {
+    "prompt_guidance": "lean",
+    "model_id": "glm-5.3",
+    "provider": "z-ai",
+    "visible": true,
+    "speed": 3,
+    "intelligence": 5,
+    "context": 1000000,
+    "parameters": {
+      "max_tokens": 128000
+    },
+    "extra_body": {
+      "thinking": {
+        "type": "enabled",
+        "clear_thinking": false
+      },
+      "reasoning_effort": "max"
+    },
+    "input_modalities": [
+      "text"
+    ],
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "max"
+    ],
+    "reasoning_effort_default": "max"
+  },
+  "glm-5.3-flash": {
+    "prompt_guidance": "lean",
+    "model_id": "glm-5.3-flash",
+    "provider": "z-ai",
+    "visible": true,
+    "speed": 4,
+    "intelligence": 4,
+    "context": 1000000,
+    "parameters": {
+      "max_tokens": 128000
+    },
+    "extra_body": {
+      "thinking": {
+        "type": "enabled",
+        "clear_thinking": false
+      },
+      "reasoning_effort": "max"
+    },
+    "input_modalities": [
+      "text",
+      "image",
+      "pdf"
+    ],
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "max"
+    ],
+    "reasoning_effort_default": "max"
+  },
   "glm-5v-turbo": {
     "model_id": "glm-5v-turbo",
     "provider": "z-ai",
@@ -776,6 +834,64 @@
       "medium",
       "high",
       "xhigh",
+      "max"
+    ],
+    "reasoning_effort_default": "max"
+  },
+  "glm-5.3-cn": {
+    "prompt_guidance": "lean",
+    "model_id": "glm-5.3",
+    "provider": "z-ai-cn",
+    "visible": true,
+    "speed": 3,
+    "intelligence": 5,
+    "context": 1000000,
+    "parameters": {
+      "max_tokens": 128000
+    },
+    "extra_body": {
+      "thinking": {
+        "type": "enabled",
+        "clear_thinking": false
+      },
+      "reasoning_effort": "max"
+    },
+    "input_modalities": [
+      "text"
+    ],
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "max"
+    ],
+    "reasoning_effort_default": "max"
+  },
+  "glm-5.3-flash-cn": {
+    "prompt_guidance": "lean",
+    "model_id": "glm-5.3-flash",
+    "provider": "z-ai-cn",
+    "visible": true,
+    "speed": 4,
+    "intelligence": 4,
+    "context": 1000000,
+    "parameters": {
+      "max_tokens": 128000
+    },
+    "extra_body": {
+      "thinking": {
+        "type": "enabled",
+        "clear_thinking": false
+      },
+      "reasoning_effort": "max"
+    },
+    "input_modalities": [
+      "text",
+      "image",
+      "pdf"
+    ],
+    "reasoning_efforts": [
+      "low",
+      "high",
       "max"
     ],
     "reasoning_effort_default": "max"
