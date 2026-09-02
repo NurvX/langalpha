@@ -382,27 +382,6 @@
     ],
     "reasoning_effort_default": "medium"
   },
-  "gemini-3.1-flash-image": {
-    "model_id": "gemini-3.1-flash-image-preview",
-    "provider": "gemini",
-    "visible": true,
-    "speed": 5,
-    "intelligence": 3,
-    "context": 32000,
-    "input_modalities": [
-      "text",
-      "image"
-    ],
-    "parameters": {
-      "include_thoughts": true,
-      "thinking_level": "minimal"
-    },
-    "reasoning_efforts": [
-      "minimal",
-      "high"
-    ],
-    "reasoning_effort_default": "minimal"
-  },
   "gpt-oss-120b": {
     "model_id": "gpt-oss-120b",
     "provider": "vllm",

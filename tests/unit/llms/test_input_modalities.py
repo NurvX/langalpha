@@ -28,11 +28,6 @@ class TestGetInputModalities:
         assert "image" in result
         assert "pdf" in result
 
-    def test_gemini_flash_image_no_pdf(self, model_config):
-        result = model_config.get_input_modalities("gemini-3.1-flash-image")
-        assert "image" in result
-        assert "pdf" not in result
-
     def test_deepseek_text_only(self, model_config):
         result = model_config.get_input_modalities("deepseek-v4-flash")
         assert result == ["text"]
