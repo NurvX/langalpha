@@ -144,6 +144,20 @@
         }
       },
       {
+        "id": "claude-fable-5-1",
+        "name": "Claude Fable 5.1",
+        "is_reasoning": true,
+        "description": "Claude Fable 5.1 model",
+        "pricing": {
+          "input": 10.0,
+          "cached_input": 0.25,
+          "cache_5m": 12.5,
+          "cache_1h": 20.0,
+          "output": 50.0,
+          "unit": "per_1m_tokens"
+        }
+      },
+      {
         "id": "claude-opus-5",
         "name": "Claude Opus 5",
         "is_reasoning": true,
@@ -261,6 +275,27 @@
         "name": "Gemini 3.7 Flash",
         "is_reasoning": true,
         "description": "Google's most capable Flash model for agentic workflows and multimodal reasoning",
+        "pricing": {
+          "input": 0.75,
+          "cached_input": 0.075,
+          "output": 3.75,
+          "cache_storage": 0.5,
+          "unit": "per_1m_tokens"
+        },
+        "scheduled_pricing": {
+          "effective_from": "2027-01-01",
+          "input": 1.5,
+          "cached_input": 0.15,
+          "output": 7.5,
+          "cache_storage": 1.0,
+          "unit": "per_1m_tokens"
+        }
+      },
+      {
+        "id": "gemini-3.8-flash",
+        "name": "Gemini 3.8 Flash",
+        "is_reasoning": true,
+        "description": "Google's most intelligent Flash model, for long-horizon software engineering, autonomous agents, and complex enterprise workflows",
         "pricing": {
           "input": 0.75,
           "cached_input": 0.075,
