@@ -137,15 +137,31 @@ export function GroupedToolList({
   const { t } = useTranslation();
   const settled = granted != null;
   const byGroup = new Map<string, McpToolSummary[]>();
+  // Two trailing buckets, not one, because a tool outside every group is in one
+  // of two opposite states and the old single bucket asserted the wrong one for
+  // half of them. `always_denied` is a tool we read and deliberately withheld:
+  // refused whatever is granted. The rest are tools we have not classified,
+  // which the policy permits by design -- so they are the reachable ones, and
+  // drawing them dimmed under "Not available" told the reader the opposite of
+  // the truth on a screen about what an agent may do with a trading account.
+  const neverAvailable: McpToolSummary[] = [];
+  const unclassified: McpToolSummary[] = [];
   for (const tool of tools) {
-    const key = tool.capability ?? '';
-    const bucket = byGroup.get(key);
-    if (bucket) bucket.push(tool);
-    else byGroup.set(key, [tool]);
+    if (tool.capability) {
+      const bucket = byGroup.get(tool.capability);
+      if (bucket) bucket.push(tool);
+      else byGroup.set(tool.capability, [tool]);
+    } else if (tool.always_denied === false) {
+      unclassified.push(tool);
+    } else {
+      // Explicit false, not merely falsy. The field is absent on a backend that
+      // predates it, and that backend's policy was an allowlist -- under which
+      // an ungrouped tool was refused, not permitted. Reading `undefined` as
+      // permitted drew exactly those tools as callable for as long as a new
+      // page was talking to an old server.
+      neverAvailable.push(tool);
+    }
   }
-  // Trailing, and named for what it means rather than for being left over: a
-  // tool no group covers is one the agent never sees, at any grant.
-  const ungrouped = byGroup.get('') ?? [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -177,31 +193,63 @@ export function GroupedToolList({
         );
       })}
 
-      {ungrouped.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span
-              className="text-[0.6875rem] font-medium"
-              style={{ color: 'var(--color-text-secondary)' }}
-            >
-              {t('plugins.brokerages.detail.ungrouped')}
-            </span>
-            <span
-              className="text-[0.6875rem]"
-              style={{ color: 'var(--color-text-quaternary)' }}
-            >
-              {ungrouped.length}
-            </span>
-          </div>
-          <p
-            className="text-[0.6875rem]"
-            style={{ color: 'var(--color-text-quaternary)' }}
-          >
-            {t('plugins.brokerages.detail.ungroupedNote')}
-          </p>
-          <ToolNames tools={ungrouped} dimmed />
-        </div>
-      )}
+      <TrailingBucket
+        tools={neverAvailable}
+        label={t('plugins.brokerages.detail.neverAvailable')}
+        note={t('plugins.brokerages.detail.neverAvailableNote')}
+        dimmed
+      />
+      <TrailingBucket
+        tools={unclassified}
+        label={t('plugins.brokerages.detail.unclassified')}
+        // "The agent can still call them" is only true of a connection there is
+        // something to call with. With nothing connected the sentence promised
+        // reach the page had just finished saying does not exist.
+        note={t(
+          settled
+            ? 'plugins.brokerages.detail.unclassifiedNote'
+            : 'plugins.brokerages.detail.unclassifiedNoteUnconnected',
+        )}
+        // Not dimmed: these are the ones the agent can actually call.
+        dimmed={!settled}
+      />
+    </div>
+  );
+}
+
+/** A tool bucket that belongs to no consent group, with the reason it doesn't. */
+function TrailingBucket({
+  tools,
+  label,
+  note,
+  dimmed,
+}: {
+  tools: McpToolSummary[];
+  label: string;
+  note: string;
+  dimmed: boolean;
+}) {
+  if (tools.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span
+          className="text-[0.6875rem] font-medium"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          {label}
+        </span>
+        <span
+          className="text-[0.6875rem]"
+          style={{ color: 'var(--color-text-quaternary)' }}
+        >
+          {tools.length}
+        </span>
+      </div>
+      <p className="text-[0.6875rem]" style={{ color: 'var(--color-text-quaternary)' }}>
+        {note}
+      </p>
+      <ToolNames tools={tools} dimmed={dimmed} />
     </div>
   );
 }

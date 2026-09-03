@@ -2814,11 +2814,11 @@
         },
         "watchlists": {
           "label": "Watchlists",
-          "desc": "Read your watchlists, and add or remove symbols."
+          "desc": "Read your watchlists, add or remove symbols, and create or delete whole lists."
         },
         "scanners": {
           "label": "Saved scanners",
-          "desc": "Read the screeners you have saved, and create or delete them."
+          "desc": "Read the screeners you have saved, and create, run or change them."
         },
         "alerts": {
           "label": "Price alerts",
@@ -2826,7 +2826,7 @@
         },
         "account": {
           "label": "Account and positions",
-          "desc": "Balances, holdings, order history and transfers. Reading only."
+          "desc": "Balances, holdings and order history. Reading only."
         },
         "paper_trading": {
           "label": "Paper trading",
@@ -2848,21 +2848,24 @@
       "consent": {
         "title": "Connect “{{server}}”",
         "subtitle": "Choose what this connection lets the agent do at this broker.",
-        "footnote": "Anything left off is refused when the agent asks for it, not merely hidden. To change this later, reconnect."
+        "footnote": "A group left off is refused when the agent asks for it, not merely hidden. To change this later, reconnect."
       },
       "detail": {
         "broker": "Broker",
         "capabilities": "What this can do",
-        "capabilitiesNote": "Anything declined is refused when the agent asks for it, not merely hidden. Reconnect to change it.",
+        "capabilitiesNote": "A declined group is refused when the agent asks for it, not merely hidden. Reconnect to change this.",
         "declined": "Declined",
         "endpoint": "Endpoint",
         "granted": "Granted",
-        "grantedNone": "This connection was granted nothing, so every tool below is refused. Reconnect to choose again.",
+        "grantedNone": "This connection was granted no group, so every tool under one is refused. Reconnect to choose again.",
         "notConnectedNote": "Nothing is granted until you connect, and you choose what to grant then.",
         "offered": "Offered",
-        "ungrouped": "Not available",
-        "ungroupedNote": "No capability covers these, so the agent never sees them.",
-        "website": "Website"
+        "website": "Website",
+        "unclassified": "Not in a group",
+        "unclassifiedNote": "No group covers these, so declining a group does not refuse them. The agent can still call them.",
+        "unclassifiedNoteUnconnected": "No group covers these, so declining a group does not refuse them. Nothing is connected here, so nothing can call them yet.",
+        "neverAvailable": "Never available",
+        "neverAvailableNote": "Held back deliberately. Refused whatever you grant."
       },
       "exclusiveNote": "Replaces this account's other AI connection",
       "exclusiveWarning": "This account allows one connected AI platform, so connecting here replaces whichever one is connected now.",

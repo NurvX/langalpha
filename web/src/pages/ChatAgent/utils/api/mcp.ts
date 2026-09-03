@@ -48,6 +48,13 @@ export interface McpToolSummary {
    * and on every server that is not a brokerage.
    */
   capability?: string | null;
+  /**
+   * Whether this tool is refused at every grant. A null `capability` alone does
+   * not say: one we deliberately withheld is always refused, one we have simply
+   * not classified is always permitted. Reading null as "unavailable" is how the
+   * detail view came to promise the agent could not reach tools it could.
+   */
+  always_denied?: boolean;
 }
 
 export type McpStatus =

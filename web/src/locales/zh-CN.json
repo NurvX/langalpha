@@ -2791,11 +2791,11 @@
         },
         "watchlists": {
           "label": "自选列表",
-          "desc": "读取你的自选列表，并添加或删除标的。"
+          "desc": "读取自选列表，增删标的，并可新建或删除整个列表。"
         },
         "scanners": {
           "label": "已保存的选股条件",
-          "desc": "读取你保存的选股条件，并新建或删除。"
+          "desc": "读取你保存的选股器，并可新建、运行或修改。"
         },
         "alerts": {
           "label": "价格提醒",
@@ -2803,7 +2803,7 @@
         },
         "account": {
           "label": "账户与持仓",
-          "desc": "余额、持仓、历史订单和资金流水。仅读取。"
+          "desc": "余额、持仓和订单历史。仅读取。"
         },
         "paper_trading": {
           "label": "模拟交易",
@@ -2825,21 +2825,24 @@
       "consent": {
         "title": "连接“{{server}}”",
         "subtitle": "选择此连接允许智能体在该券商做哪些事。",
-        "footnote": "未开启的能力在智能体调用时会被拒绝，而不只是隐藏起来。之后如需更改，请重新连接。"
+        "footnote": "未勾选的分组在智能体调用时会被拒绝，而不只是隐藏。之后可重新连接以更改。"
       },
       "detail": {
         "broker": "券商",
         "capabilities": "可执行的操作",
-        "capabilitiesNote": "未授予的操作在智能体调用时会被拒绝，而不只是隐藏。重新连接即可修改。",
+        "capabilitiesNote": "被拒绝的分组在智能体调用时会被拒绝，而不只是隐藏。重新连接可以更改。",
         "declined": "未授予",
         "endpoint": "接入地址",
         "granted": "已授予",
-        "grantedNone": "该连接未获授予任何操作，因此下方所有工具都会被拒绝。重新连接可重新选择。",
+        "grantedNone": "此连接未获授权任何分组，因此分组内的所有工具都会被拒绝。重新连接可重新选择。",
         "notConnectedNote": "连接之前不会授予任何操作，连接时由你选择。",
         "offered": "可选",
-        "ungrouped": "不可用",
-        "ungroupedNote": "没有任何权限组包含这些工具，智能体始终看不到它们。",
-        "website": "官网"
+        "website": "官网",
+        "unclassified": "不属于任何分组",
+        "unclassifiedNote": "没有分组涵盖这些工具，因此拒绝某个分组并不会拒绝它们。智能体仍然可以调用。",
+        "unclassifiedNoteUnconnected": "这些工具不属于任何分组，拒绝某个分组不会屏蔽它们。此处尚未连接，因此暂时无法调用。",
+        "neverAvailable": "始终不可用",
+        "neverAvailableNote": "已刻意保留。无论授权什么都会被拒绝。"
       },
       "exclusiveNote": "会取代该账户已有的 AI 连接",
       "exclusiveWarning": "该账户只允许连接一个 AI 平台，因此在此连接会取代当前已连接的那一个。",
