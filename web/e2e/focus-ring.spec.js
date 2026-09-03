@@ -376,3 +376,86 @@ test.describe('a field whose container is the indicator', () => {
     expect(await outlineOn(page, field)).toMatchObject({ focused: true, style: 'none' });
   });
 });
+
+/**
+ * The half that survives leaving the browser.
+ *
+ * Switching to another app does not release element focus, it parks it:
+ * `document.activeElement` is unchanged across the whole trip, and the browser
+ * fires a `focusout`/`focusin` pair around it as bookkeeping. That restoring
+ * `focusin` is indistinguishable from any other, and by the time it arrives the
+ * recorded device has been flipped to keyboard by the user's own typing -- so
+ * the composer someone clicked, typed into, and left for the length of an agent
+ * turn came back wearing the ring. It is the shape of bug that reads as "it
+ * still happens sometimes": the trip out and back is what triggers it, and
+ * nothing about the app does.
+ *
+ * The trip is synthesized because Playwright cannot make one. It pins every
+ * page it drives to `Emulation.setFocusEmulationEnabled`, so a backgrounded tab
+ * still believes it has focus and fires nothing -- verified by driving a real
+ * Chrome with `osascript` instead, which is also where the sequence replayed
+ * below was measured. Everything else here is real: the app, the stylesheet,
+ * the click, the typing, and the paint that gets read back.
+ */
+const PARKED = [
+  { field: 'the chat composer', sel: COMPOSER },
+  { field: 'the dashboard search box', sel: SEARCH },
+];
+
+/** What the browser fires around a trip out of the window and back. */
+async function leaveWindowAndReturn(page) {
+  await page.evaluate(() => {
+    const el = document.activeElement;
+    const pair = { bubbles: true, composed: true, relatedTarget: null };
+    el.dispatchEvent(new FocusEvent('focusout', pair));
+    window.dispatchEvent(new FocusEvent('blur'));
+    window.dispatchEvent(new FocusEvent('focus'));
+    el.dispatchEvent(new FocusEvent('focusin', pair));
+  });
+}
+
+test.describe('a field left focused while the user is in another app', () => {
+  for (const { field, sel } of PARKED) {
+    test(`comes back unringed on ${field}`, async ({ page }) => {
+      await expect(page.locator(sel)).toBeVisible();
+      const resting = await outlineOn(page, sel);
+      await page.click(sel);
+      // Typing is what makes this reachable: it flips the recorded device to
+      // keyboard while focus sits still, so the restore has stale evidence to
+      // read. Without it the trip is harmless and this passes unfixed.
+      await page.keyboard.type('AAPL');
+      await leaveWindowAndReturn(page);
+
+      const returned = await outlineOn(page, sel);
+      expect(returned.focused).toBe(true);
+      expect(unpainted(returned.style, returned.color)).toBe(true);
+      expect(returned.shadow).toBe(resting.shadow);
+    });
+  }
+
+  test('comes back still ringed for someone who tabbed to it', async ({ page }) => {
+    // The over-eager fix passes every assertion above by never re-deciding at
+    // all. A keyboard user has to leave and return to their own indicator.
+    await expect(page.locator(SEARCH)).toBeVisible();
+    await keyboardFocus(page, SEARCH);
+    expect(await outlineOn(page, SEARCH)).toMatchObject({ style: 'solid' });
+
+    await leaveWindowAndReturn(page);
+    expect(await outlineOn(page, SEARCH)).toMatchObject({ focused: true, style: 'solid' });
+  });
+
+  test('leaves the next real focus move free to decide for itself', async ({ page }) => {
+    // Passing over the restore must consume exactly one focusin. If the flag
+    // outlives it, the first control the user reaches after coming back
+    // inherits the verdict of the one they left.
+    await expect(page.locator(SEARCH)).toBeVisible();
+    await page.click(SEARCH);
+    await page.keyboard.type('AAPL');
+    await leaveWindowAndReturn(page);
+
+    await tabTo(page, ROW);
+    expect(await outlineOn(page, ROW)).toMatchObject({ focused: true });
+    const ring = await outlineOn(page, ROW);
+    expect(ring.style === 'solid' || ring.shadow !== 'none').toBe(true);
+  });
+});
