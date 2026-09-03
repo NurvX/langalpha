@@ -55,7 +55,7 @@ import { ListControls } from './ListControls';
 import { McpCatalogRow } from './McpCatalogRow';
 import { REGISTRY_NOTE_ID } from './OauthRowParts';
 import { RowNote } from './RowNote';
-import { brokerageForUrl, settledGrant } from '../brokerages';
+import { brokerageForUrl } from '../brokerages';
 import { McpWorkspaceRow } from './McpWorkspaceRow';
 import { PluginSuppressedBadge } from './PluginBadges';
 import { ServerDetail, type McpServerDetailData } from './ServerDetail';
@@ -370,7 +370,7 @@ export function McpServers() {
             name: server.name,
             vendor,
             url: server.url ?? null,
-            granted: settledGrant(server.granted_capabilities, server.oauth_status),
+            granted: server.remembered_capabilities ?? null,
           });
         }}
         onDisconnect={() => oauth.disconnect(server.name)}

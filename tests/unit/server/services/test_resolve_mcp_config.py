@@ -519,6 +519,81 @@ class TestResolveInheritedLayer:
         by_name = {s.name: s for s in resolved.servers}
         assert by_name["acme"].oauth_connection_id == "conn-1"
 
+    async def test_the_policy_follows_the_address_not_the_row_name(self):
+        """The identity bug this whole surface turns on, at the hiding half.
+
+        A row is named by its owner and can be renamed or repointed at will, so
+        deriving the vendor from ``server_name`` gave a row called anything else
+        at a broker's host no policy, and a row holding a broker's name pointed
+        elsewhere somebody else's. The relay derives from the consented
+        ``server_url``; this side has to agree, or a tool is hidden from the
+        prompt and still callable, or offered and then refused.
+        """
+        base = _base_config(MCPServerConfig(name="alpha"))
+        resolved = await _resolve(
+            base,
+            rows=[],
+            user_rows=[_user_row("my_broker", url="https://mcp.moomoo.com/mcp")],
+            connections=[
+                {
+                    "connection_id": "conn-1",
+                    "server_name": "my_broker",
+                    "server_url": "https://mcp.moomoo.com/mcp",
+                    "status": "connected",
+                    "granted_capabilities": ["market_data"],
+                }
+            ],
+        )
+        denied = {e.name: e.denied_tools for e in resolved.entries}["my_broker"]
+        assert "trading_order_place" in denied
+        assert "quote_stock_quote" not in denied
+
+    async def test_a_brokerage_name_pointed_elsewhere_gets_no_policy(self):
+        """The mirror shape: the name is reserved, the address is not ours.
+
+        Refusing moomoo's tool names on somebody else's server would be
+        meaningless rather than dangerous -- the danger is the reverse, a
+        denial computed for the wrong vendor that happens to omit the tools
+        this one actually publishes.
+        """
+        base = _base_config(MCPServerConfig(name="alpha"))
+        resolved = await _resolve(
+            base,
+            rows=[],
+            user_rows=[_user_row("moomoo", url="https://not-moomoo.example.test/mcp")],
+            connections=[
+                {
+                    "connection_id": "conn-1",
+                    "server_name": "moomoo",
+                    "server_url": "https://not-moomoo.example.test/mcp",
+                    "status": "connected",
+                    "granted_capabilities": None,
+                }
+            ],
+        )
+        denied = {e.name: e.denied_tools for e in resolved.entries}["moomoo"]
+        assert denied is None
+
+    async def test_a_brokerage_with_no_recorded_consent_denies_its_curation(self):
+        base = _base_config(MCPServerConfig(name="alpha"))
+        resolved = await _resolve(
+            base,
+            rows=[],
+            user_rows=[_user_row("moomoo", url="https://mcp.moomoo.com/mcp")],
+            connections=[
+                {
+                    "connection_id": "conn-1",
+                    "server_name": "moomoo",
+                    "server_url": "https://mcp.moomoo.com/mcp",
+                    "status": "connected",
+                    "granted_capabilities": None,
+                }
+            ],
+        )
+        denied = {e.name: e.denied_tools for e in resolved.entries}["moomoo"]
+        assert "trading_order_place" in denied
+        assert "quote_stock_quote" in denied
+
     async def test_user_tier_is_read_through_list_enabled_user_servers(self):
         # The enabled filter lives in the DB layer: every row that read
         # returns for THIS user is inherited as enabled — the resolver never

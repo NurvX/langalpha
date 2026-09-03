@@ -21,7 +21,6 @@ import { formatApiErrorDetail, type CatalogServer } from '@/pages/ChatAgent/util
 import {
   brokerageForUrl,
   connectBlock,
-  settledGrant,
   type Brokerage,
 } from '../brokerages';
 import { useMcpOauthActions } from '../hooks/useMcpOauthActions';
@@ -167,7 +166,7 @@ export function Brokerages() {
       url: row?.url ?? brokerage.url,
       // What the row already grants, so the dialog opens on the answer the user
       // gave last time rather than on the vendor's default.
-      granted: settledGrant(row?.granted_capabilities, row?.oauth_status),
+      granted: row?.remembered_capabilities ?? null,
       prepare: wasInert ? () => ensureLive(brokerage.name) : undefined,
       rollback: wasInert ? () => revertLive(brokerage.name) : undefined,
     });

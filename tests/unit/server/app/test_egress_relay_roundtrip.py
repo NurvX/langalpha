@@ -91,7 +91,7 @@ def _grant() -> dict:
         "connection_id": CONNECTION_ID,
         "destination_url": VENDOR_URL,
         "allowed_methods": ["POST"],
-        "tool_allowlist": None,
+        "tool_denylist": None,
         "grant_status": "active",
         "connection_status": "connected",
     }

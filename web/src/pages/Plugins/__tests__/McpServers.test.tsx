@@ -464,6 +464,37 @@ describe('McpServers — OAuth connect affordance', () => {
     );
   });
 
+  // The same row reached from the other tab, and the two seed the dialog
+  // independently. A repair opened from here has to start from the user's last
+  // answer for the same reason it does over there.
+  it('reopens a repair on the groups the user last chose', async () => {
+    brokerages = [EXCLUSIVE_VENDOR];
+    catalogData = makeCatalog([
+      makeOauthServer({
+        name: 'ibkr',
+        url: EXCLUSIVE_VENDOR.url,
+        oauth_status: 'needs_reauth',
+        granted_capabilities: null,
+        remembered_capabilities: ['market_data'],
+      }),
+    ]);
+    mockStartMcpOauth.mockResolvedValue({ authorize_url: 'https://vendor.example.test/a' });
+    renderWithProviders(<McpServers />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^reconnect$/i }));
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: /^connect$/i }),
+    );
+
+    await waitFor(() =>
+      expect(mockStartMcpOauth).toHaveBeenCalledWith(
+        'ibkr',
+        '/plugins?tab=mcp',
+        expect.objectContaining({ grantedCapabilities: ['market_data'] }),
+      ),
+    );
+  });
+
   it('starts nothing when the user backs out of it', () => {
     brokerages = [EXCLUSIVE_VENDOR];
     catalogData = makeCatalog([

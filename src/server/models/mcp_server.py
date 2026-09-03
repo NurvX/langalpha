@@ -609,6 +609,14 @@ class CatalogServer(BaseModel):
     # granted nothing. The consent is enforced per call at the relay, so a
     # surface that cannot read it back can only guess what a connection does.
     granted_capabilities: Optional[list[str]] = None
+    # The same keys, but answering "what did the user last choose" rather than
+    # "what is in force". They part company the moment a connection stops being
+    # servable: the grant is gone, so the badges must not draw one, while the
+    # choice behind it is still the user's and is what a reconnect has to open
+    # on. Seeding a repair from product defaults instead re-proposed every group
+    # the user had declined, on a flow they entered to fix an expiry rather than
+    # to change their mind.
+    remembered_capabilities: Optional[list[str]] = None
     # Host-side discovered tool count for the server's CURRENT config (OAuth
     # servers only today — that's the only user-level discovery path). None =
     # no current snapshot; the UI omits the count rather than showing 0.
@@ -792,6 +800,7 @@ def catalog_row_to_response(
     *,
     oauth_status: ConnectionStatus | None = None,
     granted_capabilities: list[str] | None = None,
+    remembered_capabilities: list[str] | None = None,
     tool_count: int | None = None,
     icon_url: str | None = None,
 ) -> CatalogServer:
@@ -807,6 +816,7 @@ def catalog_row_to_response(
         enabled=bool(row.get("enabled", False)),
         oauth_status=oauth_status,
         granted_capabilities=granted_capabilities,
+        remembered_capabilities=remembered_capabilities,
         tool_count=tool_count,
         icon_url=icon_url,
         command=row.get("command"),

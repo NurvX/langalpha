@@ -18,8 +18,10 @@ from ptc_agent.core.mcp_sanitize import is_untrusted_server
 from ptc_agent.core.sandbox.runtime import SandboxGoneError, SandboxTransientError
 from ptc_agent.core.session import Session, SessionManager
 
+from src.server.services.egress import fold_tool_name
 from src.server.services.egress.session_binding import (
     maybe_remint_egress_jwt,
+    RelayBind,
     sync_egress_relay,
 )
 
@@ -113,6 +115,15 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
         # where the row is already in hand, so standard-tier restarts skip the
         # check without any extra read.
         self._pending_tier_recheck: set[str] = set()
+
+        # Workspaces whose last resolve lost the grants to a newer one. The
+        # withheld version stamp is what makes the next acquire re-resolve, and
+        # it only gets read on the slow path -- so without this the sync
+        # cooldown returns the stale session for up to 30s without ever looking
+        # at a version, and the stamp closes nothing. Same reasoning as
+        # ``skills_signature``: the cooldown exists to skip *redundant* work,
+        # and this pass is known non-redundant.
+        self._resolve_superseded: set[str] = set()
 
         # Per-workspace locks (replaces global _lock to avoid cross-workspace blocking)
         self._lock_registry_mu = asyncio.Lock()  # protects _workspace_locks dict only
@@ -260,6 +271,7 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
             self._sessions.pop(workspace_id, None)
         self._pending_lazy_sync.discard(workspace_id)
         self._pending_tier_recheck.discard(workspace_id)
+        self._resolve_superseded.discard(workspace_id)
 
     async def _take_valid_cached_session(
         self, workspace_id: str, mark: Callable[[str], None]
@@ -605,19 +617,51 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
         # install so the grant annotations ride into the config copies codegen
         # reads. Best-effort: a relay hiccup leaves those servers unbound (their
         # generated clients fail with a clear error) but never blocks the turn.
-        egress_ok = True
+        egress_bind = RelayBind.APPLIED
         try:
-            egress_ok = await sync_egress_relay(
+            egress_bind = await sync_egress_relay(
                 workspace_id, user_id, session, resolved
             )
         except Exception as e:
-            egress_ok = False
+            egress_bind = RelayBind.REFUSED
             logger.warning(
                 "[EGRESS] relay binding failed for %s: %s", workspace_id, e
             )
 
         await self._install_session_composite(session, resolved, user_id=user_id)
-        if not egress_ok:
+        if egress_bind is RelayBind.SUPERSEDED:
+            # A newer resolve already owns the grants, so everything derived
+            # from this one is stale by the same amount -- including the tool
+            # set the wrappers and the per-tool docs are generated from.
+            #
+            # Reporting no change suppresses the warm path's asset sync, which
+            # gates on this return. It does NOT suppress the three provisioning
+            # paths (fresh sandbox, reattach, deferred phase two), which publish
+            # unconditionally -- and correctly so: they have no previously
+            # published set to fall back on, so withholding here would leave the
+            # turn with no MCP tools at all rather than with slightly old ones.
+            # Those paths do republish the stale documentation.
+            #
+            # What that costs is bounded to this turn's reading, never its
+            # reach: the relay checks the grant, and the grant is the newer
+            # resolve's, so a tool the user declined is refused whatever the
+            # docs in the sandbox say.
+            #
+            # The withheld stamp is what ends it, and it needs the marker to
+            # be read at all: ``_apply_session_mcp`` short-circuits only on a
+            # non-None session version, but the warm path returns inside the
+            # sync cooldown without ever reaching this function, so the stamp
+            # alone would leave the stale reading standing for the rest of the
+            # cooldown rather than for one turn.
+            logger.info(
+                "[EGRESS] resolve for %s superseded by a newer config version; "
+                "keeping the composite, withholding the version stamp",
+                workspace_id,
+            )
+            session.mcp_config_version = None
+            self._resolve_superseded.add(workspace_id)
+            return None
+        if egress_bind is not RelayBind.APPLIED:
             # A refused credential push must not be stamped as applied: nothing
             # else re-pushes the file (the remint re-sends only the stale
             # in-memory map), so withhold the version — the same busted-stamp
@@ -680,15 +724,28 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
             # would make schema_digest consent-dependent, so a toggle would read
             # as a vendor schema change and the page could no longer show the
             # capabilities the user is choosing between.
-            granted = resolved.granted_tools_by_name
+            # Subtractive, so a tool the vendor added after we curated them
+            # reaches the prompt and the sandbox rather than going missing. The
+            # policy only ever removes what a declined capability group named.
+            denied = resolved.denied_tools_by_name
             for server in untrusted_servers:
                 snapshot = snapshots.ok(server)
                 if snapshot is not None:
                     settled.add(server.name)
                     tools = snapshot.get("tools") or []
-                    allowed = granted.get(server.name)
-                    if allowed is not None:
-                        tools = [t for t in tools if t.get("name") in allowed]
+                    refused = denied.get(server.name)
+                    if refused:
+                        # Folded on both sides, because the relay reads the
+                        # denial that way and the two must name the same tool.
+                        # A vendor that recases or pads a name would otherwise
+                        # be refused per call while the prompt, the wrappers and
+                        # the per-tool docs kept advertising it.
+                        folded = {fold_tool_name(name) for name in refused}
+                        tools = [
+                            t
+                            for t in tools
+                            if fold_tool_name(t.get("name")) not in folded
+                        ]
                     tool_schemas[server.name] = tools
         session.mcp_settled_servers = settled
 
@@ -1920,10 +1977,17 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
                         skills_signature is not None
                         and session.skills_signature != skills_signature
                     )
+                    # Consumed here rather than cleared on a later success:
+                    # its whole job is to get this acquire past the cooldown to
+                    # the version read below, and once it has, a resolve that
+                    # is superseded again re-marks it.
+                    superseded_resolve = workspace_id in self._resolve_superseded
+                    self._resolve_superseded.discard(workspace_id)
                     needs_sync = (
                         not self._sync_cooldown_ok(workspace_id)
                         or needs_deferred_sync
                         or skills_stale
+                        or superseded_resolve
                     )
                     if not needs_sync:
                         # Cooldown active, skip expensive Daytona calls — warm fast
@@ -3548,6 +3612,7 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
         # Clear session cache (don't stop workspaces on shutdown)
         self._sessions.clear()
         self._pending_lazy_sync.clear()
+        self._resolve_superseded.clear()
         self._last_sync_at.clear()
         self._workspace_locks.clear()
 

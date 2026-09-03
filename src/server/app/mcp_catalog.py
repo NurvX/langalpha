@@ -33,6 +33,7 @@ from fastapi import APIRouter, Body, HTTPException, Response
 from pydantic import ValidationError
 
 from src.server.database.mcp_oauth import (
+    SERVABLE,
     ConnectionStatus,
     get_connection,
     list_connections,
@@ -139,13 +140,30 @@ def _decorated(row: dict, conn: dict | None, **extra) -> CatalogServer:
     One helper for every path that has a connection in hand, because they all
     answer the same two questions about it, and a caller that reached for only
     the status is how consent stayed invisible after connecting.
+
+    A connection that can no longer be served reports its status but not its
+    capabilities. The stored keys outlive a revoke, and every reader treats a
+    non-null list as the grant currently in force -- so passing them through
+    drew a disconnected broker still badged as able to place live orders.
+    Withholding them reads as "nothing connected here", which is the truth.
+
+    The choice itself still travels, under its own name. Reconnecting is the
+    only way to change a selection, so the dialog that opens on a needs_reauth
+    or revoked row has to start from what the user last chose; seeding it from
+    the grant instead meant a repair after a token expiry re-proposed every
+    group they had declined. Two fields because they are two questions, and the
+    reader that wanted the wrong one is how this went wrong in both directions.
     """
     if conn is None:
         return catalog_row_to_response(row, **extra)
+    status = ConnectionStatus(conn["status"])
     return catalog_row_to_response(
         row,
-        oauth_status=ConnectionStatus(conn["status"]),
-        granted_capabilities=conn["granted_capabilities"],
+        oauth_status=status,
+        granted_capabilities=(
+            conn["granted_capabilities"] if status in SERVABLE else None
+        ),
+        remembered_capabilities=conn["granted_capabilities"],
         **extra,
     )
 
@@ -331,7 +349,11 @@ async def get_server_tools(name: str, user_id: CurrentUserId) -> dict:
     useful for deciding whether to turn it back on, and the panel badges the
     suppression beside them. Delivery is decided in one place,
     ``list_enabled_user_servers``, and a catalog reader is not it."""
-    from src.server.services.brokerage_capabilities import group_of_tool
+    from src.server.services.brokerage_capabilities import (
+        group_of_tool,
+        is_always_denied,
+        vendor_for_url,
+    )
     from src.server.services.mcp_config import user_row_to_server_config
     from src.server.services.mcp_discovery import ToolSnapshotIndex
 
@@ -349,6 +371,10 @@ async def get_server_tools(name: str, user_id: CurrentUserId) -> dict:
             "[mcp_catalog] tool-schema lookup failed for %s", user_id, exc_info=True
         )
     tools = (snapshot or {}).get("tools") or []
+    # The vendor is the row's address, not its name: the name is the user's to
+    # choose, and joining on it drew somebody's own row wearing a broker's
+    # curation (or missed the curation of a row that had been repointed).
+    _vendor = vendor_for_url(row.get("url"))
     return {
         "server_name": name,
         "tools": [
@@ -361,7 +387,13 @@ async def get_server_tools(name: str, user_id: CurrentUserId) -> dict:
                 # offers, not what this connection may call -- so the group is
                 # the join the detail view needs to say which of them are
                 # actually reachable and which the user declined.
-                "capability": group_of_tool(name, t.get("name", "")),
+                "capability": group_of_tool(_vendor, t.get("name", "")),
+                # A null capability alone does not say whether the tool can be
+                # called: one we deliberately withheld is refused at every
+                # grant, one we simply have not classified passes at every
+                # grant. The client cannot tell them apart and drew both as
+                # unreachable, so the distinction travels.
+                "always_denied": is_always_denied(_vendor, t.get("name", "")),
             }
             for t in tools
         ],

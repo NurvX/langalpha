@@ -1330,3 +1330,49 @@ class TestBuiltinToolsSeparateEmptyFromUnknown:
                 await get_builtin_server_tools("nope", "u-1")
         assert exc.value.status_code == 404
 
+
+class TestCapabilitiesInForceAndCapabilitiesRemembered:
+    """Two fields because a dead connection answers the two differently.
+
+    The grant has to disappear with the connection, or a revoked broker keeps
+    its "can place orders" badge. The choice must not, because reconnecting is
+    the only way to change a selection and the dialog opens on it -- seeded
+    from the grant, a repair after a token expiry re-proposed every group the
+    user had declined.
+    """
+
+    @staticmethod
+    def _decorate(status: str, granted):
+        from src.server.app.mcp_catalog import _decorated
+
+        return _decorated(
+            _row(), {"status": status, "granted_capabilities": granted}
+        )
+
+    @pytest.mark.parametrize("status", ["connected", "refresh_ambiguous"])
+    def test_a_servable_connection_answers_both_the_same_way(self, status):
+        response = self._decorate(status, ["market_data"])
+
+        assert response.granted_capabilities == ["market_data"]
+        assert response.remembered_capabilities == ["market_data"]
+
+    @pytest.mark.parametrize("status", ["needs_reauth", "revoked"])
+    def test_a_dead_connection_keeps_the_choice_and_drops_the_grant(self, status):
+        response = self._decorate(status, ["market_data"])
+
+        assert response.granted_capabilities is None
+        assert response.remembered_capabilities == ["market_data"]
+
+    def test_granting_nothing_is_remembered_as_nothing_not_as_unanswered(self):
+        """``[]`` and ``None`` are different answers on both fields: one is a
+        user who declined every group, the other is nobody having been asked."""
+        response = self._decorate("needs_reauth", [])
+
+        assert response.remembered_capabilities == []
+
+    def test_a_connection_that_was_never_asked_remembers_nothing(self):
+        response = self._decorate("connected", None)
+
+        assert response.granted_capabilities is None
+        assert response.remembered_capabilities is None
+

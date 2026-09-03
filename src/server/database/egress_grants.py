@@ -38,39 +38,68 @@ class GrantSync:
 
 async def _tool_policies(
     cur: Any, *, user_id: str, connection_ids: Sequence[str]
-) -> tuple[list[str], list[str | None], list[bool]]:
-    """Expand each connection's stored consent into the allowlist its grant carries.
+) -> tuple[list[str], list[str | None], list[str | None], list[bool]]:
+    """Expand each connection's stored consent into the denial its grant carries.
 
     Read inside the caller's transaction and keyed only by connection_id, so
     the policy has the same provenance as ``destination_url``: the DB row, not
     a caller argument. Expansion happens here rather than being stored because
-    the curation map is source — a curated tool ships with a deploy and applies
-    at the next sync, with no row to migrate and no way for the two to drift.
+    the curation map is source, so a curation change ships with a deploy and
+    applies at the next sync, with no row to migrate and no way for the two to
+    drift.
 
-    Returned as three parallel arrays for the INSERT's ``unnest`` join. A
-    connection we curate no groups for contributes a NULL allowlist and
-    ``policy_required`` false, which is what the relay already reads as "no
-    policy" for a user's own OAuth server.
+    The denial names the curated tools whose group the user declined, so
+    curating a tool the user did not consent to is what *adds* a refusal. A
+    vendor's newly published tool is in no group and so in no denial, which is
+    the deliberate choice this policy makes.
+
+    The permitted set is derived alongside it and written to the old
+    ``tool_allowlist`` column, which nothing in this version reads. That column
+    is what the previous version enforces, and both versions serve at once
+    through a blue/green cutover -- so writing only the denial left the draining
+    colour reading a policy frozen at the last deploy, still honouring a group
+    the user had since declined. The two disagree on an uncurated tool (the
+    allowlist refuses it, the denylist permits it), and the stricter reading is
+    the right one to hand a version on its way out.
+
+    Returned as four parallel arrays for the INSERT's ``unnest`` join. A
+    connection we curate no groups for contributes a NULL denial and
+    ``policy_required`` false, which the relay reads as no policy at all.
     """
-    from src.server.services.brokerage_capabilities import tools_for
+    from src.server.services.brokerage_capabilities import (
+        denied_tools,
+        tools_for,
+        vendor_for_url,
+    )
 
     await cur.execute(
         """
-        SELECT connection_id, server_name, granted_capabilities
+        SELECT connection_id, server_url, granted_capabilities
         FROM user_mcp_oauth_connections
         WHERE connection_id = ANY(%s::uuid[]) AND user_id = %s
         """,
         (list(connection_ids), user_id),
     )
     ids: list[str] = []
+    denylists: list[str | None] = []
     allowlists: list[str | None] = []
     required: list[bool] = []
     for row in await cur.fetchall():
-        tools = tools_for(row["server_name"], row["granted_capabilities"] or ())
+        # The vendor comes from the consented address, never the row's name.
+        # The name is the user's to pick and to edit, so keying on it let a row
+        # called anything else at a broker's host carry no policy, and a row
+        # holding a broker's name but pointed elsewhere carry the wrong one.
+        vendor = vendor_for_url(row["server_url"])
+        granted = row["granted_capabilities"] or ()
+        tools = denied_tools(vendor, granted)
+        permitted = tools_for(vendor, granted)
         ids.append(str(row["connection_id"]))
-        allowlists.append(None if tools is None else json.dumps(sorted(tools)))
+        denylists.append(None if tools is None else json.dumps(sorted(tools)))
+        allowlists.append(
+            None if permitted is None else json.dumps(sorted(permitted))
+        )
         required.append(tools is not None)
-    return ids, allowlists, required
+    return ids, denylists, allowlists, required
 
 
 async def sync_oauth_grants(
@@ -140,28 +169,30 @@ async def sync_oauth_grants(
 
             granted: dict[str, str] = {}
             if connection_ids:
-                ids, allowlists, required = await _tool_policies(
+                ids, denylists, allowlists, required = await _tool_policies(
                     cur, user_id=user_id, connection_ids=connection_ids
                 )
                 await cur.execute(
                     """
                     INSERT INTO sandbox_egress_grants
                         (user_id, workspace_id, kind, connection_id,
-                         destination_url, tool_allowlist, policy_required,
-                         status, created_at, updated_at)
+                         destination_url, tool_denylist, tool_allowlist,
+                         policy_required, status, created_at, updated_at)
                     SELECT %s, %s::uuid, %s, c.connection_id, c.server_url,
-                           p.allowlist, COALESCE(p.required, false),
+                           p.denylist, p.allowlist, COALESCE(p.required, false),
                            'active', NOW(), NOW()
                     FROM user_mcp_oauth_connections c
                     LEFT JOIN (
                         SELECT * FROM unnest(
-                            %s::uuid[], %s::text[]::jsonb[], %s::boolean[]
-                        ) AS t(connection_id, allowlist, required)
+                            %s::uuid[], %s::text[]::jsonb[],
+                            %s::text[]::jsonb[], %s::boolean[]
+                        ) AS t(connection_id, denylist, allowlist, required)
                     ) p ON p.connection_id = c.connection_id
                     WHERE c.connection_id = ANY(%s::uuid[]) AND c.user_id = %s
                       AND c.status = ANY(%s)
                     ON CONFLICT (workspace_id, kind, connection_id) DO UPDATE SET
                         destination_url = EXCLUDED.destination_url,
+                        tool_denylist = EXCLUDED.tool_denylist,
                         tool_allowlist = EXCLUDED.tool_allowlist,
                         policy_required = EXCLUDED.policy_required,
                         status = 'active',
@@ -170,7 +201,7 @@ async def sync_oauth_grants(
                     """,
                     (
                         user_id, workspace_id, GRANT_KIND_OAUTH_MCP,
-                        ids, allowlists, required,
+                        ids, denylists, allowlists, required,
                         list(connection_ids), user_id, SERVABLE_PARAM,
                     ),
                 )
@@ -212,7 +243,7 @@ async def fetch_grant_for_relay(grant_id: str) -> dict[str, Any] | None:
             await cur.execute(
                 """
                 SELECT g.user_id, g.workspace_id, g.connection_id,
-                       g.destination_url, g.allowed_methods, g.tool_allowlist,
+                       g.destination_url, g.allowed_methods, g.tool_denylist,
                        g.status AS grant_status,
                        c.status AS connection_status
                 FROM sandbox_egress_grants g
@@ -230,10 +261,126 @@ async def fetch_grant_for_relay(grant_id: str) -> dict[str, Any] | None:
                 "connection_id": str(row["connection_id"]),
                 "destination_url": row["destination_url"],
                 "allowed_methods": row["allowed_methods"],
-                "tool_allowlist": row["tool_allowlist"],
+                "tool_denylist": row["tool_denylist"],
                 "grant_status": row["grant_status"],
                 "connection_status": row["connection_status"],
             }
+
+
+async def apply_consent_to_active_grants(connection_id: str, *, conn=None) -> int:
+    """Rewrite the denial on every active grant of a connection. Returns count.
+
+    Narrowing consent has to bite when the user confirms it, not when something
+    later happens to resolve. A reconnect writes the new keys onto the
+    connection and then leans on a version bump plus a best-effort re-apply to
+    reach the grants -- and the relay reads the grant, not the connection. So a
+    user who reconnected specifically to switch trading *off* kept an agent that
+    could place orders: for as long as the proactive apply took, and
+    indefinitely if it failed, since its failure is a warning log.
+
+    Cheap enough to be unconditional (one UPDATE keyed on an indexed column) and
+    idempotent, so it costs a widening reconnect nothing to run it too. The
+    later sync stays: this converges the grants that exist right now, and that
+    is a different question from which grants a workspace should have.
+
+    Takes ``sync_oauth_grants``' own per-workspace lock first, for the whole
+    read-and-write. Without it the two overlap in the one order that loses: a
+    sync reads the old consent, this narrows the grant, and the sync's upsert
+    then writes the old policy back over it -- and there is no version bump
+    left to make the sync notice, since it CASed successfully before any of
+    this began. Under the lock the sync either commits entirely before this
+    reads, or reads the consent this connect already wrote. Ordered by
+    workspace id so two of these can never hold what the other wants; a sync
+    takes one lock and asks for no more, so it cannot close a cycle either.
+
+    Every workspace of the owner, not only the ones already holding an active
+    grant. A sync that is *creating* this connection's first grant in a
+    workspace -- or reactivating a retired row through the upsert's DO UPDATE
+    -- has read the old consent and is holding a lock over a workspace no
+    active row names yet, so fencing only the rows that exist leaves exactly
+    that sync free to commit the wider policy after the narrowing lands. The
+    consent is therefore re-read below, under the locks, rather than carried in
+    from the enumerating query.
+    """
+    from src.server.services.brokerage_capabilities import (
+        denied_tools,
+        tools_for,
+        vendor_for_url,
+    )
+    from src.server.services.writer_guard import advisory_key
+
+    async with get_db_connection(conn) as db, db.transaction():
+        async with db.cursor(row_factory=dict_row) as cur:
+            # Bounded, because this runs in the OAuth callback and now asks for
+            # a lock per workspace of the owner. Postgres raises inside the
+            # transaction, which rolls back and releases whatever was taken, and
+            # the caller reads the raise the way it reads any other failure to
+            # settle consent: it revokes the grants rather than leaving them
+            # carrying a policy nobody confirmed. Generous on purpose -- a grant
+            # sync holds this for a handful of short statements, so reaching it
+            # means something is wedged, not that the system is busy.
+            await cur.execute("SET LOCAL lock_timeout = '5s'")
+            await cur.execute(
+                """
+                SELECT user_id FROM user_mcp_oauth_connections
+                WHERE connection_id = %s
+                """,
+                (connection_id,),
+            )
+            owner = await cur.fetchone()
+            if owner is None:
+                return 0
+            await cur.execute(
+                """
+                SELECT workspace_id FROM workspaces
+                WHERE user_id = %s
+                ORDER BY workspace_id
+                """,
+                (owner["user_id"],),
+            )
+            for ws in await cur.fetchall():
+                await cur.execute(
+                    "SELECT pg_advisory_xact_lock(%s)",
+                    (advisory_key("EG", str(ws["workspace_id"])),),
+                )
+            await cur.execute(
+                """
+                SELECT server_url, granted_capabilities
+                FROM user_mcp_oauth_connections
+                WHERE connection_id = %s
+                """,
+                (connection_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return 0
+            vendor = vendor_for_url(row["server_url"])
+            granted = row["granted_capabilities"] or ()
+            tools = denied_tools(vendor, granted)
+            # Both columns, for the reason ``_tool_policies`` gives: the other
+            # blue/green colour enforces the allowlist, and a consent change
+            # that touched only the denial never reached it.
+            permitted = tools_for(vendor, granted)
+            await cur.execute(
+                """
+                UPDATE sandbox_egress_grants
+                SET tool_denylist = %s::jsonb, tool_allowlist = %s::jsonb,
+                    policy_required = %s, updated_at = NOW()
+                WHERE connection_id = %s AND status = 'active'
+                """,
+                (
+                    None if tools is None else json.dumps(sorted(tools)),
+                    None if permitted is None else json.dumps(sorted(permitted)),
+                    tools is not None,
+                    connection_id,
+                ),
+            )
+            if cur.rowcount:
+                logger.info(
+                    f"[egress_grants_db] applied consent to {cur.rowcount} active "
+                    f"grant(s) for connection {connection_id}"
+                )
+            return cur.rowcount
 
 
 async def revoke_grants_for_connection(connection_id: str, *, conn=None) -> int:

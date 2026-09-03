@@ -41,8 +41,8 @@ export function BrokerageConsentDialog({
 }) {
   const { t } = useTranslation();
   const groups = vendor?.capabilities ?? [];
-  // What the connection already has, and the vendor's default only for one
-  // that has nothing yet. This dialog is also the way an existing grant is
+  // What the user last chose, and the vendor's default only for a connection
+  // that has never been asked. This dialog is also the way an existing grant is
   // narrowed, and opening it on the default re-ticked every group the user had
   // declined -- offering to widen consent while looking like it was showing it.
   //
@@ -121,6 +121,11 @@ export function BrokerageConsentDialog({
         </p>
 
         <div className="flex items-center justify-end gap-2">
+          {/* Live while pending, unlike the toggles and Confirm beside it. The
+              request in flight is a registration at the vendor, not a connect,
+              and backing out of it costs the user nothing; a Cancel that greys
+              out the moment it is pressed leaves a slow vendor holding the
+              dialog open with no way out but the escape key. */}
           <button
             type="button"
             onClick={onCancel}

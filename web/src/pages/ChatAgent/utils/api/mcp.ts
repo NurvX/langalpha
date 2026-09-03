@@ -193,6 +193,14 @@ export interface CatalogServer {
    * nothing, so they stay distinguishable here too.
    */
   granted_capabilities?: string[] | null;
+  /**
+   * The same keys, but what the user last chose rather than what is in force.
+   * Survives a `needs_reauth` or `revoked` status, where `granted_capabilities`
+   * is deliberately withheld so nothing badges a dead connection as able to
+   * trade. Only the consent dialog reads this, and only to open on the user's
+   * own last answer instead of the product defaults.
+   */
+  remembered_capabilities?: string[] | null;
   /** Host-side discovered tool count for the current config (OAuth servers). */
   tool_count?: number | null;
   /** Path on this origin to the mark the server declared in its handshake.

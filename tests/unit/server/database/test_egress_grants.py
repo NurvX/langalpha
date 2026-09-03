@@ -14,6 +14,7 @@ resolver carrying a superseded version must replace nothing at all.
 
 from __future__ import annotations
 
+import json
 import re
 from contextlib import asynccontextmanager
 from unittest.mock import patch
@@ -22,6 +23,7 @@ import pytest
 
 from src.server.database.egress_grants import (
     GRANT_KIND_OAUTH_MCP,
+    apply_consent_to_active_grants,
     sync_oauth_grants,
 )
 from src.server.services.writer_guard import advisory_key
@@ -32,6 +34,7 @@ CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 OTHER_CONNECTION_ID = "44444444-4444-4444-8444-444444444444"
 UNKNOWN_CONNECTION_ID = "33333333-3333-4333-8333-333333333333"
 WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
+OTHER_WORKSPACE_ID = "55555555-5555-4555-8555-555555555555"
 VERSION = 7
 
 
@@ -48,9 +51,12 @@ class _Cursor:
         self._connections = connections  # connection_id -> owning user_id
         # connection_id -> status; absent means the default, connected.
         self.statuses: dict[str, str] = {}
-        # connection_id -> the server it points at, which is what decides
+        # connection_id -> the address it points at, which is what decides
         # whether we curate a policy for it; absent means a server we do not.
-        self.server_names: dict[str, str] = {}
+        # The ADDRESS and not the name: a row is named by its user and may be
+        # renamed or repointed, so the vendor's own host is the only identity
+        # a policy may be derived from.
+        self.server_urls: dict[str, str] = {}
         # connection_id -> stored granted_capabilities; absent means NULL.
         self.capabilities: dict[str, list[str] | None] = {}
         self.grants: dict[tuple, dict] = {}  # (workspace, kind, conn) -> row
@@ -78,7 +84,9 @@ class _Cursor:
             self._rows = [
                 {
                     "connection_id": connection_id,
-                    "server_name": self.server_names.get(connection_id, "own_server"),
+                    "server_url": self.server_urls.get(
+                        connection_id, "https://mcp.example.com/own"
+                    ),
                     "granted_capabilities": self.capabilities.get(connection_id),
                 }
                 for connection_id in wanted
@@ -91,12 +99,15 @@ class _Cursor:
             # as an unpacking error here.
             (
                 _user_id, workspace_id, kind,
-                policy_ids, allowlists, policy_required,
+                policy_ids, denylists, allowlists, policy_required,
                 connection_ids, owner, *rest,
             ) = params
             servable = rest[0] if rest else None
             policy = dict(
-                zip(policy_ids, zip(allowlists, policy_required, strict=True))
+                zip(
+                    policy_ids,
+                    zip(denylists, allowlists, policy_required, strict=True),
+                )
             )
             self._rows = []
             for connection_id in connection_ids:
@@ -116,9 +127,11 @@ class _Cursor:
                 row["status"] = "active"
                 # LEFT JOIN: a connection the policy read did not answer for
                 # lands the column defaults, not a skipped row.
-                row["tool_allowlist"], row["policy_required"] = policy.get(
-                    connection_id, (None, False)
-                )
+                (
+                    row["tool_denylist"],
+                    row["tool_allowlist"],
+                    row["policy_required"],
+                ) = policy.get(connection_id, (None, None, False))
                 self._rows.append(
                     {"connection_id": connection_id, "grant_id": row["grant_id"]}
                 )
@@ -421,3 +434,281 @@ class TestConfigVersionCAS:
         assert advisory_key("EG", WORKSPACE_ID) != advisory_key("EG", CONNECTION_ID)
         # And the tag keeps it off the writer guard's thread/namespace keys.
         assert advisory_key("EG", WORKSPACE_ID) != advisory_key("T", WORKSPACE_ID)
+
+
+class TestToolPolicy:
+    """What each grant is allowed to permit, and where that answer comes from.
+
+    The counterpart of the resolver's identity tests: both halves derive the
+    denial from the connection's consented ``server_url``, and if they ever
+    disagree a tool is either hidden from the prompt and still callable, or
+    offered to the agent and refused at the relay.
+    """
+
+    def _policy(self, db, connection_id: str = CONNECTION_ID):
+        row = db.grants[(WORKSPACE_ID, GRANT_KIND_OAUTH_MCP, connection_id)]
+        denylist = row["tool_denylist"]
+        return (
+            None if denylist is None else set(json.loads(denylist)),
+            row["policy_required"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_server_we_curate_nothing_for_carries_no_policy(self, db):
+        """NULL, not empty -- the relay reads it as "no policy", as before."""
+        db.server_urls[CONNECTION_ID] = "https://mcp.example.com/own"
+        await _sync(OWNER, CONNECTION_ID)
+        assert self._policy(db) == (None, False)
+
+    @pytest.mark.asyncio
+    async def test_the_vendor_comes_from_the_address_not_the_row_name(self, db):
+        """A row named anything, at a broker's host, still carries its policy.
+
+        The name is the user's to choose and to edit, so it decides nothing
+        here. The address is what the token was issued for and what the relay
+        dials, and it is the only identity the denial is derived from.
+        """
+        db.server_urls[CONNECTION_ID] = "https://mcp.moomoo.com/mcp"
+        db.capabilities[CONNECTION_ID] = ["market_data"]
+        await _sync(OWNER, CONNECTION_ID)
+        denied, required = self._policy(db)
+        assert required is True
+        assert "trading_order_place" in denied
+        assert "quote_stock_quote" not in denied
+
+    @pytest.mark.asyncio
+    async def test_an_address_we_do_not_ship_gets_no_vendors_denial(self, db):
+        """The mirror: a reserved name pointed elsewhere is not that vendor.
+
+        Deriving from the name gave this row moomoo's denial -- a list of tool
+        names this server does not publish, which refuses nothing and passes
+        everything it actually does publish.
+        """
+        db.server_urls[CONNECTION_ID] = "https://not-moomoo.example.test/mcp"
+        db.capabilities[CONNECTION_ID] = ["market_data"]
+        await _sync(OWNER, CONNECTION_ID)
+        assert self._policy(db) == (None, False)
+
+    @pytest.mark.asyncio
+    async def test_both_policy_columns_are_written(self, db):
+        """The old column too, because the old code is still serving.
+
+        A blue/green cutover runs both colours at once, and the draining one
+        authorizes off ``tool_allowlist``. Writing only the denial left it
+        enforcing whatever the last deploy froze there -- so a user who
+        declined trading here was still refused by this colour and permitted by
+        the other, for as long as the old one had a connection open.
+        """
+        db.server_urls[CONNECTION_ID] = "https://mcp.moomoo.com/mcp"
+        db.capabilities[CONNECTION_ID] = ["market_data"]
+        await _sync(OWNER, CONNECTION_ID)
+        row = db.grants[(WORKSPACE_ID, GRANT_KIND_OAUTH_MCP, CONNECTION_ID)]
+        permitted = set(json.loads(row["tool_allowlist"]))
+        assert "quote_stock_quote" in permitted
+        assert "trading_order_place" not in permitted
+
+    @pytest.mark.asyncio
+    async def test_a_brokerage_with_no_recorded_consent_denies_its_curation(self, db):
+        """The one state that must fail closed rather than permissive."""
+        db.server_urls[CONNECTION_ID] = "https://mcp.moomoo.com/mcp"
+        db.capabilities[CONNECTION_ID] = None
+        await _sync(OWNER, CONNECTION_ID)
+        denied, required = self._policy(db)
+        assert required is True
+        assert {"trading_order_place", "quote_stock_quote"} <= denied
+
+
+class TestApplyConsentToActiveGrants:
+    """Narrowing consent has to bite when the user confirms it.
+
+    A reconnect writes the new keys onto the connection, but the relay reads
+    the grant. Leaving the grants to a later resolve meant a user who
+    reconnected specifically to switch trading *off* kept an agent that could
+    place orders until something happened to re-sync -- and indefinitely if
+    that failed, since the failure is a log line.
+    """
+
+    @staticmethod
+    def _db(
+        server_url: str | None,
+        capabilities: list[str] | None,
+        *,
+        workspaces: tuple[str, ...] = (WORKSPACE_ID,),
+    ):
+        statements: list[tuple[str, tuple, int]] = []
+        depth = [0]
+
+        class _C:
+            rowcount = 1
+
+            def __init__(self):
+                self._rows: list[dict] = []
+                self._last = ""
+
+            async def execute(self, sql, params=None):
+                statements.append((sql, params, depth[0]))
+                self._last = sql
+                if "FROM workspaces" in sql:
+                    self._rows = [{"workspace_id": w} for w in workspaces]
+
+            async def fetchall(self):
+                return self._rows
+
+            async def fetchone(self):
+                # The owner is read first, only to enumerate the workspaces to
+                # fence; the consent is re-read afterwards, under those locks.
+                if "SELECT user_id" in getattr(self, "_last", ""):
+                    return {"user_id": OWNER}
+                return {
+                    "server_url": server_url,
+                    "granted_capabilities": capabilities,
+                }
+
+        @asynccontextmanager
+        async def _cursor_cm(**kwargs):
+            yield _C()
+
+        @asynccontextmanager
+        async def _transaction():
+            depth[0] += 1
+            try:
+                yield
+            finally:
+                depth[0] -= 1
+
+        class _Conn:
+            cursor = staticmethod(_cursor_cm)
+            transaction = staticmethod(_transaction)
+
+        @asynccontextmanager
+        async def _fake_db(conn=None):
+            yield _Conn()
+
+        return _fake_db, statements
+
+    async def _run(self, server_url, capabilities, **kwargs):
+        fake, statements = self._db(server_url, capabilities, **kwargs)
+        with patch("src.server.database.egress_grants.get_db_connection", new=fake):
+            await apply_consent_to_active_grants(CONNECTION_ID)
+        return statements
+
+    async def _apply(self, server_url, capabilities):
+        statements = await self._run(server_url, capabilities)
+        update = next(s for s in statements if s[0].lstrip().startswith("UPDATE"))
+        denylist, allowlist, required, connection_id = update[1]
+        assert connection_id == CONNECTION_ID
+        assert "status = \'active\'" in update[0]
+        # Both columns, for the reason the sync writes both: the other blue/green
+        # colour authorizes off the allowlist, and a narrowing that never
+        # reached it is a narrowing that half the fleet ignores.
+        permitted = None if allowlist is None else set(json.loads(allowlist))
+        denied = None if denylist is None else set(json.loads(denylist))
+        assert (permitted is None) == (denied is None)
+        return denied, required, permitted
+
+    @pytest.mark.asyncio
+    async def test_it_bounds_how_long_it_will_wait_for_those_locks(self):
+        """This runs in the OAuth callback, and now asks for a lock per workspace.
+
+        Unbounded, a wedged grant sync holds the user's connect open for as long
+        as it stays wedged. Bounded, Postgres raises inside the transaction,
+        which rolls back and releases whatever was taken, and the callback reads
+        that like any other failure to settle consent: it revokes the grants
+        rather than leaving them carrying a policy nobody confirmed.
+        """
+        statements = await self._run("https://mcp.moomoo.com/mcp", ["market_data"])
+        bound = next(s for s in statements if "lock_timeout" in s[0])
+        locks = [s for s in statements if "pg_advisory_xact_lock" in s[0]]
+        # Inside the transaction (SET LOCAL is scoped to it) and before the wait
+        # it is meant to bound.
+        assert bound[2] > 0
+        assert statements.index(bound) < statements.index(locks[0])
+
+    @pytest.mark.asyncio
+    async def test_it_fences_workspaces_that_hold_no_grant_yet(self):
+        """The sync it races may be *creating* the grant, not updating one.
+
+        Enumerating the workspaces off the active grants fenced only the rows
+        that already existed. A sync holding the lock for a workspace with no
+        active grant -- a first resolve, or one reactivating a retired row
+        through the upsert's DO UPDATE -- had read the old consent and was free
+        to commit the wider policy after the narrowing landed, which is the one
+        interleaving this lock exists to rule out. So the workspaces come from
+        the owner, and the consent is re-read under the locks rather than
+        carried in from the query that found them.
+        """
+        statements = await self._run(
+            "https://mcp.moomoo.com/mcp",
+            ["market_data"],
+            workspaces=(WORKSPACE_ID, OTHER_WORKSPACE_ID),
+        )
+        enumerate_ws = next(
+            s for s in statements if "workspace_id FROM workspaces" in s[0]
+        )
+        assert enumerate_ws[1] == (OWNER,)
+        # Not off the grants: that is the query that missed the creating sync.
+        assert not any("FROM sandbox_egress_grants" in s[0] for s in statements[:2])
+        locks = [s for s in statements if "pg_advisory_xact_lock" in s[0]]
+        consent = next(
+            s for s in statements if "granted_capabilities" in s[0] and "SELECT" in s[0]
+        )
+        assert statements.index(consent) > statements.index(locks[-1])
+
+    @pytest.mark.asyncio
+    async def test_it_writes_the_consent_the_connection_now_records(self):
+        denied, required, permitted = await self._apply(
+            "https://mcp.moomoo.com/mcp", ["market_data"]
+        )
+        assert required is True
+        assert "trading_order_place" in denied
+        assert "quote_stock_quote" not in denied
+        assert "trading_order_place" not in permitted
+
+    @pytest.mark.asyncio
+    async def test_widening_clears_what_the_previous_consent_denied(self):
+        """Idempotent in both directions, which is what makes it unconditional.
+
+        A grant carrying the old narrower denial would keep refusing the group
+        the user just granted, so the same write has to be able to shrink the
+        list as well as grow it.
+        """
+        denied, required, permitted = await self._apply(
+            "https://mcp.moomoo.com/mcp",
+            ["market_data", "watchlists", "account", "rehearsal", "trading"],
+        )
+        assert required is True
+        assert "trading_order_place" not in denied
+        assert "trading_order_place" in permitted
+
+    @pytest.mark.asyncio
+    async def test_a_server_we_curate_nothing_for_is_left_with_no_policy(self):
+        assert await self._apply("https://mcp.example.com/own", None) == (
+            None, False, None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_it_takes_the_syncs_own_lock_before_it_reads(self):
+        """Otherwise the sync it races writes the pre-narrowing policy back.
+
+        ``sync_oauth_grants`` reads the connection's consent inside its
+        transaction and writes the grant from it. Interleaved, this update lands
+        between those two and the sync's upsert overwrites it -- and no version
+        bump can save it, because the sync CASed successfully before any of this
+        started. The lock is what makes the two orders the only two possible.
+        """
+        statements = await self._run(
+            "https://mcp.moomoo.com/mcp",
+            ["market_data"],
+            workspaces=(WORKSPACE_ID, OTHER_WORKSPACE_ID),
+        )
+        locks = [s for s in statements if "pg_advisory_xact_lock" in s[0]]
+        assert [s[1][0] for s in locks] == [
+            advisory_key("EG", WORKSPACE_ID),
+            advisory_key("EG", OTHER_WORKSPACE_ID),
+        ]
+        # Held, not merely taken: a lock released before the write fences
+        # nothing, and transaction-scoped is the only way to hold one here.
+        update = next(s for s in statements if s[0].lstrip().startswith("UPDATE"))
+        assert all(s[2] > 0 for s in locks)
+        assert update[2] > 0
+        assert statements.index(update) > statements.index(locks[-1])

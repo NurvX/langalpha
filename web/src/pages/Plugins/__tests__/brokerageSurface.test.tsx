@@ -316,6 +316,77 @@ describe('the brokerages tab', () => {
       expect(toggleBrokerage).not.toHaveBeenCalled();
     });
 
+    // A token expiry is not a change of mind. `granted_capabilities` is
+    // withheld on a row that can no longer be served -- deliberately, so
+    // nothing badges a dead connection as able to place orders -- so seeding
+    // the dialog from it opened a repair with every declined group re-ticked.
+    it('reopens a repair on the groups the user last chose, not the defaults', async () => {
+      catalogServers = [
+        catalogRow({
+          name: 'ibkr',
+          url: IBKR.url,
+          oauth_status: 'needs_reauth',
+          granted_capabilities: null,
+          remembered_capabilities: ['market_data'],
+        }),
+      ];
+      await renderTab();
+      connectThrough('ibkr');
+
+      await waitFor(() =>
+        expect(startConnect).toHaveBeenCalledWith(
+          'ibkr',
+          '/plugins?tab=brokerages',
+          expect.objectContaining({ grantedCapabilities: ['market_data'] }),
+        ),
+      );
+    });
+
+    it('offers the defaults to a connection nobody has answered for yet', async () => {
+      catalogServers = [
+        catalogRow({
+          name: 'ibkr',
+          url: IBKR.url,
+          oauth_status: 'needs_reauth',
+          remembered_capabilities: null,
+        }),
+      ];
+      await renderTab();
+      connectThrough('ibkr');
+
+      await waitFor(() =>
+        expect(startConnect).toHaveBeenCalledWith(
+          'ibkr',
+          '/plugins?tab=brokerages',
+          expect.objectContaining({ grantedCapabilities: IBKR_DEFAULT }),
+        ),
+      );
+    });
+
+    // `[]` is an answer, and the one that costs the most to lose: the user
+    // declined every group. Read as "nothing stored" it becomes the defaults,
+    // which is the whole set.
+    it('reopens a repair on nothing when the user granted nothing', async () => {
+      catalogServers = [
+        catalogRow({
+          name: 'ibkr',
+          url: IBKR.url,
+          oauth_status: 'needs_reauth',
+          remembered_capabilities: [],
+        }),
+      ];
+      await renderTab();
+      connectThrough('ibkr');
+
+      await waitFor(() =>
+        expect(startConnect).toHaveBeenCalledWith(
+          'ibkr',
+          '/plugins?tab=brokerages',
+          expect.objectContaining({ grantedCapabilities: [] }),
+        ),
+      );
+    });
+
     // Past the first write this is an ordinary catalog row, and the MCP tab can
     // point it at a local command. The backend takes an OAuth connect only for a
     // remote row, so the button that survives that edit is one whose every click

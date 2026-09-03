@@ -33,13 +33,16 @@ export interface ConnectRequest {
    */
   url: string | null;
   /**
-   * What this connection already grants, or null when there is nothing
-   * connected to read one from.
+   * What the user last chose for this connection, or null when there is no
+   * connection to read one from.
    *
-   * The consent dialog is also how an existing grant is narrowed, so it has to
-   * open on what the connection has rather than on the vendor's default. Seeded
-   * from the default, a reconnect re-ticked every group the user had
-   * deliberately declined, and the only sign of it was the user noticing.
+   * `remembered_capabilities`, not `granted_capabilities`: the consent dialog
+   * is also how an existing grant is narrowed and the only way to change one,
+   * so it has to open on the user's own answer rather than the vendor's
+   * default. The two fields part company exactly where it matters -- a
+   * `needs_reauth` row withholds its grant, so seeding from that one re-ticked
+   * every group the user had declined on a flow they entered to repair an
+   * expiry, and the only sign of it was the user noticing.
    */
   granted?: string[] | null;
   /**
