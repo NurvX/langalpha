@@ -5,6 +5,7 @@
 import { api } from '@/api/client';
 import type { WorkflowRunStatus } from '@/types/api';
 import type { CancelOutcome } from '../cancelOutcome';
+import { bearerTokenOf, refreshAccessToken } from '@/lib/authToken';
 import { baseURL, getAuthHeaders, streamFetch, postSSEStream } from './transport';
 
 export async function replayThreadHistory(threadId: string, onEvent: (event: Record<string, unknown>) => void = () => {}) {
@@ -267,10 +268,20 @@ export function watchThread(
 ): { abort: AbortController } {
   const abort = new AbortController();
   const MAX_RETRIES = 2;
+  // One rotation per subscription, so a token the server keeps refusing cannot
+  // turn the retry budget into a burst of them.
+  let authRetried = false;
 
   (async () => {
     try {
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      // The auth rotation below rides this loop but must not be paid for out of
+      // it: spending an iteration on it would leave a genuinely flaky network
+      // one retry instead of `MAX_RETRIES`. `authRetried` caps the extension at
+      // one, so the loop still terminates. Counted as an extra turn rather than
+      // by winding `attempt` back, because `attempt` is also what tells a
+      // re-subscribe from the first one for `onResubscribed`.
+      const lastAttempt = () => MAX_RETRIES + (authRetried ? 1 : 0);
+      for (let attempt = 0; attempt <= lastAttempt(); attempt++) {
         if (abort.signal.aborted) return;
         try {
           const authHeaders = await getAuthHeaders();
@@ -279,6 +290,18 @@ export function watchThread(
             headers: { ...authHeaders },
             signal: abort.signal,
           });
+
+          // `fetch` does not throw on an HTTP status, so an auth failure never
+          // reaches the catch below and never spends a retry -- the loop's
+          // budget is only ever available to network errors. Rotate the token
+          // this request actually carried and re-subscribe with whatever comes
+          // back. When nothing better is available the fall-through below ends
+          // the subscription, and the caller's own paced re-subscribe takes it
+          // from there rather than this loop spinning on a refused token.
+          if (res.status === 401 && !authRetried) {
+            authRetried = true;
+            if (await refreshAccessToken(bearerTokenOf(authHeaders.Authorization))) continue;
+          }
 
           if (!res.ok || !res.body) return;
 
@@ -353,7 +376,7 @@ export function watchThread(
           return; // Backend closed the stream (30-min cap / disconnect).
         } catch (err: unknown) {
           if ((err as Error).name === 'AbortError') return;
-          if (attempt < MAX_RETRIES) {
+          if (attempt < lastAttempt()) {
             await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
           }
         }
