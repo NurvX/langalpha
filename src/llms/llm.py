@@ -16,6 +16,7 @@ from .model_spec import (
     canonical_reasoning_efforts,
     clamp_reasoning_effort,
     default_reasoning_effort,
+    reasoning_block,
 )
 from .preferences import compaction_profile_for
 from .pricing_utils import get_price_tier
@@ -252,14 +253,14 @@ class ModelConfig:
         reason this returns a list rather than a default ladder.
         """
         entry = self.llm_config.get(model_name) or {}
-        return list(canonical_reasoning_efforts(entry.get("reasoning_efforts")))
+        return list(canonical_reasoning_efforts(reasoning_block(entry).get("efforts")))
 
     def get_reasoning_effort_default(self, model_name: str) -> str | None:
         """Manifest-entry wrapper over :func:`default_reasoning_effort`."""
         entry = self.llm_config.get(model_name) or {}
         return default_reasoning_effort(
             self.get_reasoning_efforts(model_name),
-            entry.get("reasoning_effort_default"),
+            reasoning_block(entry).get("default"),
         )
 
     def resolve_reasoning_effort(self, model_name: str, requested: str) -> str | None:
@@ -415,9 +416,6 @@ class LLM:
         self.parameters = copy.deepcopy(spec.parameters)
         self.extra_body = copy.deepcopy(spec.extra_body)
 
-        # Override with any provided parameters
-        self.parameters.update(override_params)
-
         # Apply reasoning effort override (before provider resolution).
         # Validation lives here because this is the only point that sees both
         # the requested level and the model's declared enum; past it the mapper
@@ -428,17 +426,35 @@ class LLM:
         # which is what a user-defined model would miss.
         # The resolved level, not the requested one, is what the call reports:
         # a request above the model's ladder is stepped down here, so the two
-        # differ. With no request at all the parameters already encode the
-        # model's own default, which is what that case reports.
+        # differ. With no request at all the model's own default resolves here
+        # and takes the same path, so it is reported and sent as one value.
         if reasoning_effort:
             effort = clamp_reasoning_effort(
                 spec.reasoning_efforts, spec.reasoning_effort_default, reasoning_effort
             )
-            if effort:
-                apply_reasoning_effort(effort, self.parameters, self.extra_body)
-            self.resolved_reasoning_effort = effort
         else:
-            self.resolved_reasoning_effort = spec.reasoning_effort_default
+            # Not a request, so it is written *under* the caller's own
+            # parameters. The manifest used to seed its default level into
+            # `parameters`, where an override naming that key directly replaced
+            # it; the mapper now writes what the seed held, and inherits its
+            # place in the order.
+            effort = spec.reasoning_effort_default
+            if effort:
+                apply_reasoning_effort(
+                    effort, self.parameters, self.extra_body, spec.reasoning_surface
+                )
+
+        # Override with any provided parameters
+        self.parameters.update(override_params)
+
+        # A level the caller asked for outright is the request being answered,
+        # so it goes over the overrides -- where it already went when the mapper
+        # ran on this side of the update and the seed sat underneath.
+        if reasoning_effort and effort:
+            apply_reasoning_effort(
+                effort, self.parameters, self.extra_body, spec.reasoning_surface
+            )
+        self.resolved_reasoning_effort = effort
 
         # Store optional API key override (BYOK)
         self.api_key_override = api_key

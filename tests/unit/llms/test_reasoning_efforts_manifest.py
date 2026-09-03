@@ -31,13 +31,22 @@ def config():
 
 class TestDeclaredSetsAreWellFormed:
     def test_every_declared_level_exists(self, config):
-        bad = {
-            name: [
-                lvl for lvl in entry["reasoning_efforts"] if lvl not in REASONING_LEVELS
-            ]
+        """Read through ``reasoning_block``, not off a fixed key: a typo inside
+        the block is dropped by ``canonical_reasoning_efforts`` without a word,
+        so a check reading a key no entry carries any more passes on an empty
+        set and proves nothing."""
+        from src.llms.model_spec import reasoning_block
+
+        ladders = {
+            name: reasoning_block(entry).get("efforts")
             for name, entry in config.llm_config.items()
             if isinstance(entry, dict)
-            and isinstance(entry.get("reasoning_efforts"), list)
+        }
+        assert any(ladders.values()), "no entry declares a ladder -- check is vacuous"
+        bad = {
+            name: [lvl for lvl in efforts if lvl not in REASONING_LEVELS]
+            for name, efforts in ladders.items()
+            if isinstance(efforts, list)
         }
         assert not {k: v for k, v in bad.items() if v}
 
@@ -68,16 +77,17 @@ class TestUnhonoredLevelsDegrade:
         assert config.resolve_reasoning_effort("claude-opus-5", "xhigh") == "xhigh"
 
     def test_model_with_no_control_resolves_to_nothing(self, config):
-        assert config.resolve_reasoning_effort("embedding-small", "high") is None
+        """A chat model that declares no ladder, not a model of another kind."""
+        assert config.resolve_reasoning_effort("claude-haiku-4-5", "high") is None
 
     def test_above_the_ceiling_steps_down_one(self, config):
         """max on a low/medium/high model runs high, not that model's middle."""
-        assert config.get_reasoning_efforts("claude-haiku-4-5") == [
+        assert config.get_reasoning_efforts("gemini-3.1-pro") == [
             "low",
             "medium",
             "high",
         ]
-        assert config.resolve_reasoning_effort("claude-haiku-4-5", "max") == "high"
+        assert config.resolve_reasoning_effort("gemini-3.1-pro", "max") == "high"
 
     def test_below_the_floor_takes_the_lowest(self, config):
         """Nothing at or under the request — the model's minimum is as close as it gets."""
@@ -123,6 +133,28 @@ class TestUnhonoredLevelsDegrade:
                     assert got == efforts[0], f"{name}: {level} -> {got}"
 
 
+class TestEveryEntryBuilds:
+    """``ModelSpec.from_manifest`` is where a declared surface is checked, and
+    it runs per request, so a typo in a rarely-picked model would otherwise
+    first surface as a 500 for whoever picked it. Walking the whole catalog
+    here is what makes the allowlist a load-time guarantee."""
+
+    def test_every_entry_builds_a_spec(self, config):
+        from src.llms.model_spec import ModelSpec
+
+        for name in config.llm_config:
+            ModelSpec.from_manifest(config, name)
+
+    def test_every_declared_ladder_has_somewhere_to_write(self, config):
+        """The failure the block exists to make loud, checked against the real
+        catalog rather than a fixture: buttons with no path behind them."""
+        from src.llms.model_spec import ModelSpec
+
+        for name in config.llm_config:
+            spec = ModelSpec.from_manifest(config, name)
+            assert bool(spec.reasoning_efforts) == bool(spec.reasoning_surface), name
+
+
 class TestManifestAgreesWithTheMapper:
     """A declared level must actually reach the provider. These two drifting
     apart is the failure the enum exists to prevent."""
@@ -133,15 +165,18 @@ class TestManifestAgreesWithTheMapper:
         import copy
         import json
 
-        for name, entry in config.llm_config.items():
+        from src.llms.model_spec import ModelSpec
+
+        for name in config.llm_config:
             efforts = config.get_reasoning_efforts(name)
             if len(efforts) < 2:
                 continue
+            spec = ModelSpec.from_manifest(config, name)
             seen = {}
             for level in efforts:
-                params = copy.deepcopy(entry.get("parameters", {}))
-                extra = copy.deepcopy(entry.get("extra_body", {}))
-                apply_reasoning_effort(level, params, extra)
+                params = copy.deepcopy(spec.parameters)
+                extra = copy.deepcopy(spec.extra_body)
+                apply_reasoning_effort(level, params, extra, spec.reasoning_surface)
                 seen[level] = json.dumps([params, extra], sort_keys=True)
             assert len(set(seen.values())) == len(efforts), (
                 f"{name}: levels emit duplicate payloads -> {seen}"
@@ -157,7 +192,9 @@ class TestManifestAgreesWithTheMapper:
         for name, entry in config.llm_config.items():
             if not isinstance(entry, dict):
                 continue
-            if "reasoning" not in (entry.get("extra_body") or {}):
+            # Keyed off the provider family, not the surface shape: the surface
+            # is shared with OpenAI, which does serve the top of the ladder.
+            if not str(entry.get("provider", "")).startswith("dashscope"):
                 continue
             top = set(config.get_reasoning_efforts(name)) & {"xhigh", "max"}
             if top:
@@ -165,3 +202,42 @@ class TestManifestAgreesWithTheMapper:
                     f"{name}: declares {sorted(top)} on provider "
                     f"{entry.get('provider')!r}, which is not known to serve them"
                 )
+
+
+class TestWhoWinsWhenTwoThingsNameTheLevel:
+    """The manifest used to seed its default level straight into
+    ``parameters``, which put a caller's own ``parameters`` override above the
+    default and below an explicit request. The mapper writes what that seed
+    held, so it has to keep the same two rungs.
+    """
+
+    def test_an_override_beats_the_manifest_default(self):
+        client = LLM("gpt-5.5", reasoning={"effort": "high"})
+        assert client.parameters["reasoning"]["effort"] == "high"
+
+    def test_a_requested_level_beats_an_override(self):
+        client = LLM("gpt-5.5", reasoning_effort="low", reasoning={"effort": "high"})
+        assert client.parameters["reasoning"]["effort"] == "low"
+        assert client.resolved_reasoning_effort == "low"
+
+    def test_the_default_is_still_written_when_nothing_overrides_it(self, config):
+        """The level is no longer sitting in `parameters` waiting to be sent, so
+        skipping the mapper on this path reports a level the request never
+        carried. Walked over the catalog rather than one model: dropping the
+        no-request apply leaves every other test in this file green."""
+        from src.llms.model_spec import ModelSpec
+
+        checked = 0
+        for name in config.llm_config:
+            spec = ModelSpec.from_manifest(config, name)
+            write = spec.reasoning_surface.get("write")
+            if not (write and spec.reasoning_effort_default):
+                continue  # no dial, or no ladder to have a default on
+            client = LLM(name, api_key="dummy-key")
+            lanes = {"parameters": client.parameters, "extra_body": client.extra_body}
+            node = lanes[write.split(".")[0]]
+            for segment in write.split(".")[1:]:
+                node = node[segment]
+            assert node == client.resolved_reasoning_effort == spec.reasoning_effort_default, name
+            checked += 1
+        assert checked > 10, f"only {checked} models exercised the no-request path"

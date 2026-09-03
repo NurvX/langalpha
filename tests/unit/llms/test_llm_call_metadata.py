@@ -62,8 +62,10 @@ class TestResolvedEffortIsWhatRan:
         assert llm.resolved_reasoning_effort != requested
 
     def test_no_request_reports_the_models_own_default(self):
-        """The manifest parameters already encode it, so the call is not silent
-        about its effort merely because nobody named one."""
+        """The mapper writes it on this path too, so the call is not silent
+        about its effort merely because nobody named one. That the level also
+        reaches the wire is pinned in ``test_reasoning_efforts_manifest``; this
+        is about what the call reports."""
         config = self._model_config()
         with_default = [
             model

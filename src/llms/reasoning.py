@@ -1,15 +1,15 @@
 """Unified reasoning effort mapper.
 
-Translates a level the manifest has **already guaranteed** the model accepts
-into that provider's native parameter. Detection-based: the shape of the model's
-``parameters``/``extra_body`` says which surface it speaks, so adding a model
-never means editing a list in here.
+Translates a level the manifest has **already guaranteed** the model accepts into
+that provider's native parameter. Each entry names its own surface in its
+``reasoning`` block, so the mapping is a declaration rather than a guess about
+which key the entry happened to carry.
 
 Nothing is clamped here. A level outside the model's declared
 ``reasoning_efforts`` is resolved upstream by ``clamp_reasoning_effort`` in
-``llm.py``, the only place that can see the enum, which steps down to the
-nearest level the model does offer. By the time a request reaches this function
-the level is known-good, so a lossy fallback here would only hide a bug.
+``llm.py``, the only place that can see the enum, which steps down to the nearest
+level the model does offer. By the time a request reaches this function the level
+is known-good, so a lossy fallback here would only hide a bug.
 """
 
 from typing import Literal, get_args
@@ -30,150 +30,204 @@ REASONING_LEVELS: tuple[ReasoningLevel, ...] = get_args(ReasoningLevel)
 #: than off ``low``, which is a real thinking level everywhere that grades.
 OFF_LEVELS = frozenset({"none"})
 
-# Anthropic-compatible endpoints take a token budget rather than a level name.
-_ANTHROPIC_BUDGETS = {
-    "minimal": 2000,
-    "low": 5000,
-    "medium": 10000,
-    "high": 32000,
-    "xhigh": 64000,
-    "max": 128000,
-}
+#: Paths a ``write`` may target: graded dials that take a level name verbatim.
+#: Closed on purpose. A dotted string makes a typo look structurally valid, and
+#: a write to a misspelled path lands somewhere the vendor ignores and returns
+#: 200 for, which is the exact silent failure this block exists to remove.
+#:
+#: Ordered, not a set: :func:`infer_surface` takes the first seed it finds, so
+#: an entry seeded on two dials resolves to the ``parameters`` lane, where a
+#: typed SDK field lives, rather than to whichever path sorts first.
+WRITE_PATHS = (
+    "parameters.reasoning.effort",
+    "parameters.output_config.effort",
+    "parameters.thinking_level",
+    "parameters.reasoning_effort",
+    "extra_body.reasoning.effort",
+    "extra_body.reasoning_effort",
+)
+
+#: Paths an ``on``/``off`` patch may target: mode switches, which take a vendor
+#: literal rather than a level. Disjoint from :data:`WRITE_PATHS` on purpose --
+#: a patch that could name a dial is how an ``off`` block ends up restating the
+#: entry's own graded write, which then contradicts the switch beside it.
+PATCH_PATHS = frozenset(
+    {
+        "parameters.thinking.type",
+        "extra_body.thinking.type",
+        "extra_body.thinking.clear_thinking",
+    }
+)
 
 
-def _budget(table: dict[str, int], level: str) -> int:
-    """Nearest declared budget at or below ``level``.
+#: The keys that say *where* a level goes, as opposed to which levels exist.
+#: Beside the allowlists they partition, because a key added to the mapper and
+#: not to this tuple is dropped by ``_checked_surface`` without a word.
+SURFACE_KEYS = ("write", "on", "off")
 
-    A model may declare a level this ladder has no rung for; walking down the
-    canonical order is still honest, because the level came from that model's
-    own enum and the ladder only decides how many tokens to spend.
+
+class ReasoningSurfaceError(ValueError):
+    """A ``reasoning`` block names a path outside the allowlists."""
+
+
+def validate_surface(name: str, surface: dict) -> None:
+    """Reject a block that cannot do what its ladder advertises.
+
+    Runs where the author is still holding it: the manifest suite builds every
+    entry, and the preferences endpoint checks a custom one on save. Past here
+    a bad path is a 200 the vendor ignores, and a wrongly typed one is an
+    exception raised on every turn from data that was accepted once.
     """
-    if level in table:
-        return table[level]
-    idx = REASONING_LEVELS.index(level)
-    for candidate in reversed(REASONING_LEVELS[:idx]):
-        if candidate in table:
-            return table[candidate]
-    return min(table.values())
+    for key, expected in (("write", str), ("on", dict), ("off", dict), ("efforts", list)):
+        value = surface.get(key)
+        if value is not None and not isinstance(value, expected):
+            raise ReasoningSurfaceError(
+                f"{name}: reasoning.{key} must be a {expected.__name__}, "
+                f"got {type(value).__name__}"
+            )
+    write = surface.get("write")
+    if write is not None and write not in WRITE_PATHS:
+        raise ReasoningSurfaceError(
+            f"{name}: reasoning.write={write!r} is not a known write path"
+        )
+    for key in ("on", "off"):
+        for path in surface.get(key) or {}:
+            if path not in PATCH_PATHS:
+                raise ReasoningSurfaceError(
+                    f"{name}: reasoning.{key} path {path!r} is not a known patch path"
+                )
+    # The rest is the block checked against its own ladder. Only a full block
+    # carries one -- an inferred surface has no efforts and no rung to be wrong
+    # about -- and a surface with no levels behind it writes nothing anyway.
+    efforts = surface.get("efforts") or ()
+    if not efforts:
+        return
+    # Before any set operation: the levels arrive from a stored preferences bag,
+    # and one unhashable element would raise out of the intersection below,
+    # turning a save this function exists to answer with a 400 into a 500.
+    unknown = [lv for lv in efforts if not isinstance(lv, str) or lv not in REASONING_LEVELS]
+    if unknown:
+        raise ReasoningSurfaceError(
+            f"{name}: reasoning.efforts must be drawn from {list(REASONING_LEVELS)}, "
+            f"got {unknown!r}"
+        )
+    if write is None and not (surface.get("on") or surface.get("off")):
+        raise ReasoningSurfaceError(
+            f"{name}: reasoning declares efforts with nowhere to write them"
+        )
+    # A patch is one payload, so a surface with no graded write can tell exactly
+    # two states apart. More rungs than that is the lie the block exists to
+    # remove: buttons the UI renders as distinct that emit the same request.
+    on_rungs = [lv for lv in efforts if lv not in OFF_LEVELS]
+    if write is None and len(on_rungs) > 1:
+        raise ReasoningSurfaceError(
+            f"{name}: reasoning declares no `write`, so {on_rungs} all apply the "
+            f"same `on` patch and reach the provider identically"
+        )
+    off_rungs = sorted(OFF_LEVELS.intersection(efforts))
+    if surface.get("on") and not surface.get("off") and off_rungs:
+        raise ReasoningSurfaceError(
+            f"{name}: reasoning offers {off_rungs} but declares no `off`, so the "
+            f"off rung would apply `on` and turn thinking on"
+        )
+    if surface.get("off") and not off_rungs:
+        raise ReasoningSurfaceError(
+            f"{name}: reasoning declares `off` but no level in efforts means off, "
+            f"so the patch can never be applied"
+        )
 
 
-def _switch_off(container: dict) -> bool:
-    """Flip a declared ``thinking`` mode switch to off; report whether there was one.
+def infer_surface(parameters: dict | None, extra_body: dict | None) -> dict:
+    """Guess the surface of a user-supplied entry that declared none.
 
-    The graded effort key is deliberately left at its declared value. ``none`` is
-    not universally accepted as an effort — DeepSeek rejects it with a 400, and
-    GLM keeps on thinking through it — so on a surface carrying both a switch and
-    a dial, only the switch reliably means off.
+    Only for BYOK entries. A manifest row states its surface outright; a user
+    pasting an OpenAI-compatible config cannot be asked to name a write path, and
+    entries stored before the block existed carry only the seed. Graded dials
+    only — a mode switch or a token budget has to be declared, because there is
+    no seed value that distinguishes one from a dial's starting point.
     """
-    declared = container.get("thinking")
-    if not isinstance(declared, dict):
-        return False
-    # Bare, not merged: Anthropic's `thinking` is a discriminated union, and the
-    # disabled variant rejects the `budget_tokens` the enabled one requires.
-    # Siblings only ever describe reasoning output, which off does not produce.
-    container["thinking"] = {"type": "disabled"}
-    return True
+    lanes = {"parameters": parameters or {}, "extra_body": extra_body or {}}
+    for path in WRITE_PATHS:
+        lane, *rest = path.split(".")
+        node = lanes[lane]
+        for segment in rest[:-1]:
+            node = node.get(segment) if isinstance(node, dict) else None
+        if isinstance(node, dict) and rest[-1] in node:
+            return {"write": path}
+    return {}
+
+
+def _put(lanes: dict[str, dict], path: str, value) -> None:
+    lane, *rest = path.split(".")
+    node = lanes[lane]
+    for segment in rest[:-1]:
+        child = node.get(segment)
+        if not isinstance(child, dict):
+            child = {}
+            node[segment] = child
+        node = child
+    node[rest[-1]] = value
 
 
 def apply_reasoning_effort(
     level: str,
     parameters: dict,
     extra_body: dict,
+    surface: dict | None = None,
 ) -> tuple[dict, dict]:
     """Apply a reasoning effort level to a model's request parameters.
+
+    ``off`` replaces the graded write rather than layering over it: on a surface
+    carrying both a switch and a dial, only the switch reliably means off, and
+    the two would otherwise contradict each other in the same payload.
 
     Args:
         level: A level from :data:`REASONING_LEVELS`, already validated against
             the model's declared ``reasoning_efforts``.
         parameters: Model parameters dict (mutated in place).
         extra_body: Extra body dict (mutated in place).
+        surface: The write half of the model's ``reasoning`` block. Absent means
+            the model offers no effort control, and nothing is written.
 
     Returns:
         Tuple of (parameters, extra_body) — the same objects, mutated.
     """
-    if level not in REASONING_LEVELS:
+    if not surface or level not in REASONING_LEVELS:
         return parameters, extra_body
 
-    off = level in OFF_LEVELS
+    lanes = {"parameters": parameters, "extra_body": extra_body}
+    off_patch = surface.get("off")
 
-    # --- parameters-based surfaces ---
+    if level in OFF_LEVELS and off_patch:
+        # The graded write goes first, wherever it came from -- the entry's own
+        # seed or a caller override merged in above. Leaving it is the payload
+        # this branch exists to prevent: a live effort beside the instruction
+        # not to think. Only that one key, since its container is the entry's
+        # own transport config.
+        write = surface.get("write")
+        if write:
+            lane, *rest = write.split(".")
+            node = lanes[lane]
+            for segment in rest[:-1]:
+                node = node.get(segment) if isinstance(node, dict) else None
+            if isinstance(node, dict):
+                node.pop(rest[-1], None)
+        # Each container the patch touches is reset, not merged into: a mode
+        # switch sits in a discriminated union whose disabled variant rejects
+        # the siblings the enabled one requires, so a caller-supplied
+        # `budget_tokens` must not survive next to it. Reset in its own pass
+        # first, or two paths sharing a container would wipe each other's write.
+        for path in off_patch:
+            lane, *rest = path.split(".")
+            if len(rest) > 1:
+                lanes[lane][rest[0]] = {}
+        for path, value in off_patch.items():
+            _put(lanes, path, value)
+        return parameters, extra_body
 
-    # OpenAI: parameters.reasoning.effort
-    if "reasoning" in parameters:
-        if isinstance(parameters["reasoning"], dict):
-            parameters["reasoning"]["effort"] = level
-        else:
-            parameters["reasoning"] = {"effort": level}
-
-    # Anthropic graded: output_config.effort carries the level natively. Declaring
-    # it is what marks the surface as graded — a model whose only control is a
-    # `thinking` switch falls through to the mode-switch branch below.
-    elif "output_config" in parameters:
-        if not (off and _switch_off(parameters)):
-            parameters.setdefault("output_config", {})["effort"] = level
-
-    # Anthropic-compatible `thinking`: a budget dial, unless the declared type is
-    # `adaptive` (MiniMax), which is a bare on/off switch the vendor sizes itself.
-    elif "thinking" in parameters:
-        declared = (
-            parameters["thinking"] if isinstance(parameters["thinking"], dict) else {}
-        )
-        if off:
-            parameters["thinking"] = {"type": "disabled"}
-        elif declared.get("type") != "adaptive":
-            parameters["thinking"] = {
-                **declared,
-                "type": "enabled",
-                "budget_tokens": _budget(_ANTHROPIC_BUDGETS, level),
-            }
-
-    # Gemini 3.x: parameters.thinking_level
-    elif "thinking_level" in parameters:
-        parameters["thinking_level"] = level
-
-    # vLLM / Groq / Cerebras: parameters.reasoning_effort
-    elif "reasoning_effort" in parameters:
-        parameters["reasoning_effort"] = level
-
-    # --- extra_body surfaces ---
-    #
-    # Chained, not independent `if`s. glm-5.2 declares both `thinking.type` and
-    # `reasoning_effort`; when both fired, one of the two keys was dead weight.
-    # `reasoning_effort` is the graded control, so it wins for every thinking
-    # level — but not for off, which it does not honor (`reasoning_effort:
-    # "none"` still returned ~165 reasoning tokens; the switch returned zero).
-
-    # Zhipu / Z.ai GLM: extra_body.reasoning_effort, native level names.
-    if "reasoning_effort" in extra_body:
-        if not (off and _switch_off(extra_body)):
-            extra_body["reasoning_effort"] = level
-
-    # Dashscope / Qwen: extra_body.reasoning.effort, native level names.
-    # Same seven levels as our canonical vocabulary, `none` included, so the
-    # level goes out verbatim. Nested rather than flat, which is the only thing
-    # separating this from the GLM surface above.
-    elif "reasoning" in extra_body:
-        if isinstance(extra_body["reasoning"], dict):
-            extra_body["reasoning"]["effort"] = level
-        else:
-            extra_body["reasoning"] = {"effort": level}
-
-    # extra_body.thinking.type is a mode switch, not a dial. The on-value comes
-    # from the manifest rather than a constant: vendors spell it differently
-    # (`enabled` on GLM, `adaptive` on MiniMax) and a hardcoded one is silently
-    # wrong on the other.
-    elif "thinking" in extra_body:
-        declared = (
-            extra_body["thinking"] if isinstance(extra_body["thinking"], dict) else {}
-        )
-        # A declared `disabled` is a seed meaning "off unless asked", not a
-        # usable on-value, so it falls back rather than pinning thinking off.
-        declared_type = declared.get("type")
-        on_value = (
-            declared_type if declared_type not in (None, "disabled") else "enabled"
-        )
-        extra_body["thinking"] = (
-            {"type": "disabled"} if off else {**declared, "type": on_value}
-        )
+    for path, value in (surface.get("on") or {}).items():
+        _put(lanes, path, value)
+    if write := surface.get("write"):
+        _put(lanes, write, level)
 
     return parameters, extra_body

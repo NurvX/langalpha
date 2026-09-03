@@ -267,7 +267,12 @@ def _validate_custom_models(custom_models: list, custom_providers: list | None =
     from ptc_agent.agent.prompts.guidance import VALID_GUIDANCE
 
     from src.llms.llm import LLM, CUSTOM_MODEL_NAME_RE
-    from src.llms.reasoning import REASONING_LEVELS
+    from src.llms.model_spec import reasoning_block
+    from src.llms.reasoning import (
+        REASONING_LEVELS,
+        ReasoningSurfaceError,
+        validate_surface,
+    )
 
     if not isinstance(custom_models, list):
         raise HTTPException(status_code=400, detail="custom_models must be a list")
@@ -333,13 +338,22 @@ def _validate_custom_models(custom_models: list, custom_providers: list | None =
                 detail=f"custom_models[{idx}]: provider '{provider}' is not a known BYOK-eligible or custom provider",
             )
 
-        for field in ("parameters", "extra_body"):
+        for field in ("parameters", "extra_body", "reasoning"):
             val = cm.get(field)
             if val is not None and not isinstance(val, dict):
                 raise HTTPException(
                     status_code=400,
                     detail=f"custom_models[{idx}]: {field} must be a JSON object",
                 )
+
+        # Rejected here rather than at request time: an unknown write path is
+        # accepted by the vendor and ignored, so the entry would render an
+        # effort control that reports a level and sends nothing.
+        if isinstance(cm.get("reasoning"), dict) and cm["reasoning"]:
+            try:
+                validate_surface(f"custom_models[{idx}]", cm["reasoning"])
+            except ReasoningSurfaceError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         modalities = cm.get("input_modalities")
         if modalities is not None:
@@ -368,27 +382,37 @@ def _validate_custom_models(custom_models: list, custom_providers: list | None =
                 detail=f"custom_models[{idx}]: prompt_guidance must be one of {sorted(VALID_GUIDANCE)}",
             )
 
-        efforts = cm.get("reasoning_efforts")
+        # Either shape: a `reasoning` block, or the flat keys entries saved
+        # before it existed still carry. Whichever it used is written back to,
+        # which is why the shapes are read apart here rather than through
+        # `reasoning_block`: its normalized view cannot say which key to
+        # rewrite. Empty means unused, on the same terms as that function.
+        block = cm.get("reasoning")
+        declared = block if isinstance(block, dict) and block else cm
+        efforts_key = "efforts" if declared is not cm else "reasoning_efforts"
+        default_key = "default" if declared is not cm else "reasoning_effort_default"
+
+        efforts = declared.get(efforts_key)
         if efforts is not None:
             if not isinstance(efforts, list) or any(e not in REASONING_LEVELS for e in efforts):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"custom_models[{idx}]: reasoning_efforts must be a list drawn from {list(REASONING_LEVELS)}",
+                    detail=f"custom_models[{idx}]: {efforts_key} must be a list drawn from {list(REASONING_LEVELS)}",
                 )
             # Store in canonical order so the UI renders a ladder, not the
             # order the client happened to send.
-            cm["reasoning_efforts"] = [lv for lv in REASONING_LEVELS if lv in set(efforts)]
+            declared[efforts_key] = [lv for lv in REASONING_LEVELS if lv in set(efforts)]
 
         # An entry shadowing a built-in inherits that model's ladder, so a
         # default may name a level this entry does not list itself.
-        effective_efforts = cm.get("reasoning_efforts")
+        effective_efforts = declared.get(efforts_key)
         if effective_efforts is None:
-            effective_efforts = (mc.get_model_config(name) or {}).get("reasoning_efforts") or []
-        default_effort = cm.get("reasoning_effort_default")
+            effective_efforts = reasoning_block(mc.get_model_config(name)).get("efforts") or []
+        default_effort = declared.get(default_key)
         if default_effort is not None and default_effort not in effective_efforts:
             raise HTTPException(
                 status_code=400,
-                detail=f"custom_models[{idx}]: reasoning_effort_default must be one of {sorted(effective_efforts)}",
+                detail=f"custom_models[{idx}]: {default_key} must be one of {sorted(effective_efforts)}",
             )
 
 
@@ -469,7 +493,7 @@ def _validate_model_tuning(model_pref: dict, effective: dict) -> None:
     profile is checked against its own model's ladder, which is the whole point
     of the per-model layer.
     """
-    from src.llms.model_spec import canonical_reasoning_efforts
+    from src.llms.model_spec import canonical_reasoning_efforts, reasoning_block
     from src.server.services.llm.user_models import model_entry
 
     try:
@@ -503,7 +527,7 @@ def _validate_model_tuning(model_pref: dict, effective: dict) -> None:
             # model shadows a built-in of the same name, so reading the
             # manifest first would check a shadowed ladder the turn never runs.
             entry = model_entry(effective, model) or {}
-            efforts = list(canonical_reasoning_efforts(entry.get("reasoning_efforts")))
+            efforts = list(canonical_reasoning_efforts(reasoning_block(entry).get("efforts")))
             validate_tuning(profile, where=f"profiles[{model}]", reasoning_efforts=efforts)
     except TuningError as exc:
         raise _tuning_400(exc) from exc
@@ -518,7 +542,7 @@ def _clear_unhonored_efforts(
     the patch never mentions, and nothing else revisits those, so the level
     would sit in Settings naming a step no turn runs.
     """
-    from src.llms.model_spec import canonical_reasoning_efforts
+    from src.llms.model_spec import canonical_reasoning_efforts, reasoning_block
     from src.server.services.llm.user_models import model_entry
 
     # Merged by hand: ``_effective_model_preference`` replaces ``profiles``
@@ -532,7 +556,7 @@ def _clear_unhonored_efforts(
         if effort is None:
             continue
         entry = model_entry(effective, model) or {}
-        if effort in canonical_reasoning_efforts(entry.get("reasoning_efforts")):
+        if effort in canonical_reasoning_efforts(reasoning_block(entry).get("efforts")):
             continue
         patch = model_pref.setdefault("profiles", {})
         patch[model] = {**(patch.get(model) or {}), "reasoning_effort": None}

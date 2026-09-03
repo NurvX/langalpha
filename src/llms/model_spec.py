@@ -10,7 +10,12 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .reasoning import REASONING_LEVELS, apply_reasoning_effort
+from .reasoning import (
+    REASONING_LEVELS,
+    SURFACE_KEYS,
+    infer_surface,
+    validate_surface,
+)
 
 
 class ManifestSource(Protocol):
@@ -48,6 +53,28 @@ def default_reasoning_effort(
     return efforts[len(efforts) // 2]
 
 
+def reasoning_block(entry: dict | None) -> dict:
+    """One model's reasoning declaration, from either shape it may be stored in.
+
+    The manifest states it as a single ``reasoning`` block. Custom models saved
+    before that block existed carry the same facts as flat ``reasoning_efforts``
+    / ``reasoning_effort_default`` keys, so both are read here rather than
+    migrating a preferences column. An empty block declares nothing and so does
+    not answer for the entry: preferring it would strand a stored entry's flat
+    keys, unread by everything downstream of a save that validated them.
+    """
+    entry = entry or {}
+    block = entry.get("reasoning")
+    if isinstance(block, dict) and block:
+        return block
+    flat = {}
+    if "reasoning_efforts" in entry:
+        flat["efforts"] = entry["reasoning_efforts"]
+    if "reasoning_effort_default" in entry:
+        flat["default"] = entry["reasoning_effort_default"]
+    return flat
+
+
 def clamp_reasoning_effort(
     efforts: tuple[str, ...] | list[str], default: str | None, requested: str
 ) -> str | None:
@@ -70,38 +97,46 @@ def clamp_reasoning_effort(
     return at_or_below[-1] if at_or_below else efforts[0]
 
 
+def _seeded_level(surface: dict | None, parameters: dict, extra_body: dict) -> Any:
+    """The level already sitting at a surface's own write path, if any."""
+    write = (surface or {}).get("write")
+    if not isinstance(write, str):
+        return None
+    lane, *rest = write.split(".")
+    node = {"parameters": parameters, "extra_body": extra_body}.get(lane)
+    for segment in rest:
+        node = node.get(segment) if isinstance(node, dict) else None
+    return node
+
+
+def _checked_surface(name: str, reasoning: dict | None) -> dict:
+    """Just the write half of a ``reasoning`` block, validated.
+
+    Raises rather than dropping the bad path, so a typo is a loud error naming
+    the model instead of a silent no-op on the wire. Spec-building is per
+    request, so for manifest rows the suite is what catches one first:
+    ``test_reasoning_efforts_manifest`` builds every entry.
+    """
+    if not reasoning:
+        return {}
+    validate_surface(name, reasoning)
+    return {k: reasoning[k] for k in SURFACE_KEYS if k in reasoning}
+
+
 #: What a custom entry inherits from a built-in whose name it takes. Routing --
 #: model_id, provider, parameters -- is the entry's whole reason to exist and
 #: never inherits. These say what the model honors, and a shadow is the same
 #: model reached through the user's own key. ``context`` is here because it is
 #: the only compaction declaration the manifest actually makes:
 #: ``compaction_profile_for`` reads the named profile first and the window's
-#: band second, and every manifest row answers by window.
+#: band second, and every manifest row answers by window. ``reasoning`` is
+#: handled separately by :func:`with_inherited_declarations`, because it is the
+#: one declaration that is really two.
 SHADOW_INHERITED = (
-    "reasoning_efforts",
-    "reasoning_effort_default",
     "prompt_guidance",
     "compaction_profile",
     "context",
 )
-
-
-#: Where a level is written, per vendor. ``apply_reasoning_effort`` dispatches on
-#: whichever of these the model already declares and has no default branch, so a
-#: shadow that borrowed a ladder has to borrow the surface too or the level it
-#: resolves lands nowhere.
-REASONING_SURFACE_KEYS = (
-    "reasoning",
-    "output_config",
-    "thinking",
-    "thinking_level",
-    "reasoning_effort",
-)
-
-
-def _surface_of(declared: dict | None) -> dict:
-    """Just the reasoning keys out of a model's parameters or extra_body."""
-    return {k: v for k, v in (declared or {}).items() if k in REASONING_SURFACE_KEYS}
 
 
 def with_inherited_declarations(entry: dict, shadowed: dict | None) -> dict:
@@ -110,10 +145,20 @@ def with_inherited_declarations(entry: dict, shadowed: dict | None) -> dict:
     Presence, not truthiness: an entry declaring ``reasoning_efforts: []`` is
     saying the model honors no levels, and the shadowed ladder must not
     overwrite that answer.
+
+    ``reasoning`` fills in key by key rather than whole, because the block
+    bundles two declarations -- which levels exist, and where the chosen one is
+    written -- and an entry that names one still needs the other. Inheriting it
+    whole discards a ladder stored in the flat shape, which carries no
+    ``reasoning`` key to block the inheritance; inheriting nothing when the
+    entry names any key at all strands a partial block with no surface.
     """
     if not shadowed:
         return entry
     inherited = {k: shadowed[k] for k in SHADOW_INHERITED if k not in entry and k in shadowed}
+    reasoning = {**reasoning_block(shadowed), **reasoning_block(entry)}
+    if reasoning:
+        inherited["reasoning"] = reasoning
     return {**entry, **inherited} if inherited else entry
 
 
@@ -129,6 +174,8 @@ class ModelSpec:
     additional_betas: tuple[str, ...] = ()
     reasoning_efforts: tuple[str, ...] = ()
     reasoning_effort_default: str | None = None
+    #: Where this model's effort level is written. Empty means no effort control.
+    reasoning_surface: dict[str, Any] = field(default_factory=dict)
     #: Platform proxy to route through when the caller brings no key of its own.
     system_provider: str | None = None
     #: SDK to assume when the provider is not in the manifest at all. A manifest
@@ -143,7 +190,8 @@ class ModelSpec:
         info = model_config.get_model_config(model_name)
         if not info:
             raise ValueError(f"Model {model_name} not found in models.json")
-        efforts = canonical_reasoning_efforts(info.get("reasoning_efforts"))
+        reasoning = reasoning_block(info)
+        efforts = canonical_reasoning_efforts(reasoning.get("efforts"))
         return cls(
             name=model_name,
             model_id=info["model_id"],
@@ -153,8 +201,9 @@ class ModelSpec:
             additional_betas=tuple(info.get("additional_betas") or ()),
             reasoning_efforts=efforts,
             reasoning_effort_default=default_reasoning_effort(
-                efforts, info.get("reasoning_effort_default")
+                efforts, reasoning.get("default")
             ),
+            reasoning_surface=_checked_surface(model_name, reasoning),
             system_provider=info.get("system_provider"),
         )
 
@@ -167,38 +216,43 @@ class ModelSpec:
         itself is the built-in's to declare.
         """
         declared = with_inherited_declarations(config, shadowed)
-        efforts = canonical_reasoning_efforts(declared.get("reasoning_efforts"))
+        reasoning = reasoning_block(declared)
+        # The entry's own half of that, kept apart: what it says about itself
+        # outranks anything it borrowed from the name it took.
+        own = reasoning_block(config)
+        efforts = canonical_reasoning_efforts(reasoning.get("efforts"))
         declared_response_api = config.get("_use_response_api")
-        own_params = config.get("parameters") or {}
-        own_extra = config.get("extra_body") or {}
-        # All or nothing, and across both containers, because one model can
-        # spell its control in either: an entry naming any reasoning key owns
-        # the surface, and filling in the vendors it left out would put a
-        # second, never-written control on the wire beside the one it declared.
-        # Gated on the ladder too -- an entry declaring no levels wants no
-        # reasoning key at all, not the shadowed model's default.
-        inherits_surface = (
-            bool(efforts)
-            and shadowed is not None
-            and not any(k in own_params or k in own_extra for k in REASONING_SURFACE_KEYS)
-        )
-        # Deep-copied before anything writes to them: the borrowed surface shares
-        # its nested dicts with the process-wide manifest.
-        parameters = copy.deepcopy(
-            {**own_params, **_surface_of(shadowed.get("parameters"))} if inherits_surface else own_params
-        )
-        extra_body = copy.deepcopy(
-            {**own_extra, **_surface_of(shadowed.get("extra_body"))} if inherits_surface else own_extra
-        )
-        default = default_reasoning_effort(efforts, declared.get("reasoning_effort_default"))
-        if inherits_surface and default:
-            # A borrowed surface carries the built-in's level, which is not this
-            # entry's answer: an entry may narrow the ladder or name its own
-            # default. Writing the resolved default into it keeps what a call
-            # with no request reports and what the wire carries from disagreeing,
-            # which is the invariant every manifest row already satisfies. Only
-            # for a surface we seeded; a level the entry typed itself is its own.
-            apply_reasoning_effort(default, parameters, extra_body)
+        # Deep-copied because the mapper writes into these in place, and they
+        # would otherwise be the caller's own stored preference dicts.
+        parameters = copy.deepcopy(config.get("parameters") or {})
+        extra_body = copy.deepcopy(config.get("extra_body") or {})
+        # Gated on the ladder: an entry declaring no levels wants no effort
+        # control at all, not the shadowed model's surface.
+        surface = reasoning if efforts else None
+        if efforts and not any(k in own for k in SURFACE_KEYS):
+            # Read against the entry's own block, not the merged one, so the
+            # order below is seed first and borrowed path second. An entry that
+            # spelled a control in its own parameters is routing somewhere that
+            # reads it; writing the level to the built-in's path instead leaves
+            # that seed stale and puts a second control on the wire beside it.
+            surface = infer_surface(parameters, extra_body)
+            if not surface and any(k in reasoning for k in SURFACE_KEYS):
+                surface = reasoning
+        # An entry that seeded a level into its own parameters and named no
+        # default has already said which rung it runs: the mapper used to skip
+        # the no-request turn entirely, so that seed was what went out. Reading
+        # it back keeps that turn on the same rung instead of the ladder's
+        # midpoint. Only graded dials seed a level name, which is the whole of
+        # WRITE_PATHS, so there is nothing here to misread.
+        # It is read before the shadowed default for the same reason the surface
+        # is: a borrowed default belongs to the wider ladder this entry narrowed,
+        # so taking it first moves a default turn off the rung the entry ran.
+        declared_default = own.get("default")
+        if declared_default is None:
+            declared_default = _seeded_level(surface, parameters, extra_body)
+        if declared_default is None:
+            declared_default = reasoning.get("default")
+        default = default_reasoning_effort(efforts, declared_default)
         return cls(
             name=config.get("name", config["model_id"]),
             model_id=config["model_id"],
@@ -208,6 +262,9 @@ class ModelSpec:
             additional_betas=tuple(config.get("additional_betas") or ()),
             reasoning_efforts=efforts,
             reasoning_effort_default=default,
+            reasoning_surface=_checked_surface(
+                config.get("name", config["model_id"]), surface
+            ),
             sdk_fallback="openai",
             use_response_api_override=(
                 None if declared_response_api is None else bool(declared_response_api)
