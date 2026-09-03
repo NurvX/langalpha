@@ -363,6 +363,32 @@
       "write": "parameters.thinking_level"
     }
   },
+  "gemini-3.8-flash": {
+    "model_id": "gemini-3.8-flash",
+    "provider": "gemini",
+    "visible": true,
+    "speed": 5,
+    "intelligence": 5,
+    "context": 1000000,
+    "input_modalities": [
+      "text",
+      "image",
+      "pdf",
+      "video"
+    ],
+    "parameters": {
+      "include_thoughts": true
+    },
+    "reasoning": {
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium",
+      "write": "parameters.thinking_level"
+    }
+  },
   "gemini-3.1-flash-lite": {
     "model_id": "gemini-3.1-flash-lite-preview",
     "provider": "gemini",
