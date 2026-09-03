@@ -448,7 +448,9 @@ html {
      pointer, because focus never moved and no focusin fired. Written as
      `input` those controls go dark under the user's own first keystroke.
      Anything left off this list keeps a ring on a click, which is the mild
-     half of the trade.
+     half of the trade. `contenteditable` is qualified for the same reason the
+     inputs are: the bare attribute selector also matches
+     `contenteditable="false"`, which is not a field and does not take typing.
 
      Transparent rather than `none`, which is not a stylistic choice: forced
      colors repaints every outline in the system palette but cannot paint one
@@ -460,7 +462,7 @@ html {
      `outline-none` compiles to this and not to `outline: none`. */
   :root[data-pointer-focus] :is(
     textarea,
-    [contenteditable],
+    [contenteditable]:not([contenteditable="false"]),
     input:not([type]),
     input[type="text"],
     input[type="email"],
