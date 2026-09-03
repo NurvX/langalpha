@@ -1764,11 +1764,19 @@ describe('the two editions can sit on one machine', () => {
   })
 
   // The artifact name must not follow the display name: productName carries a
-  // space in the oss edition, and the edition already distinguishes the files.
+  // space in the oss edition, and the edition tag already distinguishes the files.
   test('the download filename does not inherit the display name', () => {
     const yml = read('electron-builder.yml')
-    assert.match(yml, /^artifactName: LangAlpha-\$\{EDITION\}/m)
+    assert.match(yml, /^artifactName: LangAlpha\$\{EDITION_TAG\}-/m)
     assert.ok(!/^artifactName:.*\$\{productName\}/m.test(yml), 'artifactName still interpolates productName')
+  })
+
+  // The hosted build is the one the download page serves, so it is named plainly
+  // and only the self-hosted edition is marked. A tag that resolved to something
+  // for both would put the edition back into every public download URL.
+  test('only the self-hosted edition is tagged in the filename', () => {
+    assert.match(read('scripts/build.mjs'), /EDITION_TAG: edition === 'oss' \? '-oss' : ''/,
+      'the edition tag no longer resolves to nothing for the hosted build')
   })
 
   // The filename is not enough on its own. The unpacked bundle is named from
@@ -2137,5 +2145,49 @@ describe('rendering a page to a PDF', () => {
       // And nothing half-written left beside it under a name nobody will explain.
       assert.deepEqual(fs.readdirSync(path.dirname(target)), ['out.pdf'])
     })
+  })
+})
+
+// Signing and notarization are two separate switches, and the committed config
+// has both off: a contributor with neither credential has to be able to run
+// `dist`. scripts/build.mjs turns each on by replacing the exact line it finds,
+// and it does exit loudly when that line is gone — but only on a build that had
+// credentials, which is never a local one. So the pairing is asserted here,
+// where a drifted marker fails on every run rather than in the release that
+// first needed it.
+describe('the committed package is unsigned and un-notarized', () => {
+  const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8')
+
+  test('both switches are committed in the off position', () => {
+    const yml = read('electron-builder.yml')
+    assert.match(yml, /^ {2}identity: null$/m, 'signing is not disabled by default')
+    // The one that is easy to lose: electron-builder signs whenever a
+    // certificate is present but submits to Apple only when told, so a config
+    // without this line ships a signed build Gatekeeper still refuses.
+    assert.match(yml, /^ {2}notarize: false$/m, 'notarization is not stated at all')
+  })
+
+  test('build.mjs targets exactly those two lines', () => {
+    const build = read('scripts/build.mjs')
+    assert.ok(build.includes('/^ {2}identity: null\\r?$/m'), 'the identity marker moved')
+    assert.ok(build.includes('/^ {2}notarize: false\\r?$/m'), 'the notarize marker moved')
+  })
+
+  // Not a switch build.mjs flips: unlike the two above, this one is committed on.
+  // It costs nothing without a certificate, because electron-builder only signs
+  // when it has one, and losing it produces a DMG that Gatekeeper refuses on open
+  // no matter how well notarized the app inside it is.
+  test('the disk image is signed', () => {
+    assert.match(read('electron-builder.yml'), /^ {2}sign: true$/m, 'dmg signing is off')
+  })
+
+  // The DMG is a separate submission from the .app, and the failure it prevents
+  // is silent: the app staples fine, the build goes green, and the file people
+  // actually download is the one that is refused.
+  test('the disk image is submitted and stapled', () => {
+    const build = read('scripts/build.mjs')
+    assert.ok(build.includes("'notarytool', 'submit'"), 'disk images are never submitted')
+    assert.ok(build.includes("'stapler', 'staple'"), 'disk images are never stapled')
+    assert.ok(build.includes("context:primary-signature"), 'the DMG is assessed with the wrong Gatekeeper context')
   })
 })
