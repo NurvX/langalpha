@@ -1781,8 +1781,9 @@ describe('the two editions can sit on one machine', () => {
 
   // The filename is not enough on its own. The unpacked bundle is named from
   // productName and lands in a shared `mac-arm64`, and the update manifests are
-  // fixed names (`latest-mac.yml` carries no edition at all), so one output tree
-  // means the second edition to build overwrites the first's metadata.
+  // named for the channel and never the edition (`latest-mac.yml` is the same
+  // filename for both), so one output tree means the second edition to build
+  // overwrites the first's metadata.
   test('neither edition builds into the other\'s output tree', () => {
     assert.match(read('electron-builder.yml'), /^ {2}output: dist\/\$\{EDITION\}$/m)
   })
@@ -1803,6 +1804,33 @@ describe('the two editions can sit on one machine', () => {
       'build.mjs no longer derives its output directory from that line')
     assert.ok(!/path\.(join|resolve)\(root, 'dist'\)/.test(build),
       'build.mjs also hardcodes the output directory somewhere')
+  })
+
+  // electron-builder names the manifest for the channel it reads off the
+  // version's prerelease tag, so a `latest*` check passes on 0.2.0 and fails on
+  // 0.2.0-rc.1 while the build is equally fine either way. That is not a corner:
+  // a prerelease through the real pipeline is how the release workflow is meant
+  // to be tested, and this check failed all three platforms on the first run
+  // that did it, after passing locally on a stable version.
+  test('the manifest check follows the version to its channel', () => {
+    const build = read('scripts/build.mjs')
+    assert.ok(!/\/\^latest\.\*\\\.yml\$\//.test(build),
+      'build.mjs is back to demanding the latest channel whatever the version says')
+    assert.match(build, /no \$\{channel\}\*\.yml was produced/,
+      'the failure no longer names the manifest it wanted, which is the whole diagnosis')
+
+    // Run the derivation the file actually ships, not a copy of it.
+    const source = /const channel = \/(.+?)\/\.exec\(version\)\?\.\[1\] \|\| 'latest'/.exec(build)
+    assert.ok(source, 'build.mjs no longer derives the channel from the version')
+    const channelOf = (v) => new RegExp(source[1]).exec(v)?.[1] || 'latest'
+
+    // The expected column is semver `prerelease()[0]`, which is verbatim what
+    // electron-builder's `appInfo.channel` returns and names the file after.
+    for (const [version, channel] of [
+      ['0.1.3', 'latest'], ['0.2.0', 'latest'], ['10.20.30', 'latest'],
+      ['0.2.0-rc.1', 'rc'], ['0.2.0-beta.1', 'beta'], ['0.2.0-beta', 'beta'],
+      ['1.0.0-alpha.beta', 'alpha'], ['1.0.0-rc-1', 'rc-1'], ['1.0.0-0', '0'],
+    ]) assert.equal(channelOf(version), channel, `${version} resolves to the wrong channel`)
   })
 })
 

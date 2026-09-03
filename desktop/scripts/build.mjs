@@ -11,9 +11,9 @@
  *  2. The feed URL is a build input, like the origins are, so
  *     `electron-builder.yml` carries `publish: null` and the real feed arrives
  *     as DESKTOP_UPDATE_FEED. Supplying it is also what makes
- *     electron-builder emit `latest-*.yml` and bake `app-update.yml` into the
- *     package. Without it there is simply no update metadata, which is a quiet
- *     way to ship a build that can never update itself.
+ *     electron-builder emit an update manifest and bake `app-update.yml` into
+ *     the package. Without it there is simply no update metadata, which is a
+ *     quiet way to ship a build that can never update itself.
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
@@ -407,12 +407,21 @@ function findApps(dir, depth = 0) {
   return found
 }
 
+// electron-builder names the manifest after the channel it reads off the
+// version's prerelease tag, so 0.2.0 writes latest-mac.yml while 0.2.0-rc.1
+// writes rc-mac.yml. Deriving the same name is what lets a prerelease be
+// checked at all, and it is stricter than a `latest*` glob rather than looser:
+// a manifest written for some other channel no longer counts as success.
+const version = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version || ''
+const channel = /^[^-]*-([0-9A-Za-z-]+)/.exec(version)?.[1] || 'latest'
+
 // A feed that produced no manifest is the failure this whole wrapper is about:
 // the package looks fine, installs fine, and silently never updates.
 if (feed && !passthrough.includes('--dir')) {
-  const manifests = existsSync(dist) ? readdirSync(dist).filter((f) => /^latest.*\.yml$/.test(f)) : []
+  const wanted = new RegExp(`^${channel}(-[0-9A-Za-z-]+)?\\.yml$`)
+  const manifests = existsSync(dist) ? readdirSync(dist).filter((f) => wanted.test(f)) : []
   if (manifests.length === 0) {
-    console.error('[build] a feed was configured but no latest*.yml was produced; the build cannot update itself')
+    console.error(`[build] a feed was configured but no ${channel}*.yml was produced; the build cannot update itself`)
     process.exit(1)
   }
   console.log(`[build] update manifests: ${manifests.join(', ')}`)

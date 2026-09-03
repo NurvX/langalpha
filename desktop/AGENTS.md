@@ -145,8 +145,8 @@ those origins into an OSS package by accident.
 **Nor do the two share an output directory** (`directories.output: dist/${EDITION}`).
 The artifact filename carries the edition tag; nothing else written there does. The unpacked
 bundle is named from `productName`, so both `.app`s land under one `mac-arm64`, and the
-update manifests are `latest-mac.yml` and `latest.yml`, fixed names with no edition in
-them at all, so whichever edition builds second overwrites the first's. `scripts/build.mjs`
+update manifests are named for the update channel and never the edition
+(`latest-mac.yml`, `latest.yml`), so whichever edition builds second overwrites the first's. `scripts/build.mjs`
 then searches that same directory for what it just produced, which is where one tree
 turns into a signing check verifying the other edition's stale bundle and a no-feed build
 whose sweep strips the other edition's baked `app-update.yml`.
@@ -340,10 +340,18 @@ A build learns where to look in one of two ways, and needs exactly one:
 `electron-builder.yml` carries `publish: null` because where a build looks for
 updates is deployment configuration, not source: the feed arrives as
 `DESKTOP_UPDATE_FEED` and `scripts/build.mjs` rewrites the config for that one
-build. **Supplying a feed is what makes electron-builder emit `latest-*.yml` at
-all.** Without it there is no manifest, and a build with no manifest installs
+build. **Supplying a feed is what makes electron-builder emit an update manifest
+at all.** Without it there is no manifest, and a build with no manifest installs
 perfectly and then never updates, which is why the build script fails hard when a
-feed was set but no manifest came out. That guard caught its own case the first time it ran.
+feed was set but no manifest came out.
+
+**The manifest is named for the update channel, which electron-builder reads off the
+version's prerelease tag** (`appInfo.channel`): `0.2.0` writes `latest-mac.yml`,
+`0.2.0-rc.1` writes `rc-mac.yml`. The guard derives that same name instead of globbing
+`latest*`, and so does every step of the release pipeline that collects or uploads a
+manifest. Getting this wrong is not a corner case: shipping a prerelease through the real
+pipeline is how that pipeline is meant to be rehearsed, and the first run to do it failed
+all three platforms on a guard demanding a filename the build had no reason to write.
 
 Distribution has two halves: the GitHub release is where a person downloads the
 app, and the feed host is the only thing an installed app reads. Publishing one
