@@ -119,6 +119,27 @@ def upgrade() -> None:
            AND w.name = r.old_name
     """)
 
+    # --- consent for the rows this pass just vouched for ------------------
+    # 036 backfills the three names 030 and 032 had already reserved, and could
+    # not reach this one: until the rename above runs, a row called ``webull``
+    # is as likely somebody's own server as the connector. Afterwards the ones
+    # still holding the name are exactly the connector's -- the shipped row, and
+    # the hand-added row at the vendor's own host that the address exemption
+    # deliberately preserves, which is the shape this migration's docstring
+    # calls the likeliest of the four.
+    #
+    # Without this they keep a NULL record, which every reader treats as consent
+    # to nothing: all 71 curated tools refused, the row reporting "granted
+    # nothing", and only a reconnect able to repair it. Same non-danger set and
+    # same reasoning as 036's -- see the comment on its ``_BACKFILL``.
+    op.execute("""
+        UPDATE user_mcp_oauth_connections
+           SET granted_capabilities =
+               '["market_data","watchlists","account"]'::jsonb
+         WHERE server_name = 'webull'
+           AND granted_capabilities IS NULL
+    """)
+
     # --- workspace tier --------------------------------------------------
     # No address test: a brokerage connector only ever exists at the user tier,
     # so a workspace-local row under the name is always somebody's own server,

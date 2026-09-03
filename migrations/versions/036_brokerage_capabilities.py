@@ -33,10 +33,29 @@ depends_on = None
 # Renaming one is the exception that does need a pass of its own: a stored key
 # the map no longer names expands to no tools at all, so it reads as a
 # connection that may do nothing rather than as the group it used to be.
+#
+# ``webull`` is absent because its name is not yet its own here -- 037 is what
+# frees it, and only the rows that survive that pass are the connector's. Its
+# backfill therefore runs there, immediately after the rename, for the same
+# reason each name is only vouched for by the migration that reserved it.
+#
+# What each row gets is every group the vendor has EXCEPT the one that places
+# real orders, which matches what the consent dialog itself offers as its
+# default. Nobody was asked about these connections, so what is written here is
+# not consent and must not be able to masquerade as it: the page renders a
+# stored key as a choice the user made, and "you agreed to let an agent place
+# live orders" is the one sentence this whole change exists to stop us putting
+# in their mouth without asking. The earlier draft granted every group to
+# preserve behaviour exactly, which was defensible while there was no consent
+# surface and is not now that there is one.
+#
+# The cost is real and is the smaller one: someone who had the agent placing
+# orders finds it declined until they reconnect and say so, once, on a screen
+# that tells them what they are agreeing to.
 _BACKFILL = """(VALUES
-    ('robinhood', '["market_data","watchlists","scanners","account","order_preview","trading"]'),
+    ('robinhood', '["market_data","watchlists","scanners","account","order_preview"]'),
     ('ibkr',      '["market_data","watchlists","alerts","account","staged_orders"]'),
-    ('moomoo',    '["market_data","watchlists","account","paper_trading","trading"]')
+    ('moomoo',    '["market_data","watchlists","account","paper_trading"]')
 ) AS shipped(name, caps)"""
 
 
@@ -70,11 +89,11 @@ def upgrade() -> None:
     """)
 
     # Existing brokerage grants keep policy_required false and a NULL allowlist
-    # until the next resolve rewrites them, which is why the backfill above
-    # grants every group: this migration must not narrow access someone already
-    # has, and it must not leave a grant the CHECK would refuse. Bumping the
-    # version is what makes that next resolve happen, rather than the old grant
-    # persisting until something unrelated invalidates the workspace.
+    # until the next resolve rewrites them, so this migration leaves no grant
+    # the CHECK would refuse. Bumping the version is what makes that next
+    # resolve happen, rather than the old grant persisting until something
+    # unrelated invalidates the workspace -- and it is also what makes the
+    # backfill above bite, since a stored key nothing re-reads narrows nothing.
     op.execute("""
         UPDATE workspaces ws SET mcp_config_version = ws.mcp_config_version + 1
          WHERE ws.user_id IN (
