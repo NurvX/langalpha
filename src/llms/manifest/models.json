@@ -166,6 +166,38 @@
       "write": "parameters.output_config.effort"
     }
   },
+  "claude-fable-5-1": {
+    "prompt_guidance": "lean",
+    "model_id": "claude-fable-5-1",
+    "provider": "anthropic",
+    "visible": true,
+    "speed": 3,
+    "intelligence": 5,
+    "context": 1000000,
+    "input_modalities": [
+      "text",
+      "image",
+      "pdf"
+    ],
+    "parameters": {
+      "max_tokens": 128000,
+      "thinking": {
+        "type": "adaptive",
+        "display": "summarized"
+      }
+    },
+    "reasoning": {
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "default": "high",
+      "write": "parameters.output_config.effort"
+    }
+  },
   "claude-opus-5": {
     "prompt_guidance": "lean",
     "model_id": "claude-opus-5",
@@ -1271,6 +1303,38 @@
   "claude-fable-5-oauth": {
     "prompt_guidance": "lean",
     "model_id": "claude-fable-5",
+    "provider": "claude-oauth",
+    "visible": true,
+    "speed": 3,
+    "intelligence": 5,
+    "context": 1000000,
+    "input_modalities": [
+      "text",
+      "image",
+      "pdf"
+    ],
+    "parameters": {
+      "max_tokens": 128000,
+      "thinking": {
+        "type": "adaptive",
+        "display": "summarized"
+      }
+    },
+    "reasoning": {
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "default": "high",
+      "write": "parameters.output_config.effort"
+    }
+  },
+  "claude-fable-5-1-oauth": {
+    "prompt_guidance": "lean",
+    "model_id": "claude-fable-5-1",
     "provider": "claude-oauth",
     "visible": true,
     "speed": 3,
