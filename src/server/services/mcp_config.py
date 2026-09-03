@@ -37,6 +37,11 @@ from urllib.parse import urlsplit
 
 from ptc_agent.config.core import MCPServerConfig
 from src.server.database.mcp_oauth import ConnectionStatus
+from src.server.services.brokerage_capabilities import (
+    denied_tools,
+    group_keys_for,
+    vendor_for_url,
+)
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -127,6 +132,11 @@ class ResolvedServer:
     # display only. Rides here rather than MCPServerConfig — provenance must
     # never enter the config blob round-trip.
     plugin_name: str | None = None
+    # The tools this connection's consent permits, or None for a server we
+    # curate no capability groups for, which is every server that is not a
+    # shipped brokerage. Empty is a real answer and distinct from None: it
+    # means the user granted no group, so the server runs and offers nothing.
+    denied_tools: frozenset[str] | None = None
 
     @property
     def name(self) -> str:
@@ -177,6 +187,21 @@ class ResolvedMCP:
     @cached_property
     def shadowed_inherited_names(self) -> frozenset[str]:
         return self._names(Origin.USER, State.SHADOWED)
+
+    @cached_property
+    def denied_tools_by_name(self) -> dict[str, frozenset[str]]:
+        """Consent filters for the running set, keyed by server name.
+
+        Only servers that have one, so a caller reads "absent" as "no policy"
+        without having to know which vendors we curate. The value is what to
+        subtract, never what to keep: a tool no capability group names is not in
+        it, and stays visible.
+        """
+        return {
+            e.name: e.denied_tools
+            for e in self.entries
+            if e.state is State.ACTIVE and e.denied_tools is not None
+        }
 
 
 @dataclass(frozen=True)
@@ -521,6 +546,42 @@ async def resolve_mcp_config(
         if row.get("plugin_name")
     }
 
+    def _denied_tools(cfg: MCPServerConfig) -> frozenset[str] | None:
+        """What consent refuses for this server, or None if we curate no groups.
+
+        Keyed on the address, never on ``cfg.name``: the name is the user's to
+        choose and to edit, so a row called anything else at a broker's host
+        used to derive no policy at all, and one holding a broker's name while
+        pointed elsewhere derived a policy against the wrong vendor's tools.
+        The consented URL is what the token was issued for, and it is what the
+        relay dials, so it is the only identity worth deriving from. Without a
+        connection there is nothing consented to read, and the row's own URL is
+        all there is -- which is the conservative direction anyway, since it
+        denies that vendor's whole curation.
+
+        A brokerage whose connection carries no record of consent is read as
+        consent to nothing, so every curated tool is denied. That is the one
+        place this policy is still strict: an absent record is a bug, not a
+        vendor publishing something new, and the two must not be confused.
+
+        Loud only where it is actually a bug, which is why the warning asks
+        whether the vendor has groups rather than whether it has a policy. A
+        brokerage listed but not yet curated has no groups to consent to, so it
+        legitimately stores no record, and it denies nothing.
+        """
+        connection = connection_by_server.get(cfg.name)
+        if connection is None:
+            return denied_tools(vendor_for_url(cfg.url), ())
+        vendor = vendor_for_url(connection.get("server_url"))
+        capabilities = connection.get("granted_capabilities")
+        if capabilities is None and group_keys_for(vendor):
+            logger.warning(
+                "[MCP] user %s connection %r has no recorded capability "
+                "consent; refusing every curated tool until it is reconnected",
+                user_id, cfg.name,
+            )
+        return denied_tools(vendor, capabilities or ())
+
     def _user_entry(cfg: MCPServerConfig, state: State) -> ResolvedServer:
         return ResolvedServer(
             config=cfg,
@@ -528,6 +589,7 @@ async def resolve_mcp_config(
             state=state,
             oauth_status=oauth_status_by_name.get(cfg.name),
             plugin_name=plugin_name_by_server.get(cfg.name),
+            denied_tools=_denied_tools(cfg),
         )
 
     # Entry order IS the API's row order: the running set first (built-ins,

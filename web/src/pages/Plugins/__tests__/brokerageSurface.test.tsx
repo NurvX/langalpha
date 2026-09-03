@@ -24,18 +24,36 @@ const RH: Brokerage = {
   name: 'robinhood',
   label: 'Robinhood',
   url: 'https://agent.robinhood.com/mcp/trading',
+  site: 'robinhood.com',
   description: 'Balances, positions, and order placement.',
   native_callback_only: true,
   exclusive_connection: false,
+  // Shaped like the real curation in the two ways the surface reads: one broker
+  // can place orders and the other cannot, so the group that is off by default
+  // is present on exactly one of them.
+  capabilities: [
+    { key: 'market_data', tone: 'neutral' },
+    { key: 'account', tone: 'caution' },
+    { key: 'trading', tone: 'danger', rung: true },
+  ],
 };
+/** What Robinhood's connect grants unless the user says otherwise. */
+const RH_DEFAULT = ['market_data', 'account'];
 const IBKR: Brokerage = {
   name: 'ibkr',
   label: 'Interactive Brokers',
   url: 'https://api.ibkr.com/v1/api/mcp-public',
+  site: 'interactivebrokers.com',
   description: 'Portfolio, positions, and draft orders.',
   native_callback_only: false,
   exclusive_connection: true,
+  capabilities: [
+    { key: 'market_data', tone: 'neutral' },
+    { key: 'account', tone: 'caution' },
+    { key: 'staged_orders', tone: 'caution', rung: true },
+  ],
 };
+const IBKR_DEFAULT = ['market_data', 'account', 'staged_orders'];
 
 /** A brokerage's own catalog row. Named, always, since the tab joins on it. */
 function catalogRow(over: Partial<CatalogServer> & { name: string }): CatalogServer {
@@ -151,23 +169,21 @@ async function renderTab() {
   return renderWithProviders(<Brokerages />);
 }
 
-/** The strip under the list, when a connect has raised a question first. */
+/** The consent dialog, when a connect has raised its question first. */
 function connectConfirm(): HTMLElement | null {
-  const message = screen.queryByText(/replaces whichever one is connected now/i);
-  return message ? (message.closest('div') as HTMLElement) : null;
+  return screen.queryByRole('dialog');
 }
 
 /**
- * Click Connect, and answer the strip when the vendor's terms raise one.
+ * Click Connect and take the dialog's default answer.
  *
- * Most brokers go straight out to the consent screen. One asks first, and the
- * tests that are about what happens after the click should not have to care
- * which kind they were handed.
+ * Every brokerage raises one now, so the tests that are about what happens
+ * after the click go through here rather than each spelling the answer out.
  */
 function connectThrough(name: string) {
   fireEvent.click(screen.getByTestId(`brokerage-connect-${name}`));
-  const strip = connectConfirm();
-  if (strip) fireEvent.click(within(strip).getByRole('button', { name: 'Connect' }));
+  const dialog = connectConfirm();
+  if (dialog) fireEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
 }
 
 describe('the brokerages tab', () => {
@@ -218,6 +234,7 @@ describe('the brokerages tab', () => {
         vendorRefusesHostedCallback: false,
         expectedUrl: IBKR.url,
         stillWanted: expect.any(Function),
+        grantedCapabilities: IBKR_DEFAULT,
       });
     });
 
@@ -293,9 +310,81 @@ describe('the brokerages tab', () => {
           vendorRefusesHostedCallback: false,
           expectedUrl: IBKR.url,
           stillWanted: expect.any(Function),
+          grantedCapabilities: IBKR_DEFAULT,
         }),
       );
       expect(toggleBrokerage).not.toHaveBeenCalled();
+    });
+
+    // A token expiry is not a change of mind. `granted_capabilities` is
+    // withheld on a row that can no longer be served -- deliberately, so
+    // nothing badges a dead connection as able to place orders -- so seeding
+    // the dialog from it opened a repair with every declined group re-ticked.
+    it('reopens a repair on the groups the user last chose, not the defaults', async () => {
+      catalogServers = [
+        catalogRow({
+          name: 'ibkr',
+          url: IBKR.url,
+          oauth_status: 'needs_reauth',
+          granted_capabilities: null,
+          remembered_capabilities: ['market_data'],
+        }),
+      ];
+      await renderTab();
+      connectThrough('ibkr');
+
+      await waitFor(() =>
+        expect(startConnect).toHaveBeenCalledWith(
+          'ibkr',
+          '/plugins?tab=brokerages',
+          expect.objectContaining({ grantedCapabilities: ['market_data'] }),
+        ),
+      );
+    });
+
+    it('offers the defaults to a connection nobody has answered for yet', async () => {
+      catalogServers = [
+        catalogRow({
+          name: 'ibkr',
+          url: IBKR.url,
+          oauth_status: 'needs_reauth',
+          remembered_capabilities: null,
+        }),
+      ];
+      await renderTab();
+      connectThrough('ibkr');
+
+      await waitFor(() =>
+        expect(startConnect).toHaveBeenCalledWith(
+          'ibkr',
+          '/plugins?tab=brokerages',
+          expect.objectContaining({ grantedCapabilities: IBKR_DEFAULT }),
+        ),
+      );
+    });
+
+    // `[]` is an answer, and the one that costs the most to lose: the user
+    // declined every group. Read as "nothing stored" it becomes the defaults,
+    // which is the whole set.
+    it('reopens a repair on nothing when the user granted nothing', async () => {
+      catalogServers = [
+        catalogRow({
+          name: 'ibkr',
+          url: IBKR.url,
+          oauth_status: 'needs_reauth',
+          remembered_capabilities: [],
+        }),
+      ];
+      await renderTab();
+      connectThrough('ibkr');
+
+      await waitFor(() =>
+        expect(startConnect).toHaveBeenCalledWith(
+          'ibkr',
+          '/plugins?tab=brokerages',
+          expect.objectContaining({ grantedCapabilities: [] }),
+        ),
+      );
     });
 
     // Past the first write this is an ordinary catalog row, and the MCP tab can
@@ -478,7 +567,7 @@ describe('the brokerages tab', () => {
       });
     });
 
-    it('asks nothing of a vendor that has no such term', async () => {
+    it('raises the terms only of a vendor that has them', async () => {
       shell = {
         beginMcpOAuth: async () => ({
           redirectUri: 'http://127.0.0.1:8790/mcp/callback',
@@ -487,6 +576,17 @@ describe('the brokerages tab', () => {
       };
       await renderTab();
       fireEvent.click(screen.getByTestId('brokerage-connect-robinhood'));
+
+      // Still a question -- what the connection may do is asked of every
+      // brokerage -- but not this one, which is another vendor's term and would
+      // be a false claim about this account.
+      expect(connectConfirm()).not.toBeNull();
+      expect(
+        within(connectConfirm()!).queryByText(/replaces whichever one is connected now/i),
+      ).toBeNull();
+      fireEvent.click(
+        within(connectConfirm()!).getByRole('button', { name: 'Connect' }),
+      );
 
       // Asserted with its arguments, not merely that it ran:
       // `vendorRefusesHostedCallback` is what makes the backend mint this flow
@@ -497,9 +597,74 @@ describe('the brokerages tab', () => {
           vendorRefusesHostedCallback: true,
           expectedUrl: RH.url,
           stillWanted: expect.any(Function),
+          grantedCapabilities: RH_DEFAULT,
         }),
       );
       expect(connectConfirm()).toBeNull();
+    });
+
+    // The change the whole consent step exists for. A user who connects a
+    // broker for quotes used to hand the agent an ungated path to placing real
+    // orders, and the only way to see that had been to read the tool list.
+    it('leaves real orders out of what a connect grants by default', async () => {
+      shell = {
+        beginMcpOAuth: async () => ({
+          redirectUri: 'http://127.0.0.1:8790/mcp/callback',
+          flowId: 'flow-1',
+        }),
+      };
+      await renderTab();
+      connectThrough('robinhood');
+
+      await waitFor(() => expect(startConnect).toHaveBeenCalledTimes(1));
+      expect(startConnect.mock.calls[0][2]?.grantedCapabilities).not.toContain('trading');
+    });
+
+    it('grants them when the user turns them on', async () => {
+      shell = {
+        beginMcpOAuth: async () => ({
+          redirectUri: 'http://127.0.0.1:8790/mcp/callback',
+          flowId: 'flow-1',
+        }),
+      };
+      await renderTab();
+      fireEvent.click(screen.getByTestId('brokerage-connect-robinhood'));
+      fireEvent.click(
+        within(connectConfirm()!).getByRole('switch', {
+          name: 'Enable Live orders',
+        }),
+      );
+      fireEvent.click(
+        within(connectConfirm()!).getByRole('button', { name: 'Connect' }),
+      );
+
+      await waitFor(() => expect(startConnect).toHaveBeenCalledTimes(1));
+      expect(startConnect.mock.calls[0][2]?.grantedCapabilities).toContain('trading');
+    });
+
+    // Empty is an answer, and it is not the same as not asking: the backend
+    // reads a brokerage that named no group as one granted nothing, and a
+    // brokerage that named none because the field never arrived the same way.
+    // Sending the empty array is what keeps those from being different things
+    // on the wire.
+    it('sends an empty grant rather than none when everything is switched off', async () => {
+      shell = {
+        beginMcpOAuth: async () => ({
+          redirectUri: 'http://127.0.0.1:8790/mcp/callback',
+          flowId: 'flow-1',
+        }),
+      };
+      await renderTab();
+      fireEvent.click(screen.getByTestId('brokerage-connect-robinhood'));
+      for (const name of ['Disable Market data and research', 'Disable Account and positions']) {
+        fireEvent.click(within(connectConfirm()!).getByRole('switch', { name }));
+      }
+      fireEvent.click(
+        within(connectConfirm()!).getByRole('button', { name: 'Connect' }),
+      );
+
+      await waitFor(() => expect(startConnect).toHaveBeenCalledTimes(1));
+      expect(startConnect.mock.calls[0][2]?.grantedCapabilities).toEqual([]);
     });
 
     it('does not start a flow the browser provably cannot finish', async () => {
@@ -559,6 +724,52 @@ describe('the brokerages tab', () => {
 
       expect(screen.getByTestId('brokerage-connect-robinhood')).toBeEnabled();
       expect(screen.queryByText('Needs the desktop app')).toBeNull();
+    });
+  });
+
+  describe('a connection that was granted nothing', () => {
+    it('says so when the grant is an empty list', async () => {
+      catalogServers = [
+        catalogRow({
+          name: 'ibkr',
+          url: IBKR.url,
+          oauth_status: 'connected',
+          granted_capabilities: [],
+        }),
+      ];
+      await renderTab();
+
+      expect(
+        screen.getByText(/granted nothing/i),
+      ).toBeInTheDocument();
+    });
+
+    it('says so when it stored no grant at all', async () => {
+      // A brokerage connected before its tools were curated: the dialog had no
+      // groups to offer, so nothing was stored. The relay refuses every call on
+      // it exactly as it does for an empty list, and testing only for the empty
+      // list left the one connection that permits nothing the one that says so.
+      catalogServers = [
+        catalogRow({
+          name: 'ibkr',
+          url: IBKR.url,
+          oauth_status: 'connected',
+          granted_capabilities: null,
+        }),
+      ];
+      await renderTab();
+
+      expect(
+        screen.getByText(/granted nothing/i),
+      ).toBeInTheDocument();
+    });
+
+    it('stays quiet on a broker with no connection to read', async () => {
+      // Null before a connection is the offer, not a refusal.
+      catalogServers = [];
+      await renderTab();
+
+      expect(screen.queryByText(/granted nothing/i)).toBeNull();
     });
   });
 

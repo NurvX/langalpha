@@ -204,6 +204,17 @@ def _client_info(**overrides) -> OAuthClientInformationFull:
     return OAuthClientInformationFull.model_validate(data)
 
 
+def _registration_response(status_code: int, body: dict | None = None):
+    """Only what ``_register_client`` reads off a registration response.
+
+    It reads the body to decide whether the server is telling us the metadata
+    was the problem, which is the only refusal a smaller second request can
+    answer. ``aread`` both drains and returns, as httpx's does.
+    """
+    raw = json.dumps(body).encode() if body is not None else b""
+    return SimpleNamespace(status_code=status_code, aread=AsyncMock(return_value=raw))
+
+
 def _token_payload(**overrides) -> dict:
     payload = {
         "access_token": "access-fresh",
@@ -270,7 +281,7 @@ def phase1(monkeypatch) -> SimpleNamespace:
         return env.prm, env.as_metadata, ISSUER, env.www_scope
 
     async def _register_client(client, **kwargs):
-        return env.client_info
+        return connect._Registration(env.client_info)
 
     async def _get_catalog_server(user_id, name):
         return env.catalog_row
@@ -300,6 +311,14 @@ def phase2(monkeypatch) -> SimpleNamespace:
         bumps=[],
         discoveries=[],
         applies=[],
+        consented=[],
+        # The connection each write was handed, and how the block wrapping them
+        # ended -- together these are what "one transaction" means here.
+        write_conns=[],
+        transactions=[],
+        # The write that installs the consent on live grants, and what it does
+        # when the database will not take it.
+        consent_error=None,
         running_workspaces=["ws-warm-1"],
         status_code=200,
         payload=_token_payload(),
@@ -320,12 +339,36 @@ def phase2(monkeypatch) -> SimpleNamespace:
             raise env.raises
         return httpx2.Response(env.status_code, json=env.payload)
 
-    async def _upsert_connection(user_id, server_name, **kwargs):
+    class _Txn:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            env.transactions.append("rollback" if exc_type is not None else "commit")
+            return False
+
+    class _Conn:
+        def transaction(self):
+            return _Txn()
+
+    @asynccontextmanager
+    async def _get_db_connection(conn=None):
+        yield conn if conn is not None else _Conn()
+
+    async def _upsert_connection(user_id, server_name, *, conn=None, **kwargs):
         env.upserts.append({"user_id": user_id, "server_name": server_name, **kwargs})
+        env.write_conns.append(conn)
         return "connection-1"
 
     async def _bump(user_id):
         env.bumps.append(user_id)
+
+    async def _apply_consent(connection_id, *, conn=None):
+        env.consented.append(connection_id)
+        env.write_conns.append(conn)
+        if env.consent_error is not None:
+            raise env.consent_error
+        return 1
 
     async def _refresh_user_tool_schemas(user_id, server_name):
         env.discoveries.append((user_id, server_name))
@@ -343,7 +386,12 @@ def phase2(monkeypatch) -> SimpleNamespace:
     monkeypatch.setattr(tokens, "pinned_request", _pinned_request)
     monkeypatch.setattr(tokens, "oauth_http_client", _fake_http_client)
     monkeypatch.setattr(connect, "upsert_connection", _upsert_connection)
+    monkeypatch.setattr(connect, "get_db_connection", _get_db_connection)
     monkeypatch.setattr(connect, "bump_user_workspaces_mcp_version", _bump)
+    # Not optional. Left real, every phase-2 test below reached the live pool
+    # and raised -- which the callback used to swallow, so the whole file went
+    # on passing while never once exercising the write it was swallowing.
+    monkeypatch.setattr(connect, "apply_consent_to_active_grants", _apply_consent)
     monkeypatch.setattr(
         "src.server.services.mcp_oauth.discovery.refresh_user_tool_schemas",
         _refresh_user_tool_schemas,
@@ -516,13 +564,17 @@ class TestRegistrationReuse:
             as_metadata={"issuer": str(_as_metadata().issuer)},
         )
 
-    def _metadata_for(self, redirect: str) -> OAuthClientMetadata:
+    def _metadata_for(
+        self, redirect: str, scope: str | None = None
+    ) -> OAuthClientMetadata:
         return OAuthClientMetadata.model_validate(
             {
+                "client_name": "LangAlpha",
                 "redirect_uris": [redirect],
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],
                 "token_endpoint_auth_method": "none",
+                **({"scope": scope} if scope else {}),
             }
         )
 
@@ -535,7 +587,7 @@ class TestRegistrationReuse:
         send = AsyncMock(side_effect=AssertionError("re-registered"))
         monkeypatch.setattr(connect, "pinned_send", send)
 
-        result = await connect._register_client(
+        result, authorize_scope = await connect._register_client(
             object(),
             user_id=USER_ID,
             server_name=SERVER_NAME,
@@ -561,12 +613,14 @@ class TestRegistrationReuse:
         monkeypatch.setattr(
             connect, "create_client_registration_request", lambda *a: object()
         )
-        monkeypatch.setattr(connect, "pinned_send", AsyncMock(return_value=object()))
+        monkeypatch.setattr(
+            connect, "pinned_send", AsyncMock(return_value=_registration_response(201))
+        )
         monkeypatch.setattr(
             connect, "handle_registration_response", AsyncMock(return_value=fresh)
         )
 
-        result = await connect._register_client(
+        result, authorize_scope = await connect._register_client(
             object(),
             user_id=USER_ID,
             server_name=SERVER_NAME,
@@ -576,6 +630,349 @@ class TestRegistrationReuse:
         )
 
         assert result.client_id == "client-fresh"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "refusal",
+        [None, {"error": "invalid_client_metadata"}],
+        ids=["an opaque 400", "the code RFC 7591 names"],
+    )
+    async def test_refused_metadata_retries_with_the_interoperable_core(
+        self, monkeypatch, refusal
+    ):
+        """An AS that refuses our optional metadata must not cost us the connect.
+
+        Coinbase rejects `application_type` at either value and refuses every
+        write scope, answering with one opaque `invalid_client_metadata` for the
+        whole body. There is nothing to negotiate against, so the retry drops
+        everything optional at once rather than guessing a member.
+
+        Both refusals, because they reach the retry down different branches: the
+        named code is the one the RFC defines, and a bare 400 is the fallback
+        for a server that refuses our optional members without saying so.
+        """
+        monkeypatch.setattr(connect, "get_connection", AsyncMock(return_value=None))
+        sent: list[dict] = []
+
+        async def send(_client, request):
+            sent.append(json.loads(request.content.decode()))
+            if len(sent) == 1:
+                return _registration_response(400, refusal)
+            return _registration_response(201)
+
+        monkeypatch.setattr(connect, "pinned_send", send)
+        fresh = _client_info(client_id="client-fresh")
+        monkeypatch.setattr(
+            connect, "handle_registration_response", AsyncMock(return_value=fresh)
+        )
+
+        result, authorize_scope = await connect._register_client(
+            object(),
+            user_id=USER_ID,
+            server_name=SERVER_NAME,
+            as_metadata=_as_metadata(),
+            client_metadata=self._metadata_for(callback_uri(), scope="a:read a:write"),
+            auth_base_url=ISSUER,
+        )
+
+        assert result.client_id == "client-fresh"
+        assert len(sent) == 2, "asked twice, never a third time"
+        # The first ask carries what the SDK builds, including the two members
+        # a strict AS refuses.
+        assert sent[0]["application_type"] == "native"
+        assert sent[0]["scope"] == "a:read a:write"
+        # The retry carries neither, and still identifies the client and where
+        # it is to be sent back.
+        assert "application_type" not in sent[1]
+        assert "scope" not in sent[1]
+        assert sent[1]["client_name"] == sent[0]["client_name"]
+        assert sent[1]["redirect_uris"] == [callback_uri()]
+        assert sent[1]["grant_types"] == ["authorization_code", "refresh_token"]
+        assert sent[1]["response_types"] == ["code"]
+        assert sent[1]["token_endpoint_auth_method"] == "none"
+
+
+    @pytest.mark.asyncio
+    async def test_re_registers_when_the_stored_scope_is_too_narrow(
+        self, monkeypatch
+    ):
+        """A stored registration's scope wins over the one we just computed.
+
+        ``effective_scope`` is ``client_info.scope or scope``, so reusing a
+        registration made before we started asking for ``offline_access`` keeps
+        asking without it: the connect succeeds, the token has no refresh half,
+        and the connection dies at the first expiry with nothing saying why.
+        """
+        stored = _client_info(scope="notes.read")
+        monkeypatch.setattr(
+            connect, "get_connection", AsyncMock(return_value=self._existing(stored))
+        )
+        fresh = _client_info(client_id="client-fresh", scope="notes.read offline_access")
+        monkeypatch.setattr(
+            connect, "create_client_registration_request", lambda *a: object()
+        )
+        monkeypatch.setattr(
+            connect, "pinned_send", AsyncMock(return_value=_registration_response(201))
+        )
+        monkeypatch.setattr(
+            connect, "handle_registration_response", AsyncMock(return_value=fresh)
+        )
+
+        result, authorize_scope = await connect._register_client(
+            object(),
+            user_id=USER_ID,
+            server_name=SERVER_NAME,
+            as_metadata=_as_metadata(),
+            client_metadata=self._metadata_for(
+                callback_uri(), scope="notes.read offline_access"
+            ),
+            auth_base_url=ISSUER,
+        )
+
+        assert result.client_id == "client-fresh"
+
+    @pytest.mark.asyncio
+    async def test_reuses_a_registration_that_recorded_no_scope(self, monkeypatch):
+        """An empty stored scope overrides nothing, so it is fine to reuse.
+
+        Plenty of servers echo no ``scope`` back at all. Treating that as a
+        narrowing would re-register on every single connect.
+        """
+        stored = _client_info()
+        assert stored.scope is None
+        monkeypatch.setattr(
+            connect, "get_connection", AsyncMock(return_value=self._existing(stored))
+        )
+        send = AsyncMock(side_effect=AssertionError("re-registered"))
+        monkeypatch.setattr(connect, "pinned_send", send)
+
+        result, authorize_scope = await connect._register_client(
+            object(),
+            user_id=USER_ID,
+            server_name=SERVER_NAME,
+            as_metadata=_as_metadata(),
+            client_metadata=self._metadata_for(
+                callback_uri(), scope="notes.read offline_access"
+            ),
+            auth_base_url=ISSUER,
+        )
+
+        assert result.client_id == stored.client_id
+        send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "status,body",
+        [
+            (429, {"error": "too_many_requests"}),
+            (500, None),
+            (400, {"error": "invalid_client_id"}),
+        ],
+    )
+    async def test_a_refusal_that_is_not_about_our_metadata_is_not_retried(
+        self, monkeypatch, status, body
+    ):
+        """Retrying every non-2xx made two different failures worse.
+
+        A 429 was answered by immediately spending a second request against the
+        limit that produced it. A 5xx raised after the client was already
+        created registered a second one and orphaned the first. Neither is
+        fixed by sending less metadata, and the real status is what the caller
+        needs to see.
+        """
+        monkeypatch.setattr(connect, "get_connection", AsyncMock(return_value=None))
+        sent: list[dict] = []
+
+        async def send(_client, request):
+            sent.append(json.loads(request.content.decode()))
+            return _registration_response(status, body)
+
+        monkeypatch.setattr(connect, "pinned_send", send)
+        raised = AsyncMock(side_effect=RuntimeError(f"registration failed: {status}"))
+        monkeypatch.setattr(connect, "handle_registration_response", raised)
+
+        with pytest.raises(RuntimeError, match=str(status)):
+            await connect._register_client(
+                object(),
+                user_id=USER_ID,
+                server_name=SERVER_NAME,
+                as_metadata=_as_metadata(),
+                client_metadata=self._metadata_for(callback_uri()),
+                auth_base_url=ISSUER,
+            )
+
+        assert len(sent) == 1, "asked once, and reported what came back"
+
+
+    @pytest.mark.asyncio
+    async def test_a_reused_registration_authorizes_with_the_current_scope(
+        self, monkeypatch
+    ):
+        """The widening half of the scope bug the check above closes.
+
+        A registration that covers more than we now ask for is reusable -- and
+        ``effective_scope`` used to be ``client_info.scope or scope``, so
+        reusing it sent the whole stored scope and re-requested exactly the
+        permissions the current metadata had stopped asking for. Reuse the
+        registration, authorize with today's scope.
+
+        The narrowing rides beside the registration and never into it. The
+        registration is persisted, so writing today's subset over its scope
+        makes the next connect read the client as registered for less than it
+        is, and re-register the moment we ask for anything the original client
+        already covered.
+        """
+        stored = _client_info(scope="notes.read notes.write admin offline_access")
+        monkeypatch.setattr(
+            connect, "get_connection", AsyncMock(return_value=self._existing(stored))
+        )
+        send = AsyncMock(side_effect=AssertionError("re-registered"))
+        monkeypatch.setattr(connect, "pinned_send", send)
+
+        result, authorize_scope = await connect._register_client(
+            object(),
+            user_id=USER_ID,
+            server_name=SERVER_NAME,
+            as_metadata=_as_metadata(),
+            client_metadata=self._metadata_for(
+                callback_uri(), scope="notes.read offline_access"
+            ),
+            auth_base_url=ISSUER,
+        )
+
+        assert result.client_id == stored.client_id
+        send.assert_not_awaited()
+        assert authorize_scope == "notes.read offline_access"
+        assert "admin" not in (authorize_scope or "")
+        assert result.scope == "notes.read notes.write admin offline_access"
+
+    @pytest.mark.asyncio
+    async def test_a_narrowed_connect_does_not_cost_the_next_one_a_registration(
+        self, monkeypatch
+    ):
+        """The round trip, which is where the damage used to show up.
+
+        Phase 1 persists whatever this returns as ``client_info``, so the run
+        that asked for less is what the *following* run reads as the client's
+        registered scope. With the narrowing written into the registration, the
+        moment the metadata asked for ``admin`` again the coverage check failed
+        and DCR ran, orphaning a client at the provider that already covered
+        the request.
+        """
+        stored = _client_info(scope="notes.read notes.write admin offline_access")
+        monkeypatch.setattr(
+            connect, "get_connection", AsyncMock(return_value=self._existing(stored))
+        )
+        monkeypatch.setattr(
+            connect, "pinned_send", AsyncMock(side_effect=AssertionError("re-registered"))
+        )
+
+        narrowed, _ = await connect._register_client(
+            object(),
+            user_id=USER_ID,
+            server_name=SERVER_NAME,
+            as_metadata=_as_metadata(),
+            client_metadata=self._metadata_for(
+                callback_uri(), scope="notes.read offline_access"
+            ),
+            auth_base_url=ISSUER,
+        )
+
+        # Exactly what phase 1 stores, so the next connect reads what a real
+        # one would.
+        persisted = SimpleNamespace(
+            client_info=narrowed.model_dump(
+                mode="json", exclude_none=True, exclude={"client_secret"}
+            ),
+            client_secret="sec-1",
+            as_metadata={"issuer": str(_as_metadata().issuer)},
+        )
+        monkeypatch.setattr(
+            connect, "get_connection", AsyncMock(return_value=persisted)
+        )
+
+        again, authorize_scope = await connect._register_client(
+            object(),
+            user_id=USER_ID,
+            server_name=SERVER_NAME,
+            as_metadata=_as_metadata(),
+            client_metadata=self._metadata_for(
+                callback_uri(), scope="notes.read notes.write admin offline_access"
+            ),
+            auth_base_url=ISSUER,
+        )
+
+        assert again.client_id == stored.client_id
+        assert authorize_scope == "notes.read notes.write admin offline_access"
+
+    @pytest.mark.asyncio
+    async def test_a_stored_metadata_document_is_never_reused_as_a_registration(
+        self, monkeypatch
+    ):
+        """CIMD ids and DCR ids share one column; only one is a registration.
+
+        A server that advertised a client metadata document once and has since
+        stopped asks for DCR now. Its stored URL client_id passes the issuer,
+        redirect and scope checks trivially, so it was reused -- and the
+        authorize request then carried an identity the server no longer
+        accepts, with nothing registered to fall back to.
+        """
+        stored = _client_info(client_id="https://app.example.test/client.json")
+        monkeypatch.setattr(
+            connect, "get_connection", AsyncMock(return_value=self._existing(stored))
+        )
+        monkeypatch.setattr(
+            connect, "create_client_registration_request", lambda *a: object()
+        )
+        monkeypatch.setattr(
+            connect, "pinned_send", AsyncMock(return_value=_registration_response(201))
+        )
+        fresh = _client_info(client_id="client-fresh")
+        monkeypatch.setattr(
+            connect, "handle_registration_response", AsyncMock(return_value=fresh)
+        )
+
+        result, authorize_scope = await connect._register_client(
+            object(),
+            user_id=USER_ID,
+            server_name=SERVER_NAME,
+            as_metadata=_as_metadata(),
+            client_metadata=self._metadata_for(callback_uri()),
+            auth_base_url=ISSUER,
+        )
+
+        assert result.client_id == "client-fresh"
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_redirect_uri_is_not_retried(self, monkeypatch):
+        """The smaller body carries the same redirect_uris as the larger one.
+
+        So the retry asks the identical question, spends a second registration
+        attempt, and is told the same thing. The AS named what it rejected;
+        that is the answer worth surfacing.
+        """
+        monkeypatch.setattr(connect, "get_connection", AsyncMock(return_value=None))
+        sent: list[dict] = []
+
+        async def send(_client, request):
+            sent.append(json.loads(request.content.decode()))
+            return _registration_response(400, {"error": "invalid_redirect_uri"})
+
+        monkeypatch.setattr(connect, "pinned_send", send)
+        raised = AsyncMock(side_effect=RuntimeError("registration failed: 400"))
+        monkeypatch.setattr(connect, "handle_registration_response", raised)
+
+        with pytest.raises(RuntimeError, match="400"):
+            await connect._register_client(
+                object(),
+                user_id=USER_ID,
+                server_name=SERVER_NAME,
+                as_metadata=_as_metadata(),
+                client_metadata=self._metadata_for(callback_uri()),
+                auth_base_url=ISSUER,
+            )
+
+        assert len(sent) == 1
 
 
 class TestRoundTrip:
@@ -1074,8 +1471,8 @@ class TestExclusiveVendorScope:
         self._row(phase1, "ibkr", IBKR_URL)
         self._row(phase1, "my_ibkr", IBKR_ALT_URL)
 
-        first = await start_connect(USER_ID, "ibkr")
-        await start_connect(USER_ID, "my_ibkr")
+        first = await start_connect(USER_ID, "ibkr", granted_capabilities=["market_data"])
+        await start_connect(USER_ID, "my_ibkr", granted_capabilities=["market_data"])
 
         assert f"{STATE_PREFIX}{first.state}" not in redis.store
         assert f"{INFLIGHT_PREFIX}{USER_ID}:vendor:ibkr" in redis.store
@@ -1119,7 +1516,7 @@ class TestExclusiveVendorScope:
             SERVER_NAME: SimpleNamespace(status=ConnectionStatus.CONNECTED),
         }
 
-        started = await start_connect(USER_ID, "ibkr")
+        started = await start_connect(USER_ID, "ibkr", granted_capabilities=["market_data"])
 
         assert await _callback(started, code="code-1") == self.CONNECTED
         # Its own row is not a sibling, and a server somewhere else is not this
@@ -1145,7 +1542,7 @@ class TestExclusiveVendorScope:
             "my_ibkr": SimpleNamespace(status=ConnectionStatus.REVOKED)
         }
 
-        started = await start_connect(USER_ID, "ibkr")
+        started = await start_connect(USER_ID, "ibkr", granted_capabilities=["market_data"])
 
         assert await _callback(started, code="code-1") == self.CONNECTED
         assert siblings.disconnected == []
@@ -1169,7 +1566,7 @@ class TestExclusiveVendorScope:
 
         monkeypatch.setattr(connect, "list_catalog_servers", _boom)
 
-        started = await start_connect(USER_ID, "ibkr")
+        started = await start_connect(USER_ID, "ibkr", granted_capabilities=["market_data"])
 
         assert await _callback(started, code="code-1") == self.CONNECTED
         assert len(phase2.upserts) == 1
@@ -1795,7 +2192,7 @@ class TestLoopbackRedirectOverride:
 
         async def _register(client, **kwargs):
             seen["metadata"] = kwargs["client_metadata"]
-            return phase1.client_info
+            return connect._Registration(phase1.client_info)
 
         monkeypatch.setattr(connect, "_register_client", _register)
         loopback = "http://127.0.0.1:8789/mcp/callback"
@@ -2076,3 +2473,173 @@ class TestIssuerReconciliation:
         )
 
         assert (identifier, resolved) == (self.ADVERTISED, None)
+
+
+# ---------------------------------------------------------------------------
+# Consent — settled before the network, and installed on the live grants
+# ---------------------------------------------------------------------------
+
+
+class TestConsentIsSettledFirst:
+    """A brokerage connect that has no selection to record is refused, and it
+    is refused before anything is created at the vendor."""
+
+    @staticmethod
+    def _brokerage(phase1, monkeypatch) -> list[str]:
+        phase1.catalog_row = {"name": "ibkr", "url": IBKR_URL, "transport": "http"}
+        touched: list[str] = []
+
+        async def _discover(client, server_url):
+            touched.append("discover")
+            return None, phase1.as_metadata, ISSUER, None
+
+        async def _register_client(client, **kwargs):
+            touched.append("register")
+            return connect._Registration(phase1.client_info)
+
+        monkeypatch.setattr(connect, "_discover", _discover)
+        monkeypatch.setattr(connect, "_register_client", _register_client)
+        return touched
+
+    @pytest.mark.asyncio
+    async def test_a_missing_selection_costs_the_vendor_no_registration(
+        self, redis, phase1, monkeypatch
+    ):
+        """The refusal used to come after DCR had already created a client.
+
+        Nothing persists that client -- the state record is what would have
+        carried it, and this raises before there is one -- so every retry by an
+        older page or a script posting straight at the endpoint left another
+        orphan registration behind at the vendor.
+        """
+        touched = self._brokerage(phase1, monkeypatch)
+
+        with pytest.raises(McpOAuthError, match="capability selection"):
+            await start_connect(USER_ID, "ibkr")
+
+        assert touched == []
+        assert not redis.store
+
+    @pytest.mark.asyncio
+    async def test_a_selection_still_reaches_the_vendor(
+        self, redis, phase1, monkeypatch
+    ):
+        """The control: moving the check earlier must not gate the happy path."""
+        touched = self._brokerage(phase1, monkeypatch)
+
+        await start_connect(USER_ID, "ibkr", granted_capabilities=["market_data"])
+
+        assert touched == ["discover", "register"]
+        assert redis.only_record()["granted_capabilities"] == ["market_data"]
+
+
+class TestOlderShapedStateAtABrokerage:
+    """A state record parked before the consent field existed cannot settle.
+
+    ``None`` there is not a selection, it is a flow that never asked, and the
+    resolver reads it as granting none of the vendor's curated groups. So the
+    connect that finished would be a broker the agent can see and cannot use.
+    """
+
+    @staticmethod
+    def _relegacy(redis, started) -> None:
+        """Re-park the record in the shape a build without the field wrote."""
+        record = redis.only_record()
+        record.pop("granted_capabilities", None)
+        redis.store.clear()
+        redis.park(started.state, record)
+
+    @pytest.mark.asyncio
+    async def test_it_is_refused_before_the_code_is_spent(
+        self, redis, phase1, phase2, monkeypatch
+    ):
+        phase1.catalog_row = {"name": "ibkr", "url": IBKR_URL, "transport": "http"}
+
+        async def _discover(client, server_url):
+            return None, phase1.as_metadata, ISSUER, None
+
+        monkeypatch.setattr(connect, "_discover", _discover)
+        started = await start_connect(
+            USER_ID, "ibkr", granted_capabilities=["market_data"]
+        )
+        self._relegacy(redis, started)
+
+        redirect = await _callback(started, code="auth-code-1")
+
+        assert redirect == f"{DEFAULT_RETURN_TO}?mcp_error=invalid_state&server=ibkr"
+        # The authorization code is still good, so the retry the user is sent
+        # back to gets a clean phase 1 rather than a burnt grant.
+        assert phase2.requests == []
+        assert phase2.upserts == []
+        assert redis.states() == {}
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_server_is_left_alone(self, redis, phase1, phase2):
+        """The control. Every non-brokerage record carries ``None`` here by
+        design, and always will -- nothing curates their tools, so there is no
+        question the flow could have asked."""
+        started = await start_connect(USER_ID, SERVER_NAME)
+        self._relegacy(redis, started)
+
+        redirect = await _callback(started, code="auth-code-1")
+
+        assert redirect == f"{DEFAULT_RETURN_TO}?mcp_connected={SERVER_NAME_Q}"
+        assert phase2.upserts[0]["granted_capabilities"] is None
+
+
+class TestConsentReachesTheLiveGrants:
+    """The relay authorizes off the grant, not the connection.
+
+    So a reconnect that narrows consent has to rewrite the grants there and
+    then, and the two writes are one decision: a connection row recording a
+    narrowing that no grant enforces is the worst of the three outcomes, and
+    it is the one nothing later repairs -- the version bump has not run either,
+    so a warm session short-circuits on a matching version and never
+    re-resolves.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_grants_are_narrowed_before_sessions_are_told_to_re_resolve(
+        self, redis, phase1, phase2
+    ):
+        started = await start_connect(USER_ID, SERVER_NAME)
+
+        await _callback(started, code="auth-code-1")
+
+        assert phase2.consented == ["connection-1"]
+        assert phase2.transactions == ["commit"]
+        assert phase2.bumps == [USER_ID]
+
+    @pytest.mark.asyncio
+    async def test_both_writes_ride_the_same_connection(
+        self, redis, phase1, phase2
+    ):
+        """Atomicity is the point, so assert the mechanism and not just that
+        both calls happened: two handles would be two transactions."""
+        started = await start_connect(USER_ID, SERVER_NAME)
+
+        await _callback(started, code="auth-code-1")
+
+        handles = phase2.write_conns
+        assert len(handles) == 2
+        assert handles[0] is not None
+        assert handles[0] is handles[1]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_narrowing_takes_the_connection_row_with_it(
+        self, redis, phase1, phase2
+    ):
+        """Fail closed, and fail whole. The alternative the old code took was
+        to keep the connection and revoke the grants, which reports a connect
+        that half happened; unwinding both leaves the user on the previous,
+        already-consented connection, which is a state they have seen."""
+        phase2.consent_error = RuntimeError("connection pool exhausted")
+        started = await start_connect(USER_ID, SERVER_NAME)
+
+        redirect = await _callback(started, code="auth-code-1")
+
+        assert phase2.transactions == ["rollback"]
+        assert redirect == (
+            f"{DEFAULT_RETURN_TO}?mcp_error=internal&server={SERVER_NAME_Q}"
+        )
+        assert phase2.bumps == []

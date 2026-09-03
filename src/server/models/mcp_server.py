@@ -603,6 +603,20 @@ class CatalogServer(BaseModel):
     transport: str
     enabled: bool = False
     oauth_status: Optional[ConnectionStatus] = None
+    # The capability groups this connection was actually granted, in the order
+    # they were stored. None means no connection, or one for a server we curate
+    # no groups for -- distinct from ``[]``, which is a brokerage the user
+    # granted nothing. The consent is enforced per call at the relay, so a
+    # surface that cannot read it back can only guess what a connection does.
+    granted_capabilities: Optional[list[str]] = None
+    # The same keys, but answering "what did the user last choose" rather than
+    # "what is in force". They part company the moment a connection stops being
+    # servable: the grant is gone, so the badges must not draw one, while the
+    # choice behind it is still the user's and is what a reconnect has to open
+    # on. Seeding a repair from product defaults instead re-proposed every group
+    # the user had declined, on a flow they entered to fix an expiry rather than
+    # to change their mind.
+    remembered_capabilities: Optional[list[str]] = None
     # Host-side discovered tool count for the server's CURRENT config (OAuth
     # servers only today — that's the only user-level discovery path). None =
     # no current snapshot; the UI omits the count rather than showing 0.
@@ -696,6 +710,21 @@ class BuiltinServerList(BaseModel):
     servers: list[BuiltinServer]
 
 
+class CapabilityGroupOption(BaseModel):
+    """One consent toggle offered when connecting a brokerage.
+
+    ``key`` is the fact and also the translation key; ``tone`` is how loudly to
+    draw the row. No label or description, for the reason the flags above carry
+    no prose: the words are the client's.
+    """
+
+    key: str
+    tone: str
+    # One of the steps between reading and placing an order, which is the thing
+    # a row is asked first. False for the reading groups.
+    rung: bool = False
+
+
 class BrokerageOption(BaseModel):
     """One shipped brokerage connector, as offered on the Plugins page.
 
@@ -708,9 +737,16 @@ class BrokerageOption(BaseModel):
     name: str
     label: str
     url: str
+    # The broker's own website, not the endpoint's host. The detail view links
+    # it, which is the one thing a user reliably wants that we cannot answer:
+    # where their actual account lives.
+    site: str = ""
     description: str = ""
     native_callback_only: bool = False
     exclusive_connection: bool = False
+    # List order is display order. Empty would mean a brokerage we curate no
+    # groups for, which the client reads as "nothing to choose".
+    capabilities: list[CapabilityGroupOption] = []
 
 
 class BrokerageList(BaseModel):
@@ -727,8 +763,22 @@ def brokerage_to_response(brokerage: Brokerage) -> BrokerageOption:
     one the API should carry. Extra keys are ignored on the way through, so
     adding one to :class:`Brokerage` keeps it off the wire until it is named
     above — and nobody has to maintain a copy to keep that true.
+
+    The exception is ``capabilities``, which is derived rather than stored: the
+    curation map is the source for which groups a vendor has, and copying them
+    onto the registry entry would be a second place for that to be wrong.
     """
-    return BrokerageOption.model_validate(asdict(brokerage))
+    from src.server.services.brokerage_capabilities import groups_for
+
+    return BrokerageOption.model_validate(
+        asdict(brokerage)
+        | {
+            "capabilities": [
+                {"key": g.key, "tone": g.tone, "rung": g.rung}
+                for g in groups_for(brokerage.name)
+            ]
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -749,6 +799,8 @@ def catalog_row_to_response(
     row: dict[str, Any],
     *,
     oauth_status: ConnectionStatus | None = None,
+    granted_capabilities: list[str] | None = None,
+    remembered_capabilities: list[str] | None = None,
     tool_count: int | None = None,
     icon_url: str | None = None,
 ) -> CatalogServer:
@@ -763,6 +815,8 @@ def catalog_row_to_response(
         transport=row["transport"],
         enabled=bool(row.get("enabled", False)),
         oauth_status=oauth_status,
+        granted_capabilities=granted_capabilities,
+        remembered_capabilities=remembered_capabilities,
         tool_count=tool_count,
         icon_url=icon_url,
         command=row.get("command"),

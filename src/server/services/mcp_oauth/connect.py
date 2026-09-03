@@ -12,11 +12,13 @@ is an allowlisted relative path.
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from typing import Any, NamedTuple
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx2
 from pydantic import BaseModel, ValidationError
@@ -25,6 +27,7 @@ from mcp.client.auth import OAuthFlowError, PKCEParameters
 from mcp.client.auth.utils import (
     build_oauth_authorization_server_metadata_discovery_urls,
     build_protected_resource_metadata_discovery_urls,
+    create_client_info_from_metadata_url,
     create_client_registration_request,
     extract_resource_metadata_from_www_auth,
     extract_scope_from_www_auth,
@@ -32,6 +35,8 @@ from mcp.client.auth.utils import (
     handle_auth_metadata_response,
     handle_protected_resource_response,
     handle_registration_response,
+    is_valid_client_metadata_url,
+    should_use_client_metadata_url,
     validate_authorization_response_iss,
     validate_metadata_issuer,
 )
@@ -42,13 +47,17 @@ from mcp.shared.auth import (
     ProtectedResourceMetadata,
 )
 
+from src.config.env import MCP_CLIENT_METADATA_URL
+from src.server.database.egress_grants import apply_consent_to_active_grants
 from src.server.database.mcp_oauth import Secrets, get_connection, upsert_connection
 from src.server.database.mcp_servers import (
     bump_user_workspaces_mcp_version,
     get_catalog_server,
     list_catalog_servers,
 )
+from src.server.database.pool import get_db_connection
 from src.server.database.workspace import get_running_workspace_ids_for_user
+from src.server.services.brokerage_capabilities import group_keys_for, vendor_for_url
 from src.server.services.brokerages import Brokerage, brokerage_for_url
 from src.server.services.mcp_config import same_consented_url
 from src.server.services.mcp_oauth.http import (
@@ -173,6 +182,12 @@ class ConnectState(BaseModel):
     # a victim's browser has no matching cookie and is refused. Defaulted so an
     # older-shaped record still validates (its callback simply skips the check).
     browser_nonce: str = ""
+    # Capability groups consented to in phase 1, for a vendor that has them.
+    # Carried across the browser round trip rather than re-read at the callback,
+    # so the grant that gets written is the one the user actually agreed to and
+    # not whatever a concurrent edit left on the row meanwhile. Defaulted so an
+    # older-shaped record still validates.
+    granted_capabilities: list[str] | None = None
 
 
 def _cache_client():
@@ -337,6 +352,94 @@ async def _discover(client, server_url: str) -> tuple[
     return prm, as_metadata, auth_server_url, www_scope
 
 
+def _client_metadata_url() -> str | None:
+    """This deployment's CIMD URL, or None when it is unset or unusable.
+
+    An unusable value warns rather than raises: a typo here should cost the
+    servers that would have read the document, not the ones that register
+    dynamically and never look at it.
+    """
+    url = MCP_CLIENT_METADATA_URL.strip()
+    if not url:
+        return None
+    if not is_valid_client_metadata_url(url):
+        logger.warning(
+            "[mcp_oauth] ignoring MCP_CLIENT_METADATA_URL: a client metadata "
+            "document must be HTTPS on a non-root path"
+        )
+        return None
+    return url
+
+
+def _minimal_registration_request(
+    as_metadata: OAuthMetadata,
+    client_metadata: OAuthClientMetadata,
+    auth_base_url: str,
+) -> httpx2.Request:
+    """The same registration, cut back to the members RFC 7591 defines.
+
+    An AS is entitled to reject metadata it does not support, and it answers
+    with one opaque ``invalid_client_metadata`` for the whole body rather than
+    naming the member it disliked. There is nothing to negotiate against, so the
+    only sound recovery is to stop sending everything optional at once.
+
+    Two members are the likeliest offenders.
+
+    ``application_type`` ships on every registration whether or not we want it.
+    It is SEP-837, typed as a plain ``Literal`` with a ``"native"`` default
+    rather than an optional, so ``exclude_none`` never drops it and there is no
+    value meaning "unset" — an AS that does not know the member cannot be told
+    to ignore it.
+
+    ``scope`` is read by RFC 7591 as the set the client asks to be *allowed*,
+    which is not the question the resource server's ``WWW-Authenticate``
+    answers, and the MCP scope ladder feeds the second into the first. Dropping
+    it widens nothing: the authorize request still carries the scope, so what
+    the user is shown and approves still bounds the token.
+
+    No shipped brokerage needs this path today. It is interop hardening against
+    a refusal that cannot be diagnosed from the wire, not a fix for a known
+    server.
+    """
+    body: dict[str, Any] = {
+        "redirect_uris": [str(u) for u in (client_metadata.redirect_uris or [])],
+        "grant_types": list(client_metadata.grant_types),
+        "response_types": list(client_metadata.response_types),
+    }
+    # Kept because it is what the consent screen names as the thing being
+    # granted access; a registration without it asks the user to trust a blank.
+    if client_metadata.client_name:
+        body["client_name"] = client_metadata.client_name
+    if client_metadata.token_endpoint_auth_method:
+        body["token_endpoint_auth_method"] = client_metadata.token_endpoint_auth_method
+    url = (
+        str(as_metadata.registration_endpoint)
+        if as_metadata.registration_endpoint
+        else urljoin(auth_base_url, "/register")
+    )
+    return httpx2.Request(
+        "POST", url, json=body, headers={"Content-Type": "application/json"}
+    )
+
+
+class _Registration(NamedTuple):
+    """A client identity, plus the scope to authorize with if it is not its own.
+
+    Two values because they answer different questions and only one is stored.
+    ``info`` is the registration and is persisted as ``client_info``, so its
+    ``scope`` has to keep saying what the client is registered for -- that is
+    what the next connect's coverage check reads. ``authorize_scope`` is what
+    this authorize request should ask for, which on a reused registration is
+    narrower. Folding them into one field wrote the narrowed value back over
+    the registration's, and a later widening then failed a coverage check the
+    original client would have passed, costing a redundant registration at the
+    provider.
+    """
+
+    info: OAuthClientInformationFull
+    authorize_scope: str | None = None
+
+
 async def _register_client(
     client,
     *,
@@ -345,31 +448,82 @@ async def _register_client(
     as_metadata: OAuthMetadata,
     client_metadata: OAuthClientMetadata,
     auth_base_url: str,
-) -> OAuthClientInformationFull:
-    """Reuse the stored DCR registration when it still fits; else register.
+) -> _Registration:
+    """Identify this client to the AS: by hosted document where it takes one, else DCR.
 
-    "Fits" = same issuer AND the registration covers the redirect_uris we are
-    about to send. The second half matters after a SERVER_BASE_URL change:
-    the stored registration then carries the old callback URL, and reusing it
-    has the AS reject every authorize request with no path back in-product.
+    CIMD comes first and consults nothing stored. A URL-based client_id is one
+    value for every user and every authorization server, so there is no
+    registration to reuse, and a client_id left over from DCR against a server
+    that has since advertised CIMD is precisely what must not be reused.
+
+    The DCR path reuses a stored registration when it still fits: same issuer,
+    and it already covers the redirect_uris we are about to send. That second
+    half matters after a SERVER_BASE_URL change, where the stored registration
+    carries the old callback and the AS rejects every authorize request with no
+    path back in-product.
     """
+    metadata_url = _client_metadata_url()
+    if should_use_client_metadata_url(as_metadata, metadata_url):
+        logger.info(
+            "[mcp_oauth] %s reads a client metadata document; skipping DCR",
+            server_name,
+        )
+        return _Registration(
+            create_client_info_from_metadata_url(
+                metadata_url,  # type: ignore[arg-type]
+                redirect_uris=client_metadata.redirect_uris,
+            )
+        )
     existing = await get_connection(user_id, server_name, secrets=Secrets.FULL)
     if existing and existing.client_info:
         try:
             stored = OAuthClientInformationFull.model_validate(existing.client_info)
-            if stored.client_id and existing.as_metadata.get("issuer") == str(
+            if _is_metadata_document_id(stored.client_id):
+                logger.info(
+                    "[mcp_oauth] re-registering %s: the stored client id is a "
+                    "metadata document and this server is asking for DCR",
+                    server_name,
+                )
+            elif stored.client_id and existing.as_metadata.get("issuer") == str(
                 as_metadata.issuer
             ):
                 wanted = {str(u) for u in (client_metadata.redirect_uris or [])}
                 registered = {str(u) for u in (stored.redirect_uris or [])}
-                if wanted <= registered:
+                # A stored registration's scope overrides the one we just
+                # computed (see ``effective_scope`` below), so reusing one that
+                # predates a scope change silently undoes it. That is how a
+                # connection kept being issued tokens without
+                # ``offline_access`` after we started asking for it, and died
+                # at the first expiry with nothing in the logs to say why. An
+                # empty stored scope overrides nothing and is fine to reuse.
+                wanted_scope = set((client_metadata.scope or "").split())
+                stored_scope = set((stored.scope or "").split())
+                covers_scope = not stored_scope or wanted_scope <= stored_scope
+                if wanted <= registered and covers_scope:
                     # client_secret is stored encrypted, outside the JSONB blob.
                     stored.client_secret = existing.client_secret
-                    return stored
+                    # Authorize with the scope computed just now, not the one
+                    # the registration was made with. ``effective_scope`` below
+                    # prefers the stored value, so reusing a registration made
+                    # back when we asked for more restored precisely the
+                    # permissions the current metadata stopped asking for --
+                    # the widening half of the same bug the scope check above
+                    # closes in the narrowing direction. Asking for a subset of
+                    # what is registered is always allowed. A computed scope
+                    # that is empty has nothing to narrow to, and keeps the
+                    # stored value as its only signal.
+                    #
+                    # Carried beside the registration rather than written into
+                    # it, because ``stored`` is what gets persisted: overwriting
+                    # its scope makes the next connect believe the client is
+                    # registered for the narrower set and re-register the moment
+                    # we ask for anything the original already covered.
+                    return _Registration(stored, client_metadata.scope or None)
                 logger.info(
                     "[mcp_oauth] re-registering %s: stored registration lacks "
-                    "the current redirect_uri",
+                    "the current %s",
                     server_name,
+                    "redirect_uri" if not wanted <= registered else "scope",
                 )
         except Exception:
             logger.info(
@@ -378,14 +532,83 @@ async def _register_client(
             )
     if as_metadata.registration_endpoint is None:
         raise McpOAuthError(
-            "The authorization server does not support Dynamic Client "
-            "Registration; pre-registered clients are not supported yet."
+            "This authorization server does not support Dynamic Client "
+            "Registration. If it advertises a client metadata document, set "
+            "MCP_CLIENT_METADATA_URL to one this deployment serves."
         )
     request = create_client_registration_request(
         as_metadata, client_metadata, auth_base_url
     )
     response = await pinned_send(client, request)
-    return await handle_registration_response(response)
+    if response.status_code not in (200, 201) and await _rejected_our_metadata(response):
+        logger.info(
+            "[mcp_oauth] %s refused the full registration metadata (%s); "
+            "retrying with the interoperable core",
+            server_name,
+            response.status_code,
+        )
+        request = _minimal_registration_request(
+            as_metadata, client_metadata, auth_base_url
+        )
+        response = await pinned_send(client, request)
+    return _Registration(await handle_registration_response(response))
+
+
+def _is_metadata_document_id(client_id: str | None) -> bool:
+    """Whether a stored client id came from CIMD rather than from registration.
+
+    A CIMD client id is the metadata document's own URL; a DCR one is opaque
+    and issued by the AS. Both land in the same column, so a server that
+    advertised CIMD once and has since stopped would otherwise have that URL
+    replayed as though it were a registration: a document satisfies the issuer,
+    redirect and scope checks trivially, no registration ever happens, and the
+    authorize request carries an identity the server no longer accepts.
+
+    Read from the shape rather than compared against the configured metadata
+    URL, because the document this deployment serves can move while an id
+    minted from the old one is still sitting in the row.
+
+    The shape is a heuristic, and it errs toward re-registering: an AS that
+    issues a URL as its opaque DCR client_id gets a fresh registration on every
+    reconnect rather than a reused one. Recording which mechanism produced the
+    id is the fix that needs no guess, and it needs a column to keep it in.
+    """
+    return bool(client_id) and client_id.lower().startswith(("http://", "https://"))
+
+
+async def _rejected_our_metadata(response) -> bool:
+    """Whether a failed registration is worth retrying with less metadata.
+
+    Only when the server said the metadata was the problem. Retrying on any
+    non-2xx meant a 429 was answered by immediately spending a second request
+    against the limit that produced it, and a 5xx that had already created the
+    client created a second one and orphaned the first. Neither is fixed by
+    sending different metadata, and both are reported honestly by letting the
+    response fall through to ``handle_registration_response``, which raises
+    carrying the real status.
+
+    A 400 with no parseable error still retries: RFC 7591 names the codes
+    below, but a server that refuses our optional members with an empty 400 is
+    exactly the case this fallback exists for. The body is drained either way,
+    since the response is discarded on the retry path.
+
+    ``invalid_redirect_uri`` is not one of them. The minimal body carries the
+    same ``redirect_uris`` as the full one, so retrying asks the identical
+    question and spends a second registration attempt to be told the same
+    thing. The AS's own error, which names what it rejected, is the more useful
+    answer to surface.
+    """
+    body = await response.aread()
+    if response.status_code not in (400, 422):
+        return False
+    try:
+        parsed = json.loads(body or b"")
+    except ValueError:
+        parsed = None
+    error = parsed.get("error") if isinstance(parsed, dict) else None
+    if error is None:
+        return response.status_code == 400
+    return error == "invalid_client_metadata"
 
 
 def _inflight_scope(server_name: str, server_url: str | None) -> str:
@@ -516,6 +739,46 @@ async def _drop_what_the_vendor_displaced(
         )
 
 
+def _consented_capabilities(
+    server_url: str | None, requested: Sequence[str] | None
+) -> list[str] | None:
+    """The subset of a vendor's real capability groups the caller asked for.
+
+    Keyed on the address, not the row's name, and the two disagree exactly where
+    it matters: a row the user named themselves at a broker's host was offered
+    that broker's consent dialog and then stored nothing, so its grant carried
+    no policy at all. Whatever the relay will dial is what the question was
+    about.
+
+    Intersected rather than trusted: these keys arrive from a browser, and one
+    we do not curate would be stored as consent to something with no meaning.
+    Order is the display order, so the stored record reads the way the dialog
+    that produced it did.
+
+    None only for a server that has no groups, which is every server that is
+    not a shipped brokerage. A brokerage always gets a list, empty included:
+    asking for nothing is a decision, and it must not be recorded as the
+    absence of one.
+
+    A caller that names no selection at all is refused rather than read as
+    either extreme. It is not the user declining everything -- nobody was asked
+    -- and it cannot be read as granting everything. An older page or a script
+    posting straight to this endpoint lands here, and a connector that says why
+    it stopped beats one that silently connects to a broker that then does
+    nothing.
+    """
+    available = group_keys_for(vendor_for_url(server_url))
+    if not available:
+        return None
+    if requested is None:
+        raise McpOAuthError(
+            "this brokerage needs a capability selection before it can be "
+            "connected; reload the page (or update the app) and try again"
+        )
+    wanted = set(requested)
+    return [key for key in available if key in wanted]
+
+
 async def start_connect(
     user_id: str,
     server_name: str,
@@ -524,6 +787,7 @@ async def start_connect(
     web_origin: str | None = None,
     loopback_redirect: str | None = None,
     expected_url: str | None = None,
+    granted_capabilities: Sequence[str] | None = None,
 ) -> StartedConnect:
     """Phase 1: discovery + DCR + state/PKCE persist.
 
@@ -547,6 +811,15 @@ async def start_connect(
             "This server's address changed since the page was loaded"
         )
 
+    # Before the first packet leaves, not at the end beside the record it
+    # feeds. This raises for a caller that named no selection, and raising it
+    # after ``_register_client`` meant an older page or a script posting
+    # straight here had already created a DCR client at the vendor -- one
+    # nothing then persisted, since the state record is what carries it, and
+    # one more per retry. Nothing below depends on the answer, so there is no
+    # reason for it to wait.
+    consented = _consented_capabilities(server_url, granted_capabilities)
+
     # One value, used for the authorize URL, the registration metadata and the
     # state record alike — an AS is entitled to compare all three, and the token
     # exchange in phase 2 reads it back from that record.
@@ -556,11 +829,16 @@ async def start_connect(
             client, server_url
         )
 
-        scope = get_client_metadata_scopes(www_scope, prm, as_metadata)
+        # Passing the grant types is what makes the SDK append ``offline_access``
+        # (SEP-2207). Without it, an AS that gates refresh tokens on that scope
+        # issues an access token that cannot be renewed, and the connection dies
+        # at the first expiry with no way back except a fresh authorize.
+        grant_types = ["authorization_code", "refresh_token"]
+        scope = get_client_metadata_scopes(www_scope, prm, as_metadata, grant_types)
         client_metadata = OAuthClientMetadata(
             client_name=CLIENT_NAME,
             redirect_uris=[redirect_uri],  # type: ignore[list-item]
-            grant_types=["authorization_code", "refresh_token"],
+            grant_types=grant_types,
             response_types=["code"],
             token_endpoint_auth_method="none",
             scope=scope,
@@ -572,7 +850,7 @@ async def start_connect(
             as_metadata=as_metadata,
             auth_server_url=auth_server_url,
         )
-        client_info = await _register_client(
+        client_info, authorize_scope = await _register_client(
             client,
             user_id=user_id,
             server_name=server_name,
@@ -618,7 +896,7 @@ async def start_connect(
     )
     if include_resource:
         params["resource"] = context.get_resource_url()
-    effective_scope = client_info.scope or scope
+    effective_scope = authorize_scope or client_info.scope or scope
     if effective_scope:
         params["scope"] = effective_scope
         # Refresh tokens hinge on offline_access for many providers; ask for
@@ -651,6 +929,7 @@ async def start_connect(
         web_origin=sanitize_web_origin(web_origin),
         browser_nonce=browser_nonce,
         client_secret=client_info.client_secret or "",
+        granted_capabilities=consented,
     )
     redis = _cache_client()
     stored = await redis.set(
@@ -805,6 +1084,19 @@ async def complete_callback(
         ):
             return _fail(CallbackError.STATE_MISMATCH)
 
+        # A record parked by a build that predates the consent field carries
+        # None here, and None is not a selection -- it is a flow that never
+        # asked. Stored, it becomes a connection granting none of the
+        # brokerage's curated groups: connected, and able to do nothing. The
+        # backfill cannot reach it either, since the connection row it would
+        # have corrected does not exist yet. So it fails the way ConnectState
+        # says an older-shaped record must, like an expired one, and the retry
+        # goes through a phase 1 that asks the question.
+        if record.granted_capabilities is None and group_keys_for(
+            vendor_for_url(record.server_url)
+        ):
+            return _fail(CallbackError.INVALID_STATE)
+
         if error:
             # The AS reported denial/failure (user hit cancel, etc.).
             logger.info(
@@ -887,20 +1179,52 @@ async def complete_callback(
         if await _is_superseded(record.user_id, scope, state):
             return _fail(CallbackError.INVALID_STATE)
 
-        connection_id = await upsert_connection(
-            record.user_id,
-            server_name,
-            server_url=record.server_url,
-            access_token=token.access_token,
-            refresh_token=token.refresh_token,
-            client_secret=client_info.client_secret,
-            token_type=token.token_type,
-            scope=token.scope or record.scope,
-            expires_at=token.expires_at,
-            client_info=record.client_info,
-            as_metadata=record.as_metadata,
-            resource_metadata=record.resource_metadata,
-        )
+        # The consent and the policy that enforces it are one decision, so they
+        # commit together or not at all. Split across two transactions, a worker
+        # that dies between them leaves the row recording a narrowing that no
+        # grant enforces, and nothing later notices: the version bump below had
+        # not run either, so a warm session short-circuits on a matching version
+        # and never re-resolves.
+        #
+        # The consent write has to be here rather than left to the resync at the
+        # end, because everything below only makes sessions re-resolve
+        # *eventually* and the relay authorizes against the grant, not the
+        # connection. A reconnect that narrows consent must not leave the wider
+        # denial standing while a bump, a discovery round trip and a swallowed
+        # re-apply catch up -- that window is exactly long enough for the turn
+        # the user narrowed it for.
+        #
+        # The price is that a database failure discards a token exchange that
+        # already succeeded and the user authorizes again. That is the
+        # recoverable half of the trade; a withdrawn permission left live is
+        # not.
+        try:
+            async with get_db_connection() as db, db.transaction():
+                connection_id = await upsert_connection(
+                    record.user_id,
+                    server_name,
+                    server_url=record.server_url,
+                    access_token=token.access_token,
+                    refresh_token=token.refresh_token,
+                    client_secret=client_info.client_secret,
+                    token_type=token.token_type,
+                    scope=token.scope or record.scope,
+                    expires_at=token.expires_at,
+                    client_info=record.client_info,
+                    as_metadata=record.as_metadata,
+                    resource_metadata=record.resource_metadata,
+                    granted_capabilities=record.granted_capabilities,
+                    conn=db,
+                )
+                await apply_consent_to_active_grants(connection_id, conn=db)
+        except Exception:
+            logger.exception(
+                "[mcp_oauth] could not settle consent for user=%s server=%s; "
+                "neither the connection nor its grant policy was written",
+                record.user_id, server_name,
+            )
+            return _fail(CallbackError.INTERNAL)
+
         logger.info(
             "[mcp_oauth] connected user=%s server=%s connection=%s has_refresh=%s",
             record.user_id, server_name,

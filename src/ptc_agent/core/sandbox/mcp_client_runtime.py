@@ -309,6 +309,7 @@ _RELAY_ERROR_HINTS = {
     "not_found": "no active grant for this server; reconnect it in Plugins",
     "method_blocked": "the HTTP method is not permitted by this connection's policy",
     "tool_blocked": "the tool is not permitted by this connection's policy",
+    "policy_missing": "this connection's capability policy has not been computed yet; reconnect the server in Plugins",
     "refresh_in_progress": "the vendor token is being refreshed; retry in a few seconds",
     "destination_blocked": "the relay refused to dial this server's address",
     "upstream_unreachable": "the relay could not reach the vendor's server",

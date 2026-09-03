@@ -33,6 +33,7 @@ from fastapi import APIRouter, Body, HTTPException, Response
 from pydantic import ValidationError
 
 from src.server.database.mcp_oauth import (
+    SERVABLE,
     ConnectionStatus,
     get_connection,
     list_connections,
@@ -97,38 +98,74 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/mcp", tags=["MCP Catalog"])
 
-async def _oauth_status_for_server(
-    user_id: str, name: str
-) -> ConnectionStatus | None:
-    """One row's status, for a response that is only ever about one row.
+async def _oauth_for_server(user_id: str, name: str) -> dict | None:
+    """One row's connection, for a response that is only ever about one row.
 
-    Same swallow as the map above -- a status is decoration, and losing it must
-    not fail the write that just succeeded.
+    Shaped like a row from the map below rather than handed over as the record
+    it arrives as, so :func:`_decorated` has one thing to read. Same swallow as
+    the map too: the connection is decoration here, and losing it must not fail
+    the write that just succeeded.
     """
     try:
         conn = await get_connection(user_id, name)
-        return ConnectionStatus(conn.status) if conn else None
     except Exception:
         logger.warning(
             "[mcp_catalog] OAuth connection lookup failed for %s/%s", user_id, name,
             exc_info=True,
         )
         return None
+    if conn is None:
+        return None
+    return {
+        "status": conn.status,
+        "granted_capabilities": conn.granted_capabilities,
+    }
 
 
-async def _oauth_status_by_server(user_id: str) -> dict[str, ConnectionStatus]:
-    """server_name → connection status, for decorating catalog responses."""
+async def _oauth_by_server(user_id: str) -> dict[str, dict]:
+    """server_name → its connection summary, for decorating catalog responses."""
     try:
-        return {
-            c["server_name"]: ConnectionStatus(c["status"])
-            for c in await list_connections(user_id)
-        }
+        return {c["server_name"]: c for c in await list_connections(user_id)}
     except Exception:
         logger.warning(
             "[mcp_catalog] OAuth connection lookup failed for %s", user_id,
             exc_info=True,
         )
         return {}
+
+
+def _decorated(row: dict, conn: dict | None, **extra) -> CatalogServer:
+    """A catalog response carrying what its OAuth connection knows.
+
+    One helper for every path that has a connection in hand, because they all
+    answer the same two questions about it, and a caller that reached for only
+    the status is how consent stayed invisible after connecting.
+
+    A connection that can no longer be served reports its status but not its
+    capabilities. The stored keys outlive a revoke, and every reader treats a
+    non-null list as the grant currently in force -- so passing them through
+    drew a disconnected broker still badged as able to place live orders.
+    Withholding them reads as "nothing connected here", which is the truth.
+
+    The choice itself still travels, under its own name. Reconnecting is the
+    only way to change a selection, so the dialog that opens on a needs_reauth
+    or revoked row has to start from what the user last chose; seeding it from
+    the grant instead meant a repair after a token expiry re-proposed every
+    group they had declined. Two fields because they are two questions, and the
+    reader that wanted the wrong one is how this went wrong in both directions.
+    """
+    if conn is None:
+        return catalog_row_to_response(row, **extra)
+    status = ConnectionStatus(conn["status"])
+    return catalog_row_to_response(
+        row,
+        oauth_status=status,
+        granted_capabilities=(
+            conn["granted_capabilities"] if status in SERVABLE else None
+        ),
+        remembered_capabilities=conn["granted_capabilities"],
+        **extra,
+    )
 
 
 async def _snapshots_by_server(
@@ -219,16 +256,16 @@ async def list_servers(
     per-server tombstone workspaces (the "active in" deny-list) and every
     workspace-local server across the user's workspaces."""
     rows = await list_catalog_servers(user_id)
-    oauth = await _oauth_status_by_server(user_id)
+    oauth = await _oauth_by_server(user_id)
     snapshots = await _snapshots_by_server(user_id, rows)
     servers = []
     for r in rows:
         snapshot = snapshots.get(r["name"])
         meta = (snapshot or {}).get("observed_meta") or {}
         servers.append(
-            catalog_row_to_response(
+            _decorated(
                 r,
-                oauth_status=oauth.get(r["name"]),
+                oauth.get(r["name"]),
                 tool_count=(
                     len(snapshot.get("tools") or []) if snapshot is not None else None
                 ),
@@ -295,8 +332,8 @@ async def get_server(name: str, user_id: CurrentUserId) -> CatalogServer:
     row = await get_catalog_server(user_id, name)
     if not row:
         raise HTTPException(status_code=404, detail="MCP server not found")
-    oauth = await _oauth_status_by_server(user_id)
-    return catalog_row_to_response(row, oauth_status=oauth.get(name))
+    oauth = await _oauth_by_server(user_id)
+    return _decorated(row, oauth.get(name))
 
 
 @router.get("/servers/{name}/tools")
@@ -312,6 +349,11 @@ async def get_server_tools(name: str, user_id: CurrentUserId) -> dict:
     useful for deciding whether to turn it back on, and the panel badges the
     suppression beside them. Delivery is decided in one place,
     ``list_enabled_user_servers``, and a catalog reader is not it."""
+    from src.server.services.brokerage_capabilities import (
+        group_of_tool,
+        is_always_denied,
+        vendor_for_url,
+    )
     from src.server.services.mcp_config import user_row_to_server_config
     from src.server.services.mcp_discovery import ToolSnapshotIndex
 
@@ -329,6 +371,10 @@ async def get_server_tools(name: str, user_id: CurrentUserId) -> dict:
             "[mcp_catalog] tool-schema lookup failed for %s", user_id, exc_info=True
         )
     tools = (snapshot or {}).get("tools") or []
+    # The vendor is the row's address, not its name: the name is the user's to
+    # choose, and joining on it drew somebody's own row wearing a broker's
+    # curation (or missed the curation of a row that had been repointed).
+    _vendor = vendor_for_url(row.get("url"))
     return {
         "server_name": name,
         "tools": [
@@ -336,6 +382,18 @@ async def get_server_tools(name: str, user_id: CurrentUserId) -> dict:
                 "name": t.get("name", ""),
                 "description": t.get("description", ""),
                 "input_schema": t.get("input_schema") or {},
+                # Which consent toggle reaches this tool, null when none does.
+                # Discovery is deliberately unfiltered -- it is what the vendor
+                # offers, not what this connection may call -- so the group is
+                # the join the detail view needs to say which of them are
+                # actually reachable and which the user declined.
+                "capability": group_of_tool(_vendor, t.get("name", "")),
+                # A null capability alone does not say whether the tool can be
+                # called: one we deliberately withheld is refused at every
+                # grant, one we simply have not classified passes at every
+                # grant. The client cannot tell them apart and drew both as
+                # unreachable, so the distinction travels.
+                "always_denied": is_always_denied(_vendor, t.get("name", "")),
             }
             for t in tools
         ],
@@ -746,9 +804,7 @@ async def set_brokerage_enabled(
     # already connected, so read the status rather than assuming none. One row,
     # so one lookup: listing every connection to decorate a single response is
     # a second round trip that answers the same question.
-    response = catalog_row_to_response(
-        row, oauth_status=await _oauth_status_for_server(user_id, name)
-    )
+    response = _decorated(row, await _oauth_for_server(user_id, name))
     if warning:
         response.warnings = [warning]
     return response

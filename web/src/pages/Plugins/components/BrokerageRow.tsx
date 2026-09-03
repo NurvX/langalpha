@@ -18,7 +18,7 @@ import {
   ServerRowShell,
 } from '@/pages/ChatAgent/components/mcp/McpPrimitives';
 import type { CatalogServer } from '@/pages/ChatAgent/utils/api';
-import { type Brokerage } from '../brokerages';
+import { settledGrant, type Brokerage } from '../brokerages';
 import { isPluginOwned } from '../utils/provenance';
 import {
   ConnectButton,
@@ -26,6 +26,7 @@ import {
   ToolCountText,
   VendorNotes,
 } from './OauthRowParts';
+import { OrderCapabilityBadges } from './OrderCapabilityBadges';
 import { RowNote } from './RowNote';
 import { ScopeControl, scopeLocked, type ScopeWorkspace } from './ScopeControl';
 
@@ -60,6 +61,7 @@ export function BrokerageRow({
   onRequestRemove,
   onSetWorkspaceDisabled,
   onOpenInMcpTab,
+  onOpen,
 }: {
   brokerage: Brokerage;
   /** The user's catalog row for it, or null while this is still an offer. */
@@ -82,6 +84,9 @@ export function BrokerageRow({
   onRequestRemove: () => void;
   onSetWorkspaceDisabled: (workspaceId: string, disabled: boolean) => void;
   onOpenInMcpTab: () => void;
+  /** Open this broker's detail. Offered on an unadded row too: what a broker
+   *  can do is the thing to read before deciding to add it. */
+  onOpen: () => void;
 }) {
   const { t } = useTranslation();
   const status = row?.oauth_status ?? null;
@@ -93,6 +98,9 @@ export function BrokerageRow({
   // to ask, and what it would create is always http.
   const oauthEligible = !row || row.transport === 'http';
   const unconnected = oauthEligible && needsOauthConnect(status);
+  // One reading of the grant for the whole row: the badges and the note
+  // below both draw it, and they used to disagree about null.
+  const granted = settledGrant(row?.granted_capabilities, status);
   const rowKey = `brokerage-${brokerage.name}`;
   // Their row, their address: once it exists the URL is editable in the MCP
   // tab, and a row pointing somewhere else is no longer this broker whatever
@@ -124,6 +132,7 @@ export function BrokerageRow({
   return (
     <ServerRowShell
       testid={rowKey}
+      onOpen={onOpen}
       // Off `vendor`, like every other vendor-specific thing on this row: a
       // row edited to another host keeps its name and drops to a monogram,
       // rather than drawing a broker's mark over somebody else's endpoint.
@@ -136,7 +145,7 @@ export function BrokerageRow({
       }
       main={
         <>
-          <ServerNameLine name={title} />
+          <ServerNameLine name={title} onOpen={onOpen} />
 
           <div className="flex items-center gap-2 flex-wrap">
             {status && <McpOauthPill status={status} />}
@@ -150,6 +159,23 @@ export function BrokerageRow({
               <MetaText>{t('plugins.brokerages.notAdded')}</MetaText>
             )}
             <ToolCountText status={status} count={row?.tool_count} />
+            {/* What this broker can do about orders, which is the first thing
+                anyone wants off a brokerage row and the last thing the page
+                could say. Before a connection they are what it offers; after
+                one they are what it may actually do. */}
+            <OrderCapabilityBadges vendor={vendor} granted={granted} />
+            {/* Connected and granted nothing: every tool is refused, and the
+                only other sign of it is the agent failing to call one.
+
+                Read off `settledGrant`, the same value the badges above draw,
+                so the row cannot say "offered" and "granted nothing" in the
+                same breath -- which is what it did for a brokerage connected
+                before its tools were curated, whose stored answer is null. */}
+            {granted?.length === 0 && (
+              <RowNote icon={AlertTriangle} tone="warning">
+                {t('plugins.brokerages.grantedNone')}
+              </RowNote>
+            )}
             {redirected && (
               <RowNote icon={AlertTriangle} tone="warning">
                 {t('plugins.brokerages.redirectedNote')}

@@ -189,10 +189,17 @@ const EXCLUSIVE_VENDOR = {
   name: 'ibkr',
   label: 'Interactive Brokers',
   url: 'https://api.broker.test/mcp',
+  site: 'broker.test',
   description: 'Portfolio and draft orders.',
   native_callback_only: false,
   exclusive_connection: true,
+  capabilities: [
+    { key: 'market_data', tone: 'neutral' },
+    { key: 'staged_orders', tone: 'caution', rung: true },
+  ],
 };
+/** What this vendor's connect grants unless the user says otherwise. */
+const EXCLUSIVE_DEFAULT = ['market_data', 'staged_orders'];
 
 function makeCatalog(servers: CatalogServer[], maxServers = 20): CatalogServerList {
   return { servers, max_servers: maxServers };
@@ -436,10 +443,9 @@ describe('McpServers — OAuth connect affordance', () => {
     renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByRole('button', { name: /^connect$/i }));
-    const strip = screen
-      .getByText(/replaces whichever one is connected now/i)
-      .closest('div') as HTMLElement;
-    fireEvent.click(within(strip).getByRole('button', { name: /^connect$/i }));
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: /^connect$/i }),
+    );
 
     await waitFor(() =>
       expect(mockStartMcpOauth).toHaveBeenCalledWith(
@@ -449,7 +455,42 @@ describe('McpServers — OAuth connect affordance', () => {
           vendorRefusesHostedCallback: false,
           expectedUrl: EXCLUSIVE_VENDOR.url,
           stillWanted: expect.any(Function),
+          // Reached from the Connectors list, the consent is the same consent:
+          // a brokerage connected from here must not carry more than one
+          // connected from the tab that is about brokerages.
+          grantedCapabilities: EXCLUSIVE_DEFAULT,
         },
+      ),
+    );
+  });
+
+  // The same row reached from the other tab, and the two seed the dialog
+  // independently. A repair opened from here has to start from the user's last
+  // answer for the same reason it does over there.
+  it('reopens a repair on the groups the user last chose', async () => {
+    brokerages = [EXCLUSIVE_VENDOR];
+    catalogData = makeCatalog([
+      makeOauthServer({
+        name: 'ibkr',
+        url: EXCLUSIVE_VENDOR.url,
+        oauth_status: 'needs_reauth',
+        granted_capabilities: null,
+        remembered_capabilities: ['market_data'],
+      }),
+    ]);
+    mockStartMcpOauth.mockResolvedValue({ authorize_url: 'https://vendor.example.test/a' });
+    renderWithProviders(<McpServers />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^reconnect$/i }));
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: /^connect$/i }),
+    );
+
+    await waitFor(() =>
+      expect(mockStartMcpOauth).toHaveBeenCalledWith(
+        'ibkr',
+        '/plugins?tab=mcp',
+        expect.objectContaining({ grantedCapabilities: ['market_data'] }),
       ),
     );
   });
@@ -462,10 +503,9 @@ describe('McpServers — OAuth connect affordance', () => {
     renderWithProviders(<McpServers />);
 
     fireEvent.click(screen.getByRole('button', { name: /^connect$/i }));
-    const strip = screen
-      .getByText(/replaces whichever one is connected now/i)
-      .closest('div') as HTMLElement;
-    fireEvent.click(within(strip).getByRole('button', { name: /cancel/i }));
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: /cancel/i }),
+    );
 
     expect(screen.queryByText(/replaces whichever one is connected now/i)).toBeNull();
     expect(mockStartMcpOauth).not.toHaveBeenCalled();

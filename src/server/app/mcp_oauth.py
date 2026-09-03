@@ -65,6 +65,17 @@ async def oauth_start(
     body: dict | None = Body(default=None),
 ) -> dict:
     return_to = (body or {}).get("return_to")
+    # Coerced here rather than in the service: the body is an unvalidated dict,
+    # and anything that is not a list of keys is not a consent decision. A
+    # non-list becomes "no selection named", which the service refuses outright
+    # for a brokerage rather than reading as either extreme -- nobody was asked,
+    # so it is neither declining everything nor granting it.
+    raw_capabilities = (body or {}).get("granted_capabilities")
+    granted_capabilities = (
+        [str(key) for key in raw_capabilities]
+        if isinstance(raw_capabilities, list)
+        else None
+    )
     try:
         started = await start_connect(
             user_id,
@@ -84,6 +95,10 @@ async def oauth_start(
             # lets that question be a gate. Absent from an older page, which then
             # behaves as it always did.
             expected_url=(body or {}).get("expected_url"),
+            # The capability groups agreed to in the dialog that preceded this
+            # call. Intersected with the vendor's real groups by the service, so
+            # a page that names none grants none.
+            granted_capabilities=granted_capabilities,
         )
     except McpServerNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))

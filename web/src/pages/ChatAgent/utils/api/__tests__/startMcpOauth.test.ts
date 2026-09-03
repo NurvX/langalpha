@@ -320,6 +320,41 @@ describe('startMcpOauth', () => {
     expect(cancelMcpOAuth).not.toHaveBeenCalled();
   });
 
+  // The consent the user gave, and the difference between the two ways of
+  // giving none. A brokerage that named no group is one granted nothing; a
+  // server with no groups to name has no policy at all and keeps the whole
+  // vendor tool list. The backend reads exactly that difference off the
+  // presence of this key, so a shorthand that dropped an empty array would
+  // quietly turn "I declined everything" into "grant everything".
+  it('sends the selection the caller was given', async () => {
+    inBrowser();
+
+    await startMcpOauth('moomoo', '/plugins?tab=brokerages', {
+      grantedCapabilities: ['market_data', 'account'],
+    });
+
+    expect(body().granted_capabilities).toEqual(['market_data', 'account']);
+  });
+
+  it('sends an empty selection as one, not as no selection', async () => {
+    inBrowser();
+
+    await startMcpOauth('moomoo', '/plugins?tab=brokerages', {
+      grantedCapabilities: [],
+    });
+
+    expect('granted_capabilities' in body()).toBe(true);
+    expect(body().granted_capabilities).toEqual([]);
+  });
+
+  it('omits the key entirely for a connect that was never asked', async () => {
+    inBrowser();
+
+    await startMcpOauth('some-server', '/plugins?tab=mcp');
+
+    expect('granted_capabilities' in body()).toBe(false);
+  });
+
   it('goes on to the consent screen when the caller still wants it', async () => {
     inShell(flow);
 

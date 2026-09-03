@@ -40,6 +40,21 @@ export interface McpToolSummary {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
+  /**
+   * Which brokerage capability group reaches this tool, null when none does.
+   * Discovery is unfiltered on purpose -- it is what the vendor offers, not
+   * what a connection may call -- so this is what lets a surface say which of
+   * them the user actually granted. Absent outside the catalog tools route,
+   * and on every server that is not a brokerage.
+   */
+  capability?: string | null;
+  /**
+   * Whether this tool is refused at every grant. A null `capability` alone does
+   * not say: one we deliberately withheld is always refused, one we have simply
+   * not classified is always permitted. Reading null as "unavailable" is how the
+   * detail view came to promise the agent could not reach tools it could.
+   */
+  always_denied?: boolean;
 }
 
 export type McpStatus =
@@ -177,6 +192,22 @@ export interface CatalogServer {
   enabled?: boolean;
   /** OAuth connection status, when one exists for this server. */
   oauth_status?: McpOauthStatus | null;
+  /**
+   * The capability groups this connection was granted, in the order they were
+   * stored. `null`/absent means no connection, or one for a server we curate
+   * no groups for; `[]` means a brokerage the user granted nothing. The two
+   * are different answers and the gap between them is a broker that can do
+   * nothing, so they stay distinguishable here too.
+   */
+  granted_capabilities?: string[] | null;
+  /**
+   * The same keys, but what the user last chose rather than what is in force.
+   * Survives a `needs_reauth` or `revoked` status, where `granted_capabilities`
+   * is deliberately withheld so nothing badges a dead connection as able to
+   * trade. Only the consent dialog reads this, and only to open on the user's
+   * own last answer instead of the product defaults.
+   */
+  remembered_capabilities?: string[] | null;
   /** Host-side discovered tool count for the current config (OAuth servers). */
   tool_count?: number | null;
   /** Path on this origin to the mark the server declared in its handshake.
@@ -211,6 +242,9 @@ export interface Brokerage {
   name: string;
   label: string;
   url: string;
+  /** The broker's own website, which is not the endpoint's host: an MCP
+   *  endpoint sits on an API subdomain with no page behind it. */
+  site: string;
   description: string;
   /**
    * The vendor's authorization server refuses a hosted callback, so only the
@@ -223,6 +257,34 @@ export interface Brokerage {
    * previous one, so connecting is destructive to a connection elsewhere.
    */
   exclusive_connection: boolean;
+  /**
+   * What this vendor's tools can be granted in, in display order. Empty for a
+   * vendor nothing is curated for, which reads as "nothing to choose" rather
+   * than "everything": the backend answers the same way, and a connect that
+   * names no group is granted none of them.
+   */
+  capabilities: CapabilityGroup[];
+}
+
+/**
+ * One consent toggle offered when connecting a brokerage.
+ *
+ * The key is the fact and also the translation key; the words are this client's,
+ * the same contract the quirk booleans above keep. `tone` is how loudly to draw
+ * the row -- `neutral` is public or personal data, `caution` is the user's own
+ * positions and money, `danger` places real orders -- and is left a plain string
+ * because a tone this build has no styling for must still render.
+ */
+export interface CapabilityGroup {
+  key: string;
+  tone: string;
+  /**
+   * One of the steps between reading and placing an order (paper, preview,
+   * staged, live). A fact about the group rather than a reading of its key, so
+   * a group added later reaches the badges with no release here. Absent on a
+   * backend that predates it, which reads as "not a rung" and costs a badge.
+   */
+  rung?: boolean;
 }
 
 export async function getBrokerages(): Promise<Brokerage[]> {
@@ -609,6 +671,17 @@ export interface StartMcpOauthOptions {
    * minutes earlier.
    */
   stillWanted?: () => boolean;
+  /**
+   * The capability groups the user agreed this connection may carry, or
+   * undefined for a connect that was never asked.
+   *
+   * The empty array and undefined are different answers and both travel as they
+   * are: `[]` is a brokerage granted nothing, undefined is a server we curate no
+   * groups for and hold no policy over. Collapsing them would make "declined
+   * everything" and "not a brokerage" the same request, and only one of those
+   * may reach a vendor's whole tool list.
+   */
+  grantedCapabilities?: string[];
 }
 
 /**
@@ -625,6 +698,7 @@ export async function startMcpOauth(
     vendorRefusesHostedCallback = false,
     expectedUrl,
     stillWanted,
+    grantedCapabilities,
   }: StartMcpOauthOptions = {},
 ): Promise<McpOauthStart | null> {
   // Asked unconditionally, because asking is free: `loopbackFlow` answers
@@ -668,6 +742,12 @@ export async function startMcpOauth(
         return_to: returnTo,
         ...(flow ? { redirect_uri: flow.redirectUri } : {}),
         ...(expectedUrl ? { expected_url: expectedUrl } : {}),
+        // Presence, not truthiness, unlike the two above: an empty selection is
+        // a decision the user made and has to be sent, and it is the one value
+        // here that a shorthand check would drop.
+        ...(grantedCapabilities !== undefined
+          ? { granted_capabilities: grantedCapabilities }
+          : {}),
       },
     );
     if (flow) {

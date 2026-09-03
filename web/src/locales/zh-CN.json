@@ -2784,8 +2784,69 @@
       "warningTitle": "服务器已保存（含提示）"
     },
     "brokerages": {
-      "exclusiveConfirm": "确定连接“{{server}}”吗？该账户只允许连接一个 AI 平台，因此这会取代当前已连接的那一个。",
+      "capabilities": {
+        "market_data": {
+          "label": "行情与研究",
+          "desc": "报价、K 线、基本面、公告和选股器。不涉及你的账户。"
+        },
+        "watchlists": {
+          "label": "自选列表",
+          "desc": "读取自选列表，增删标的，并可新建或删除整个列表。"
+        },
+        "scanners": {
+          "label": "已保存的选股条件",
+          "desc": "读取你保存的选股器，并可新建、运行或修改。"
+        },
+        "alerts": {
+          "label": "价格提醒",
+          "desc": "读取你的价格提醒，并新建或删除。"
+        },
+        "account": {
+          "label": "账户与持仓",
+          "desc": "余额、持仓和订单历史。仅读取。"
+        },
+        "paper_trading": {
+          "label": "模拟交易",
+          "desc": "在券商的模拟账户中交易。它有自己的资金和持仓，不涉及真实资金。"
+        },
+        "order_preview": {
+          "label": "订单预览",
+          "desc": "针对真实账户试算一笔订单，查看成本与风险提示。不会提交，也不会保存。"
+        },
+        "staged_orders": {
+          "label": "待提交订单",
+          "desc": "在真实账户中保存一份订单草稿。它尚未生效，但你可以在券商端一键提交。"
+        },
+        "trading": {
+          "label": "实盘下单",
+          "desc": "使用账户中的真实资金买入、卖出、改单和撤单，且无需再次征询你的同意。"
+        }
+      },
+      "consent": {
+        "title": "连接“{{server}}”",
+        "subtitle": "选择此连接允许智能体在该券商做哪些事。",
+        "footnote": "未勾选的分组在智能体调用时会被拒绝，而不只是隐藏。之后可重新连接以更改。"
+      },
+      "detail": {
+        "broker": "券商",
+        "capabilities": "可执行的操作",
+        "capabilitiesNote": "被拒绝的分组在智能体调用时会被拒绝，而不只是隐藏。重新连接可以更改。",
+        "declined": "未授予",
+        "endpoint": "接入地址",
+        "granted": "已授予",
+        "grantedNone": "此连接未获授权任何分组，因此分组内的所有工具都会被拒绝。重新连接可重新选择。",
+        "notConnectedNote": "连接之前不会授予任何操作，连接时由你选择。",
+        "offered": "可选",
+        "website": "官网",
+        "unclassified": "不属于任何分组",
+        "unclassifiedNote": "没有分组涵盖这些工具，因此拒绝某个分组并不会拒绝它们。智能体仍然可以调用。",
+        "unclassifiedNoteUnconnected": "这些工具不属于任何分组，拒绝某个分组不会屏蔽它们。此处尚未连接，因此暂时无法调用。",
+        "neverAvailable": "始终不可用",
+        "neverAvailableNote": "已刻意保留。无论授权什么都会被拒绝。"
+      },
       "exclusiveNote": "会取代该账户已有的 AI 连接",
+      "exclusiveWarning": "该账户只允许连接一个 AI 平台，因此在此连接会取代当前已连接的那一个。",
+      "grantedNone": "未授予任何操作",
       "intro": "智能体可读取并交易的券商账户。连接后即可关联你的账户；在此之前不会向券商发送任何数据。",
       "none": "此版本未内置券商连接器。",
       "notAdded": "未添加",
@@ -3035,6 +3096,7 @@
     },
     "detail": {
       "kindServer": "MCP 服务器",
+      "kindBrokerage": "券商",
       "kindSkill": "技能",
       "kindPlugin": "插件",
       "tools": "工具",
