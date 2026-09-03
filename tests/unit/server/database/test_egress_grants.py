@@ -366,7 +366,7 @@ class TestRetirement:
         once, and a version read outside it could be overtaken before the
         writes land — both must sit in the same txn as the grant writes."""
         await _sync(OWNER, CONNECTION_ID)
-        assert [depth for _sql, _params, depth in db.statements] == [1, 1, 1, 1, 1]
+        assert [depth for _sql, _params, depth in db.statements] == [1] * 6
 
 
 class TestConfigVersionCAS:
@@ -424,16 +424,25 @@ class TestConfigVersionCAS:
         ]
         # The policy read sits inside the fence too: reading consent before the
         # lock would let a newer sync's consent land under this one's writes.
-        assert kinds == ["lock", "version", "policy", "write", "write"]
+        assert kinds == ["lock", "lock", "version", "policy", "write", "write"]
 
     @pytest.mark.asyncio
     async def test_the_lock_is_workspace_scoped_and_domain_separated(self, db):
         await _sync(OWNER, CONNECTION_ID)
-        assert db.lock_keys == [advisory_key("EG", WORKSPACE_ID)]
+        # The owner's lock first, then the workspace's. A narrowing consent
+        # holds the first one over every workspace of the user at once,
+        # including the ones being created while it runs; the second is what
+        # orders two workers replacing the same workspace's set.
+        assert db.lock_keys == [
+            advisory_key("EGU", OWNER),
+            advisory_key("EG", WORKSPACE_ID),
+        ]
         # A different workspace converges concurrently rather than queueing.
         assert advisory_key("EG", WORKSPACE_ID) != advisory_key("EG", CONNECTION_ID)
-        # And the tag keeps it off the writer guard's thread/namespace keys.
+        # And the tag keeps it off the writer guard's thread/namespace keys,
+        # and the two grant domains off each other.
         assert advisory_key("EG", WORKSPACE_ID) != advisory_key("T", WORKSPACE_ID)
+        assert advisory_key("EGU", OWNER) != advisory_key("EG", OWNER)
 
 
 class TestToolPolicy:
@@ -529,12 +538,7 @@ class TestApplyConsentToActiveGrants:
     """
 
     @staticmethod
-    def _db(
-        server_url: str | None,
-        capabilities: list[str] | None,
-        *,
-        workspaces: tuple[str, ...] = (WORKSPACE_ID,),
-    ):
+    def _db(server_url: str | None, capabilities: list[str] | None):
         statements: list[tuple[str, tuple, int]] = []
         depth = [0]
 
@@ -548,15 +552,13 @@ class TestApplyConsentToActiveGrants:
             async def execute(self, sql, params=None):
                 statements.append((sql, params, depth[0]))
                 self._last = sql
-                if "FROM workspaces" in sql:
-                    self._rows = [{"workspace_id": w} for w in workspaces]
 
             async def fetchall(self):
                 return self._rows
 
             async def fetchone(self):
-                # The owner is read first, only to enumerate the workspaces to
-                # fence; the consent is re-read afterwards, under those locks.
+                # The owner is read first, only to name the lock; the consent is
+                # re-read afterwards, under it.
                 if "SELECT user_id" in getattr(self, "_last", ""):
                     return {"user_id": OWNER}
                 return {
@@ -607,8 +609,8 @@ class TestApplyConsentToActiveGrants:
         return denied, required, permitted
 
     @pytest.mark.asyncio
-    async def test_it_bounds_how_long_it_will_wait_for_those_locks(self):
-        """This runs in the OAuth callback, and now asks for a lock per workspace.
+    async def test_it_bounds_how_long_it_will_wait_for_the_lock(self):
+        """This runs in the OAuth callback, behind a lock its own syncs take.
 
         Unbounded, a wedged grant sync holds the user's connect open for as long
         as it stays wedged. Bounded, Postgres raises inside the transaction,
@@ -625,30 +627,22 @@ class TestApplyConsentToActiveGrants:
         assert statements.index(bound) < statements.index(locks[0])
 
     @pytest.mark.asyncio
-    async def test_it_fences_workspaces_that_hold_no_grant_yet(self):
-        """The sync it races may be *creating* the grant, not updating one.
+    async def test_it_fences_the_workspaces_that_do_not_exist_yet(self):
+        """The sync it races may be in a workspace no query here can name.
 
-        Enumerating the workspaces off the active grants fenced only the rows
-        that already existed. A sync holding the lock for a workspace with no
-        active grant -- a first resolve, or one reactivating a retired row
-        through the upsert's DO UPDATE -- had read the old consent and was free
-        to commit the wider policy after the narrowing landed, which is the one
-        interleaving this lock exists to rule out. So the workspaces come from
-        the owner, and the consent is re-read under the locks rather than
-        carried in from the query that found them.
+        Enumerating the owner's workspaces and locking each fenced only the rows
+        that existed when the SELECT ran. A workspace being created alongside
+        this connect holds no grant, appears in no enumeration, and its first
+        sync is precisely the writer that has read the old consent and not yet
+        committed -- so it was free to write the wider policy after the
+        narrowing landed, with no version bump left to correct it. One lock over
+        the user covers the workspaces and the ones still arriving alike.
         """
-        statements = await self._run(
-            "https://mcp.moomoo.com/mcp",
-            ["market_data"],
-            workspaces=(WORKSPACE_ID, OTHER_WORKSPACE_ID),
-        )
-        enumerate_ws = next(
-            s for s in statements if "workspace_id FROM workspaces" in s[0]
-        )
-        assert enumerate_ws[1] == (OWNER,)
-        # Not off the grants: that is the query that missed the creating sync.
-        assert not any("FROM sandbox_egress_grants" in s[0] for s in statements[:2])
+        statements = await self._run("https://mcp.moomoo.com/mcp", ["market_data"])
+        assert not any("FROM workspaces" in s[0] for s in statements)
         locks = [s for s in statements if "pg_advisory_xact_lock" in s[0]]
+        assert [s[1][0] for s in locks] == [advisory_key("EGU", OWNER)]
+        # Re-read under the lock, never carried in from the query that named it.
         consent = next(
             s for s in statements if "granted_capabilities" in s[0] and "SELECT" in s[0]
         )
@@ -696,16 +690,9 @@ class TestApplyConsentToActiveGrants:
         bump can save it, because the sync CASed successfully before any of this
         started. The lock is what makes the two orders the only two possible.
         """
-        statements = await self._run(
-            "https://mcp.moomoo.com/mcp",
-            ["market_data"],
-            workspaces=(WORKSPACE_ID, OTHER_WORKSPACE_ID),
-        )
+        statements = await self._run("https://mcp.moomoo.com/mcp", ["market_data"])
         locks = [s for s in statements if "pg_advisory_xact_lock" in s[0]]
-        assert [s[1][0] for s in locks] == [
-            advisory_key("EG", WORKSPACE_ID),
-            advisory_key("EG", OTHER_WORKSPACE_ID),
-        ]
+        assert [s[1][0] for s in locks] == [advisory_key("EGU", OWNER)]
         # Held, not merely taken: a lock released before the write fences
         # nothing, and transaction-scoped is the only way to hold one here.
         update = next(s for s in statements if s[0].lstrip().startswith("UPDATE"))

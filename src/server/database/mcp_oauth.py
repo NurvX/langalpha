@@ -140,14 +140,21 @@ async def upsert_connection(
     as_metadata: dict[str, Any] | None = None,
     resource_metadata: dict[str, Any] | None = None,
     granted_capabilities: list[str] | None = None,
+    conn=None,
 ) -> str:
     """Store a freshly exchanged bundle (connect or re-auth). Returns connection_id.
 
     Re-auth on an existing row bumps token_generation like a refresh would —
     any caller pinned to the old generation sees rotation.
+
+    ``conn`` joins the caller's transaction. The callback passes one so the
+    consent on this row and the policy on the grants it governs commit
+    together: written apart, a worker that dies between them leaves the row
+    recording a narrowing that no grant enforces, and nothing later reconciles
+    it because the version bump had not happened either.
     """
     enc_key = _get_encryption_key()
-    async with get_db_connection() as conn:
+    async with get_db_connection(conn) as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """

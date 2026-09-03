@@ -141,6 +141,17 @@ async def sync_oauth_grants(
 
     async with get_db_connection() as conn, conn.transaction():
         async with conn.cursor(row_factory=dict_row) as cur:
+            # The owner's lock first, then this workspace's. The outer one is
+            # what a narrowing consent holds while it rewrites the policy on
+            # grants that already exist: taken here, before the connection rows
+            # are read, a sync creating this connection's first grant in a brand
+            # new workspace cannot read the old consent and commit it after the
+            # narrowing. Always in this order, so two holders never wait on each
+            # other.
+            await cur.execute(
+                "SELECT pg_advisory_xact_lock(%s)",
+                (advisory_key("EGU", user_id),),
+            )
             # Serialize this workspace's replacements across workers, THEN
             # re-read the version under that lock. The lock alone would only
             # order a stale writer last; the CAS alone could pass and then be
@@ -283,24 +294,26 @@ async def apply_consent_to_active_grants(connection_id: str, *, conn=None) -> in
     later sync stays: this converges the grants that exist right now, and that
     is a different question from which grants a workspace should have.
 
-    Takes ``sync_oauth_grants``' own per-workspace lock first, for the whole
-    read-and-write. Without it the two overlap in the one order that loses: a
-    sync reads the old consent, this narrows the grant, and the sync's upsert
-    then writes the old policy back over it -- and there is no version bump
-    left to make the sync notice, since it CASed successfully before any of
-    this began. Under the lock the sync either commits entirely before this
-    reads, or reads the consent this connect already wrote. Ordered by
-    workspace id so two of these can never hold what the other wants; a sync
-    takes one lock and asks for no more, so it cannot close a cycle either.
+    Takes the owner's grant-sync lock first, for the whole read-and-write.
+    Without it the two overlap in the one order that loses: a sync reads the
+    old consent, this narrows the grant, and the sync's upsert then writes the
+    old policy back over it -- and there is no version bump left to make the
+    sync notice, since it CASed successfully before any of this began. Under
+    the lock the sync either commits entirely before this reads, or reads the
+    consent this connect already wrote. The consent is therefore re-read below,
+    under the lock, rather than carried in from the query that found the owner.
 
-    Every workspace of the owner, not only the ones already holding an active
-    grant. A sync that is *creating* this connection's first grant in a
-    workspace -- or reactivating a retired row through the upsert's DO UPDATE
-    -- has read the old consent and is holding a lock over a workspace no
-    active row names yet, so fencing only the rows that exist leaves exactly
-    that sync free to commit the wider policy after the narrowing lands. The
-    consent is therefore re-read below, under the locks, rather than carried in
-    from the enumerating query.
+    One lock over the user, not one per workspace. Fencing the workspaces this
+    query can see leaves out the one that matters most: a workspace being
+    created right now holds no grant, appears in no enumeration, and its first
+    sync is exactly the writer that has read the old consent and not yet
+    committed. There is no later pass to correct it, since the version bump has
+    already gone out. Every grant sync takes this lock before its own
+    per-workspace one, so the order is fixed and no cycle can form.
+
+    ``conn`` joins the caller's transaction. The connect callback passes the one
+    it wrote the connection row on, so the consent and the policy enforcing it
+    land together.
     """
     from src.server.services.brokerage_capabilities import (
         denied_tools,
@@ -311,14 +324,14 @@ async def apply_consent_to_active_grants(connection_id: str, *, conn=None) -> in
 
     async with get_db_connection(conn) as db, db.transaction():
         async with db.cursor(row_factory=dict_row) as cur:
-            # Bounded, because this runs in the OAuth callback and now asks for
-            # a lock per workspace of the owner. Postgres raises inside the
-            # transaction, which rolls back and releases whatever was taken, and
-            # the caller reads the raise the way it reads any other failure to
-            # settle consent: it revokes the grants rather than leaving them
-            # carrying a policy nobody confirmed. Generous on purpose -- a grant
-            # sync holds this for a handful of short statements, so reaching it
-            # means something is wedged, not that the system is busy.
+            # Bounded, because this runs in the OAuth callback and waits on a
+            # lock the owner's own workspaces are taking. Postgres raises rather
+            # than waiting out a wedged holder, the raise unwinds the connect's
+            # whole transaction, and the user sees a failed connect instead of a
+            # hung one -- with nothing written, so a retry starts clean. Generous
+            # on purpose: a grant sync holds this for a handful of short
+            # statements, so reaching five seconds means something is stuck, not
+            # that the system is busy.
             await cur.execute("SET LOCAL lock_timeout = '5s'")
             await cur.execute(
                 """
@@ -331,18 +344,9 @@ async def apply_consent_to_active_grants(connection_id: str, *, conn=None) -> in
             if owner is None:
                 return 0
             await cur.execute(
-                """
-                SELECT workspace_id FROM workspaces
-                WHERE user_id = %s
-                ORDER BY workspace_id
-                """,
-                (owner["user_id"],),
+                "SELECT pg_advisory_xact_lock(%s)",
+                (advisory_key("EGU", str(owner["user_id"])),),
             )
-            for ws in await cur.fetchall():
-                await cur.execute(
-                    "SELECT pg_advisory_xact_lock(%s)",
-                    (advisory_key("EG", str(ws["workspace_id"])),),
-                )
             await cur.execute(
                 """
                 SELECT server_url, granted_capabilities
