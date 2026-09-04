@@ -126,6 +126,44 @@
         },
         "context_window": 1050000,
         "max_output": 128000
+      },
+      {
+        "id": "gpt-6-astra",
+        "name": "GPT-6 Astra",
+        "is_reasoning": true,
+        "description": "OpenAI's most capable GPT-6 reasoning model with tiered short/long-context pricing",
+        "pricing": {
+          "input_tiers": [
+            {
+              "max_tokens": 272000,
+              "rate": 10.0,
+              "cached_input": 1.0,
+              "cache_5m": 12.5
+            },
+            {
+              "max_tokens": null,
+              "rate": 20.0,
+              "cached_input": 2.0,
+              "cache_5m": 25.0
+            }
+          ],
+          "cache_5m": 12.5,
+          "output_tiers": [
+            {
+              "max_tokens": 272000,
+              "rate": 50.0
+            },
+            {
+              "max_tokens": null,
+              "rate": 75.0
+            }
+          ],
+          "output_pricing_mode": "input_dependent",
+          "input_pricing_mode": "input_dependent",
+          "unit": "per_1m_tokens"
+        },
+        "context_window": 1050000,
+        "max_output": 128000
       }
     ],
     "anthropic": [

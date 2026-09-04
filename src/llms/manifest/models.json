@@ -134,6 +134,40 @@
       "write": "parameters.reasoning.effort"
     }
   },
+  "gpt-6-astra": {
+    "prompt_guidance": "lean",
+    "model_id": "gpt-6-astra",
+    "provider": "openai",
+    "display_name": "GPT-6 Astra",
+    "visible": true,
+    "speed": 2,
+    "intelligence": 5,
+    "context": 1050000,
+    "input_modalities": [
+      "text",
+      "image",
+      "pdf"
+    ],
+    "parameters": {
+      "reasoning": {
+        "summary": "auto"
+      },
+      "prompt_cache_options": {
+        "mode": "implicit"
+      }
+    },
+    "reasoning": {
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "default": "medium",
+      "write": "parameters.reasoning.effort"
+    }
+  },
   "claude-fable-5": {
     "prompt_guidance": "lean",
     "model_id": "claude-fable-5",
@@ -1262,6 +1296,40 @@
     "reasoning": {
       "efforts": [
         "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "default": "medium",
+      "write": "parameters.reasoning.effort"
+    }
+  },
+  "gpt-6-astra-oauth": {
+    "prompt_guidance": "lean",
+    "model_id": "gpt-6-astra",
+    "provider": "codex-oauth",
+    "visible": true,
+    "speed": 2,
+    "intelligence": 5,
+    "context": 1050000,
+    "input_modalities": [
+      "text",
+      "image",
+      "pdf"
+    ],
+    "parameters": {
+      "reasoning": {
+        "summary": "auto"
+      },
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "store": false
+    },
+    "reasoning": {
+      "efforts": [
         "low",
         "medium",
         "high",
