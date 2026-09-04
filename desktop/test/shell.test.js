@@ -1778,6 +1778,32 @@ describe('the two editions can sit on one machine', () => {
     }
   })
 
+  // The fourth string, and the only invisible one. electron-updater names its
+  // download cache `<package name>-updater`, so two editions sharing a package
+  // name share the directory holding the update each is about to install. It
+  // reaches the build through `extraMetadata`, because appInfo reads the name
+  // off metadata and PublishManager overwrites `updaterCacheDirName` after
+  // spreading the publish config -- so neither package.json nor the feed block
+  // is a place this can be said.
+  test('the editions do not share an updater cache', () => {
+    const yml = read('electron-builder.yml')
+    const build = read('scripts/build.mjs')
+
+    assert.match(yml, /^extraMetadata:\n {2}name: langalpha-desktop-oss$/m,
+      'electron-builder.yml does not stamp the oss package name')
+    assert.ok(build.includes("packageName: 'langalpha-desktop-oss'"), 'oss packageName')
+    assert.ok(build.includes("packageName: 'langalpha-desktop'"), 'saas packageName')
+
+    // The saas swap has to match the committed line exactly, the same way the
+    // other three markers do, or the hosted build keeps the oss cache name.
+    assert.match(build, /name: langalpha-desktop-oss\\r\?\$\/m/,
+      'build.mjs has no marker for the committed package name')
+
+    // The hosted edition keeps the name it already shipped with: renaming it
+    // would strand the cache of every installed hosted app.
+    assert.equal(JSON.parse(read('package.json')).name, 'langalpha-desktop')
+  })
+
   // The artifact name must not follow the display name: productName carries a
   // space in the oss edition, and the edition tag already distinguishes the files.
   test('the download filename does not inherit the display name', () => {

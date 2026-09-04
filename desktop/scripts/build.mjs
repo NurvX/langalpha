@@ -120,8 +120,8 @@ if (notarizing) {
 // edit to electron-builder.yml that moves one of these lines fails here instead
 // of shipping a hosted build wearing half the self-hosted identity.
 const IDENTITY = {
-  saas: { appId: 'ai.langalpha.desktop', productName: 'LangAlpha', scheme: 'langalpha' },
-  oss: { appId: 'ai.langalpha.desktop.oss', productName: 'LangAlpha OSS', scheme: 'langalpha-oss' },
+  saas: { appId: 'ai.langalpha.desktop', productName: 'LangAlpha', scheme: 'langalpha', packageName: 'langalpha-desktop' },
+  oss: { appId: 'ai.langalpha.desktop.oss', productName: 'LangAlpha OSS', scheme: 'langalpha-oss', packageName: 'langalpha-desktop-oss' },
 }
 const identity = IDENTITY[edition]
 if (edition !== 'oss') {
@@ -129,6 +129,9 @@ if (edition !== 'oss') {
   replace(/^productName: LangAlpha OSS\r?$/m, `productName: ${identity.productName}`, 'productName')
   replace(/^ {2}- name: LangAlpha OSS\r?$/m, `  - name: ${identity.productName}`, 'protocol name')
   replace(/^ {6}- langalpha-oss\r?$/m, `      - ${identity.scheme}`, 'protocol scheme')
+  // The hosted edition keeps the package name it has always had, so its
+  // existing updater cache carries over rather than being orphaned by a rename.
+  replace(/^ {2}name: langalpha-desktop-oss\r?$/m, `  name: ${identity.packageName}`, 'package name')
 }
 
 // `EDITION_TAG` is empty for the hosted edition on purpose: that build is the one
