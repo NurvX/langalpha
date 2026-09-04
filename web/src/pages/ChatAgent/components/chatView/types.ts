@@ -154,12 +154,6 @@ export interface MsgSelectionTooltipData {
   text: string;
 }
 
-export interface WorkspaceRecord {
-  status?: string;
-  name?: string;
-  [key: string]: unknown;
-}
-
 export interface ChatViewProps {
   workspaceId: string;
   threadId: string;

@@ -5,6 +5,7 @@
 import { api } from '@/api/client';
 import { getAuthHeaders } from '@/lib/authToken';
 import { normalizeIndexKey } from '@/lib/marketUtils';
+import type { Workspace, WorkspacesResponse } from '@/types/api';
 
 // Legacy full-window bar loader now lives in lib/bars (so lib/ never imports a
 // page); re-exported for page-internal callers that still import it from here.
@@ -488,19 +489,13 @@ export async function deleteMarketThread(threadId: string): Promise<void> {
   }
 }
 
-interface Workspace {
-  workspace_id: string;
-  name: string;
-  [key: string]: unknown;
-}
-
 /**
  * List all workspaces for the user
  * @returns {Promise<Array>} Array of workspace objects
  */
 export async function listWorkspaces(): Promise<Workspace[]> {
   try {
-    const { data } = await api.get('/api/v1/workspaces');
+    const { data } = await api.get<WorkspacesResponse>('/api/v1/workspaces');
     return data?.workspaces || [];
   } catch (error: unknown) {
     console.warn('[MarketView] Failed to list workspaces:', error);

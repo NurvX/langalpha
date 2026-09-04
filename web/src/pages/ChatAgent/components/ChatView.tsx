@@ -14,7 +14,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
 import { modelPrefs } from '@/lib/modelPreferences';
 import { updateCurrentUser } from '../../Dashboard/utils/api';
-import { getWorkspace, summarizeThread, offloadThread, getThreadShareStatus, updateThreadSharing, cancelSubagentTask } from '../utils/api';
+import { summarizeThread, offloadThread, getThreadShareStatus, updateThreadSharing, cancelSubagentTask } from '../utils/api';
 import { buildSharedServeUrl, buildWsfilesUrl } from './viewers/html/wsfilesUrl';
 import ShareReportLinkModal from './ShareReportLinkModal';
 import { toast } from '@/components/ui/use-toast';
@@ -24,6 +24,7 @@ import { saveChatSession, getChatSession, clearChatSession } from '../hooks/util
 import type { PreviewData } from '../hooks/utils/types';
 import { useCardState } from '../hooks/useCardState';
 import { useWorkspaceFiles } from '../hooks/useWorkspaceFiles';
+import { useWorkspace } from '@/hooks/useWorkspace';
 import { classifyAgentPath } from '../utils/agentPaths';
 import { taskIdFromAgentId } from '../utils/agentId';
 import {
@@ -68,7 +69,7 @@ const PreviewViewer = React.lazy(() => import('./viewers/PreviewViewer'));
 import {
   type MessageRecord, type LocationState,
   type SubagentMessage, type SlashCommand, type ModelOptions, type ActionCommand,
-  type MsgSelectionTooltipData, type WorkspaceRecord, type ChatViewProps,
+  type MsgSelectionTooltipData, type ChatViewProps,
 } from './chatView/types';
 import SubagentStatusIndicator from './chatView/SubagentStatusIndicator';
 import { ModelStatusPill } from './chatView/ModelStatusPill';
@@ -93,10 +94,32 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const marketWatchEnabled = useFeatureEnabled('market_watch');
   const queryClient = useQueryClient();
   const initialMessageSentRef = useRef(false);
-  // Determine agent mode: flash workspaces use flash mode, otherwise ptc
   const state = location.state as LocationState | null;
-  const [agentMode, setAgentMode] = useState(state?.agentMode || 'ptc');
-  const isFlashMode = agentMode === 'flash' || state?.workspaceStatus === 'flash';
+  // The workspace row drives the header title and the flash-mode fallback. It
+  // has to come from the shared detail query rather than a mount-time snapshot:
+  // a rename invalidates that key, and this view outlives the rename (it is
+  // kept mounted by the ChatView LRU, whose own copy of the name never
+  // refreshes). The prop is only the pre-fetch seed.
+  const { data: workspaceRecord } = useWorkspace(workspaceId);
+  const workspaceName = workspaceRecord?.name || initialWorkspaceName || '';
+
+  // Agent mode: what the navigation asked for, else what the workspace row
+  // says — direct URL navigation carries no route state, so the row is the
+  // only thing left that names a flash workspace.
+  //
+  // Both route-state reads are captured at mount. ChatAgent keeps up to five
+  // ChatViews rendered at once (display:none, not unmounted) and they all read
+  // the same current location, so a live read would hand every background view
+  // the mode of whatever thread the user just opened. `workspaceStatus` needs
+  // the same freeze and cannot simply be dropped: three navigations set it
+  // without an `agentMode` beside it (the sidebar's workspace-home jump, the
+  // archive fallback, and the gallery hops that inherit state).
+  const navModeRef = useRef({
+    agentMode: state?.agentMode,
+    isFlash: state?.workspaceStatus === 'flash',
+  });
+  const agentMode = navModeRef.current.agentMode || (workspaceRecord?.status === 'flash' ? 'flash' : 'ptc');
+  const isFlashMode = agentMode === 'flash' || navModeRef.current.isFlash;
 
   // The mode's currently-configured model — fallback initializer for the
   // suggestion pill's nextSendModel, mirroring ChatInput's own modePreferredModel.
@@ -106,7 +129,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     : ((modelPreference.preferred_model as string | undefined) || null);
   // Live model selection reported by ChatInput (null until it reports in).
   const [inputModel, setInputModel] = useState<string | null>(null);
-  const [workspaceName, setWorkspaceName] = useState(initialWorkspaceName || '');
   // Cross-workspace file panel: in flash mode, files live in PTC workspaces.
   // This tracks which workspace the file panel should fetch from.
   const [filePanelWorkspaceId, setFilePanelWorkspaceId] = useState<string | null>(null);
@@ -148,22 +170,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const resolvedThreadIdRef = useRef(threadId);
 
 
-
-  // Direct URL navigation fallback: detect flash workspace and resolve name from API
-  const wsFetchedRef = useRef<string | null>(null); // tracks workspaceId we already fetched for
-  useEffect(() => {
-    if (!workspaceId) return;
-    if (state?.agentMode && workspaceName) return;
-    if (wsFetchedRef.current === workspaceId) return;
-    wsFetchedRef.current = workspaceId;
-    let cancelled = false;
-    getWorkspace(workspaceId).then((ws: WorkspaceRecord) => {
-      if (cancelled) return;
-      if (ws?.status === 'flash' && !state?.agentMode) setAgentMode('flash');
-      if (ws?.name && !workspaceName) setWorkspaceName(ws.name);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [workspaceId, state?.agentMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Floating cards management - extracted to custom hook for better encapsulation
   // Must be called before useChatMessages since updateTodoListCard and updateSubagentCard are passed to it

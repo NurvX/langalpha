@@ -135,7 +135,7 @@ const baseProps: PanelProps = {
   interval: '1day',
   mode: 'ptc',
   onModeChange: vi.fn(),
-  workspaces: [{ workspace_id: 'ws-1' }],
+  workspaces: [{ workspace_id: 'ws-1', name: 'Workspace 1' }],
   selectedWorkspaceId: 'ws-1',
   onWorkspaceChange: vi.fn(),
   chartImage: null,
