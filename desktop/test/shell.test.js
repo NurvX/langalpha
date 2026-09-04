@@ -1587,6 +1587,21 @@ describe('deep links', () => {
     )
   })
 
+  // The web app relies on this: a confirmation link opened in the default
+  // browser is handed back as `langalpha://`, and only the query survives the
+  // trip. Nothing here knows an email token from an OAuth code, which is what
+  // lets /callback forward one on without the shell learning a second shape.
+  test('carry an email token across, not just an OAuth code', () => {
+    const { deeplink } = loadShell({ edition: 'saas' })
+    assert.equal(
+      deeplink.toAppUrl(
+        'langalpha://callback?token_hash=abc123&type=email',
+        'https://app.example.com/',
+      ),
+      'https://app.example.com/callback?token_hash=abc123&type=email',
+    )
+  })
+
   test('fall back to the app origin when the current page is not ours', () => {
     const { deeplink } = loadShell({ edition: 'saas' })
     assert.equal(
@@ -2217,5 +2232,44 @@ describe('the committed package is unsigned and un-notarized', () => {
     assert.ok(build.includes("'notarytool', 'submit'"), 'disk images are never submitted')
     assert.ok(build.includes("'stapler', 'staple'"), 'disk images are never stapled')
     assert.ok(build.includes("context:primary-signature"), 'the DMG is assessed with the wrong Gatekeeper context')
+  })
+})
+
+// The scheme contract spans three processes and two repos' worth of literals:
+// main writes an argv switch, preload parses it, and the web app maps the value
+// onto the path segment it marks email links with. Every consumer reads only its
+// own half, so renaming a scheme in config.js breaks nothing here, nothing in
+// tsc, and nothing in the web suite — the marked link simply addresses a scheme
+// no build answers on, and the OS opens the wrong app or none. That is the
+// failure this pins: a link marked `langalpha://` reached bare Electron on a
+// machine where the running app was the OSS edition.
+describe('the deep-link scheme contract holds across the two processes', () => {
+  const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8')
+
+  test('the switch main writes is the one preload parses', () => {
+    assert.match(read('src/main.js'), /`--langalpha-shell-scheme=\$\{config\.scheme\}`/)
+    assert.match(read('src/preload.js'), /scheme: flag\('shell-scheme'\)/)
+  })
+
+  test('the web app knows every scheme an edition can register', () => {
+    const handoff = read('../web/src/lib/desktopAuthHandoff.ts')
+    for (const edition of ['saas', 'oss']) {
+      const { scheme } = loadShell({ edition }).config
+      assert.match(
+        handoff,
+        new RegExp(`^\\s*'?${scheme}'?:\\s*'[a-z-]+',$`, 'm'),
+        `web handoff table has no entry for the ${edition} scheme '${scheme}'`,
+      )
+    }
+  })
+
+  test('the web app routes the segments it marks links with', () => {
+    const handoff = read('../web/src/lib/desktopAuthHandoff.ts')
+    const app = read('../web/src/App.tsx')
+    const segments = [...handoff.matchAll(/^\s*'?[a-z-]+'?:\s*'([a-z-]+)',$/gm)].map((m) => m[1])
+    assert.ok(segments.length >= 2, 'no segments found in the handoff table')
+    for (const page of ['/auth/confirm', '/reset-password']) {
+      assert.match(app, new RegExp(`path="${page}/:shell"`), `${page} does not serve a marked link`)
+    }
   })
 })

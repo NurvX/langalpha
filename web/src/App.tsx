@@ -150,6 +150,24 @@ function AuthCallback() {
   );
 }
 
+/**
+ * The shell's one delivery route, which is why an email token can land on it.
+ *
+ * `deeplink.toAppUrl` resolves every `langalpha://` URL onto `/callback` and
+ * copies only the query across, so a confirmation handed back from the browser
+ * arrives here rather than at the page that owns email tokens. Forward it on
+ * unread: verifying it in two places would be two ways to consume one
+ * single-use token.
+ */
+function CallbackRoute() {
+  const { search } = useLocation();
+  const params = new URLSearchParams(search);
+  if (params.get('token_hash') && params.get('type')) {
+    return <Navigate to={`/auth/confirm${search}`} replace />;
+  }
+  return <AuthCallback />;
+}
+
 // Rejects protocol-relative URLs (`//evil.com/x`) and cross-origin absolutes —
 // both would let `?redirect=` be weaponized for phishing after OAuth.
 function isSafeRedirect(target: string): boolean {
@@ -332,11 +350,23 @@ function App() {
       {isPlatformMode && APP_ENTRY_PATH === '/' && (
         <Route path="/app" element={<LegacyAppPathRedirect />} />
       )}
-      <Route path="/callback" element={<AuthCallback />} />
+      <Route path="/callback" element={<CallbackRoute />} />
       {/* Supabase email-link landing (signup confirm, magic link, recovery).
-          Static import so verification starts without a chunk-fetch flash. */}
+          Static import so verification starts without a chunk-fetch flash.
+          The trailing segment names the desktop edition a link came from, since
+          `withShellReturn` marks the path: the email template appends its own
+          `?`, leaving no room for a query marker. Taken as a parameter rather
+          than one route per edition, because `desktopAuthHandoff` is what
+          decides which segments mean anything — an unknown one just confirms
+          here, like the bare path. */}
       <Route path="/auth/confirm" element={<AuthConfirm />} />
+      <Route path="/auth/confirm/:shell" element={<AuthConfirm />} />
       <Route path="/reset-password" element={
+        <Suspense fallback={<PageLoading />}>
+          <ResetPassword />
+        </Suspense>
+      } />
+      <Route path="/reset-password/:shell" element={
         <Suspense fallback={<PageLoading />}>
           <ResetPassword />
         </Suspense>

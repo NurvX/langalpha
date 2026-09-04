@@ -37,6 +37,17 @@ contextBridge.exposeInMainWorld('langalphaDesktop', {
   windowChrome: flag('window-chrome') === 'hidden' ? 'hidden' : 'native',
 
   /**
+   * The custom scheme this edition registers, so a link that has to come back
+   * through the OS can be addressed to THIS build.
+   *
+   * The two editions answer on different schemes and install side by side, so a
+   * page that guessed would hand a hosted link to the self-hosted build, or the
+   * reverse. Empty on a shell too old to pass it, which reads as "no handoff"
+   * rather than as a wrong one. Added in shell 0.2.1.
+   */
+  scheme: flag('shell-scheme'),
+
+  /**
    * Tell the shell which theme the page settled on, so the window background
    * matches the page. A mismatch shows as a coloured band during a live resize,
    * because the frame outruns the paint and the window colour fills the gap.

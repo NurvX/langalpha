@@ -405,6 +405,10 @@ function shellArgs({ chromeHidden }) {
     // as a switch. See the note in preload.js.
     `--langalpha-shell-version=${app.getVersion()}`,
     `--langalpha-window-chrome=${chromeHidden ? 'hidden' : 'native'}`,
+    // Which scheme this edition answers on. The page cannot derive it: both
+    // editions install side by side, and an email link marked for the wrong one
+    // opens the other build, or nothing.
+    `--langalpha-shell-scheme=${config.scheme}`,
   ]
 }
 

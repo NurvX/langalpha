@@ -65,6 +65,16 @@ export interface DesktopBridge {
    * too. Only the shell knows.
    */
   readonly windowChrome?: 'hidden' | 'native';
+  /**
+   * The custom scheme this edition registers, without the `://`. Absent before
+   * shell 0.2.1, and empty rather than absent on a shell that passes the switch
+   * without a value.
+   *
+   * Needed because the two editions install side by side and answer on
+   * different schemes, so anything addressing the app through the OS has to ask
+   * which build this is instead of assuming.
+   */
+  readonly scheme?: string;
   /** Tells the shell which theme the page settled on. Added in shell 0.1.0. */
   setTheme?(theme: 'light' | 'dark'): void;
   openExternal?(url: string): Promise<void>;

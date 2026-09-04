@@ -44,6 +44,7 @@ export interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 import { isPlatformMode } from '@/config/hostMode';
+import { withShellReturn } from '../lib/desktopAuthHandoff';
 
 const _LOCAL_DEV_USER_ID = (import.meta.env.VITE_AUTH_USER_ID as string) || 'local-dev-user';
 
@@ -73,8 +74,11 @@ const _localDevValue: AuthContextValue = {
 // the PKCE `?code=` a default email template produces is auto-exchanged and
 // stripped from the URL before any component can read it, so the landing
 // path is the only reliable carrier of the "reset password" intent.
-const emailConfirmUrl = () => window.location.origin + '/auth/confirm';
-const passwordResetUrl = () => window.location.origin + '/reset-password';
+// `withShellReturn` marks these when this window is the desktop app, so the
+// browser that opens the mail passes the link back instead of redeeming it and
+// stranding the app on "check your inbox".
+const emailConfirmUrl = () => withShellReturn(window.location.origin + '/auth/confirm');
+const passwordResetUrl = () => withShellReturn(window.location.origin + '/reset-password');
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Skip all Supabase logic in OSS mode. `supabase` is checked separately
