@@ -67,6 +67,21 @@ from src.server.services.workspace_status_pubsub import (
 logger = logging.getLogger(__name__)
 
 
+_SEEDED_AGENT_MD = """# Workspace Notes
+
+<!--
+This is a starter template. Replace these comments with real content
+as you work. The system prompt has full guidelines on what to maintain.
+-->
+
+## Thread Index
+
+## Key Findings
+
+## File Index
+"""
+
+
 class WorkspaceManager(WorkspaceEntitlementsMixin):
     """Singleton that owns in-process session cache and workspace lifecycle (DB + sandbox)."""
 
@@ -976,48 +991,17 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
         )
 
     @staticmethod
-    async def _seed_agent_md(
-        sandbox: Any,
-        name: str,
-        description: Optional[str] = None,
-    ) -> None:
-        """Write a default agent.md with workspace metadata and update instructions.
+    async def _seed_agent_md(sandbox: Any, name: str) -> None:
+        """Write the starter agent.md.
 
-        Uses YAML front matter so the agent (and future tooling) can parse
-        workspace identity from the file. Includes inline instructions so
-        the agent knows how to maintain this file without detection logic.
+        The template carries no workspace name. The row is the only place the
+        name lives, and the prompt injects it from there on every turn, so a
+        copy written here could only ever go stale after a rename.
         """
         if not sandbox:
             return
 
-        desc = (
-            description
-            or "Brief 1-2 sentence description — update based on the first conversation."
-        )
-        lines = [
-            "---",
-            f"workspace_name: {name}",
-            f"description: {desc}",
-            "---",
-            "",
-            f"# {name}",
-            "",
-        ]
-        lines += [
-            "<!--",
-            "This is a starter template. Replace these comments with real content",
-            "as you work. The system prompt has full guidelines on what to maintain.",
-            "-->",
-            "",
-            "## Thread Index",
-            "",
-            "## Key Findings",
-            "",
-            "## File Index",
-            "",
-        ]
-
-        content = "\n".join(lines)
+        content = _SEEDED_AGENT_MD
         try:
             # Pass relative path — awrite_file_text calls normalize_path internally
             written = await sandbox.awrite_file_text("agent.md", content)
@@ -1641,7 +1625,7 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
                 # (ws_version=0, no discovery to kick). Seed a default agent.md as
                 # the provisioning post-init step.
                 async def _post_init(session: Session) -> None:
-                    await self._seed_agent_md(session.sandbox, name, description)
+                    await self._seed_agent_md(session.sandbox, name)
 
                 _session, workspace = await self._provision_sandbox_session(
                     workspace_id,

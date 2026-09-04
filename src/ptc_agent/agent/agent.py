@@ -432,6 +432,8 @@ class PTCAgent:
         user_profile: dict | None = None,
         plan_mode: bool = False,
         thread_id: str | None = None,
+        workspace_name: str = "",
+        workspace_description: str = "",
         on_agent_md_write: Any | None = None,
         store: Any | None = None,
         on_signed_url: Any | None = None,
@@ -833,7 +835,13 @@ class PTCAgent:
         # Workspace context middleware (agent.md injection — main agent only)
         workspace_context_middleware: list[Any] = []
         if session is not None:
-            workspace_context_middleware = [WorkspaceContextMiddleware(session=session)]
+            workspace_context_middleware = [
+                WorkspaceContextMiddleware(
+                    session=session,
+                    name=workspace_name,
+                    description=workspace_description,
+                )
+            ]
 
         # Positioned after the prompt-cache breakpoint (innermost) so dynamic
         # content doesn't invalidate the cached prefix.

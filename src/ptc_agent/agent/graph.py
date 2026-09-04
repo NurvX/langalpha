@@ -126,6 +126,23 @@ class SessionProvider(Protocol):
         ...
 
 
+async def _read_workspace_naming(workspace_id: str) -> tuple[str, str]:
+    """The workspace's name and description for the prompt's `<workspace>` block.
+
+    Read once here rather than inside the model call, so the values are bound
+    when the turn's agent is built: the model never sees the name change under
+    it mid-answer, and a rename lands on the very next turn.
+    """
+    try:
+        from src.server.database.workspace import get_workspace_name_and_description
+
+        row = await get_workspace_name_and_description(workspace_id) or {}
+        return (row.get("name") or "").strip(), (row.get("description") or "").strip()
+    except Exception as e:
+        logger.warning(f"Failed to read the name of workspace {workspace_id}: {e}")
+        return "", ""
+
+
 async def build_ptc_graph(
     conversation_id: str,
     config: AgentConfig,
@@ -153,9 +170,10 @@ async def build_ptc_graph(
             f"Failed to initialize session for conversation {conversation_id}"
         )
 
-    ptc_agent, user_data_counts = await asyncio.gather(
+    ptc_agent, user_data_counts, (workspace_name, workspace_description) = await asyncio.gather(
         asyncio.to_thread(PTCAgent, config),
         fetch_user_data_counts(user_id),
+        _read_workspace_naming(conversation_id),
     )
 
     inner_agent = ptc_agent.create_agent(
@@ -167,6 +185,8 @@ async def build_ptc_graph(
         background_registry=background_registry,
         # session gives workspace-tier memory a real namespace.
         session=session,
+        workspace_name=workspace_name,
+        workspace_description=workspace_description,
         store=store,
         on_signed_url=on_signed_url,
         user_id=user_id,
@@ -208,17 +228,26 @@ async def build_ptc_graph_with_session(
         )
 
     if user_id:
-        user_profile, user_data_counts, ptc_agent = await asyncio.gather(
+        (
+            user_profile,
+            user_data_counts,
+            ptc_agent,
+            (workspace_name, workspace_description),
+        ) = await asyncio.gather(
             get_user_profile_for_prompt(user_id),
             fetch_user_data_counts(user_id),
             asyncio.to_thread(PTCAgent, config),
+            _read_workspace_naming(workspace_id),
         )
         if user_profile:
             logger.debug(f"Loaded user profile for {user_id}: {user_profile}")
     else:
         user_profile = None
         user_data_counts = None
-        ptc_agent = await asyncio.to_thread(PTCAgent, config)
+        ptc_agent, (workspace_name, workspace_description) = await asyncio.gather(
+            asyncio.to_thread(PTCAgent, config),
+            _read_workspace_naming(workspace_id),
+        )
 
     vault_secrets = getattr(session.sandbox, "vault_secrets", None)
 
@@ -235,6 +264,8 @@ async def build_ptc_graph_with_session(
         plan_mode=plan_mode,
         session=session,
         thread_id=thread_id,
+        workspace_name=workspace_name,
+        workspace_description=workspace_description,
         on_agent_md_write=session.invalidate_agent_md,
         store=store,
         on_signed_url=on_signed_url,

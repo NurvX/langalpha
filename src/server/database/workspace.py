@@ -234,6 +234,35 @@ async def get_workspace_identity(workspace_id: str) -> Optional[Dict[str, Any]]:
         raise
 
 
+async def get_workspace_name_and_description(workspace_id: str) -> Optional[Dict[str, Any]]:
+    """Read only ``name`` + ``description`` — what the agent's prompt calls it.
+
+    Narrow for the same reason as ``get_workspace_identity``: this runs once per
+    agent turn, and ``get_workspace`` would pull the JSONB ``config``/``artifacts``
+    columns to hand back two short strings.
+    """
+    workspace_id = normalize_uuid(workspace_id)
+    if workspace_id is None:
+        return None
+
+    try:
+        async with _ws_cursor() as cur:
+            await cur.execute(
+                """
+                SELECT name, description
+                FROM workspaces
+                WHERE workspace_id = %s AND status != 'deleted'
+                """,
+                (workspace_id,),
+            )
+            result = await cur.fetchone()
+        return dict(result) if result else None
+
+    except Exception as e:
+        logger.error(f"Error reading the name of workspace {workspace_id}: {e}")
+        raise
+
+
 async def get_workspaces_for_user(
     user_id: str,
     limit: int = 20,
