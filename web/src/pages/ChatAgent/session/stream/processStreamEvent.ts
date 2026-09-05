@@ -64,6 +64,7 @@ export interface StreamRouterDeps {
  */
 // TODO: type properly — refs should use a proper interface matching StreamRefs from streamEventHandlers
 export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouterDeps, assistantMessageId: string, refs: StreamProcessorRefs, getTaskIdFromEvent: (event: SSEEvent) => string | null, wasInterruptedRef: { current: boolean } | null = null) => {
+  const reconnectOrigin = refs.isReconnect === true;
   const setMessagesForHandlers = rt.setMessages as unknown as (
     updater: (prev: Record<string, unknown>[]) => Record<string, unknown>[]
   ) => void;
@@ -129,7 +130,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
     rt.updateSubagentCard(taskId, { ...card, messages: updatedMessages });
   };
 
-  const processEvent = (event: SSEEvent): void => {
+  const dispatch = (event: SSEEvent): void => {
     const eventType = event.event || 'message_chunk';
 
     // Check if this is a subagent event — filtered from the main chat view
@@ -1037,5 +1038,33 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
     }
   };
 
+  const processEvent = (event: SSEEvent): void =>
+    dispatchWithReplayStamp(refs, reconnectOrigin, event, dispatch);
+
   return processEvent;
+};
+
+/**
+ * Dispatch a mux frame with the stamp its channel asks for. A frame marked
+ * `_replay` existed before the channel opened, so a processor born on a
+ * reconnect (its bag flipped live once the main backlog flushed) folds it
+ * as history. A processor born on a send ignores the mark: there a task's
+ * replay from 0 is its whole, fresh transcript.
+ */
+export const dispatchWithReplayStamp = (
+  refs: { isReconnect?: boolean },
+  reconnectOrigin: boolean,
+  event: SSEEvent,
+  dispatch: (event: SSEEvent) => void,
+): void => {
+  if (event._replay !== true || !reconnectOrigin || refs.isReconnect) {
+    dispatch(event);
+    return;
+  }
+  refs.isReconnect = true;
+  try {
+    dispatch(event);
+  } finally {
+    refs.isReconnect = false;
+  }
 };

@@ -429,6 +429,10 @@ export interface AssistantMessage {
   // Set when the user hard-stopped this turn (live finalize or history replay
   // of a stopped turn). Drives the per-message "⏹ Stopped" chip.
   stopped?: boolean;
+  /** Monotonic counter bumped by every landed reply text, reasoning text or
+   *  tool-argument chunk (`nextArrivalSeq`). The streaming indicator reads it
+   *  to tell arriving text from a pause. */
+  arrivalSeq?: number;
 }
 
 export type NotificationVariant = 'info' | 'success' | 'warning';

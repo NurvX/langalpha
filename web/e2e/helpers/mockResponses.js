@@ -297,6 +297,9 @@ export const sseEvents = {
     },
   }),
 
+  /** Backlog/live boundary on a reconnect stream. */
+  caughtUp: () => ({ event: 'caught_up', data: {} }),
+
   replayDone: (threadId = 'b0000001-0000-4000-8000-000000000001') => ({
     event: 'replay_done',
     data: { thread_id: threadId },

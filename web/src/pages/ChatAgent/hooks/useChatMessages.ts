@@ -45,7 +45,7 @@ import { useMarketWatch } from './useMarketWatch';
 import type {
   MessageRecord, TokenUsage, PendingInterrupt, PendingRejection,
   SSEEvent, ModelOptions, OffloadBatch, SubagentHistoryEntry, TaskRefs,
-  HistoryInterruptInfo,
+  HistoryInterruptInfo, StreamProcessorRefs,
   ModelStatus, FallbackSuggestion,
 } from '../session/types';
 import { SECRETARY_ACTION_TYPES, setCardStatus } from '../session/interrupts/buckets';
@@ -454,22 +454,27 @@ export function useChatMessages(
     isNewConversation?: boolean;
     isReconnect?: boolean;
     withUnresolvedInterrupt?: boolean;
-  } = {}) => ({
-    contentOrderCounterRef,
-    currentReasoningIdRef,
-    currentToolCallIdRef,
-    steeringAtOrderRef,
-    updateTodoListCard: updateTodoListCard || undefined,
-    isNewConversation: o.isNewConversation ?? false,
-    subagentStateRefs: subagentStateRefsRef.current,
-    updateSubagentCard: !updateSubagentCard
-      ? (() => {})
-      : o.isReconnect
-        ? (agentId: string, data: Record<string, unknown>) => updateSubagentCard(agentId, { ...data, isReconnect: true })
-        : updateSubagentCard,
-    ...(o.isReconnect ? { isReconnect: true } : {}),
-    ...(o.withUnresolvedInterrupt ? { unresolvedHistoryInterruptRef } : {}),
-  });
+  } = {}): StreamProcessorRefs => {
+    const refs: StreamProcessorRefs = {
+      contentOrderCounterRef,
+      currentReasoningIdRef,
+      currentToolCallIdRef,
+      steeringAtOrderRef,
+      updateTodoListCard: updateTodoListCard || undefined,
+      isNewConversation: o.isNewConversation ?? false,
+      subagentStateRefs: subagentStateRefsRef.current,
+      updateSubagentCard: updateSubagentCard || (() => {}),
+      ...(o.isReconnect ? { isReconnect: true } : {}),
+      ...(o.withUnresolvedInterrupt ? { unresolvedHistoryInterruptRef } : {}),
+    };
+    // Read at call time: a reconnect flips the bag live once its backlog is
+    // applied, and the cards it updates after that are live too.
+    if (updateSubagentCard && o.isReconnect) {
+      refs.updateSubagentCard = (agentId: string, data: Record<string, unknown>) =>
+        updateSubagentCard(agentId, refs.isReconnect ? { ...data, isReconnect: true } : data);
+    }
+    return refs;
+  };
 
   // Per-task running total of token usage. Backend emits per-call deltas via
   // `context_window/token_usage` events; we sum here. The ref is the source

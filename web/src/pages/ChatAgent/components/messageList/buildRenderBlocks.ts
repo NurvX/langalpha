@@ -1,14 +1,15 @@
 import { chartInstanceKey, planChartAnnotationCards } from '../chartAnnotationGrouping';
 import { INLINE_ARTIFACT_TOOLS } from '../charts/InlineArtifactCards';
 import { normalizeSubagentText } from './normalizeSubagentText';
+import { MIN_LIVE_EXPOSURE_MS } from './liveZoneTiming';
 import type { ContentSegmentRecord, ToolCallProcessRecord } from './types';
 
-const MIN_LIVE_EXPOSURE_MS = 1800; // minimum time a just-completed item stays in the live zone before folding
-const MAX_IN_PROGRESS_MS = 15000; // max time a tool call can stay in-progress in live view before archiving (independent of MIN_LIVE_EXPOSURE_MS)
+export const MAX_IN_PROGRESS_MS = 15000; // max time a tool call can stay in-progress in live view before archiving (independent of MIN_LIVE_EXPOSURE_MS)
 /** Tools that should stay in the live zone for their entire duration (no MAX_IN_PROGRESS_MS cap) */
-const ALWAYS_LIVE_TOOLS = new Set(['TaskOutput', 'WebFetch']);
+export const ALWAYS_LIVE_TOOLS = new Set(['TaskOutput', 'WebFetch']);
 /** Tool calls that are never rendered as visible activity items — they have dedicated UI or are internal */
-const HIDDEN_TOOL_CALL_NAMES = new Set(['TodoWrite', 'task', 'Task', 'SubmitPlan', 'AskUserQuestion', 'manage_workspaces', 'ptc_agent', 'agent_output', 'manage_threads', 'ShowWidget']);
+/** Tools the transcript never draws a card for; the spinner gate skips them too. */
+export const HIDDEN_TOOL_CALL_NAMES = new Set(['TodoWrite', 'task', 'Task', 'SubmitPlan', 'AskUserQuestion', 'manage_workspaces', 'ptc_agent', 'agent_output', 'manage_threads', 'ShowWidget']);
 
 /** Render block types for the inline activity grouping */
 export interface ActivityRenderBlock {

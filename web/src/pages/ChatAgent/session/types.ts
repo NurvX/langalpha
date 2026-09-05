@@ -8,6 +8,7 @@ import type React from 'react';
 import type { ChatMessage } from '@/types/chat';
 import type { ActionRequest, ToolCallData } from '@/types/sse';
 import type { SubagentTokenUsage } from '../utils/tokenUsage';
+import type { StreamRefs } from './streamRefs';
 
 // --- Internal types for useChatMessages ---
 
@@ -56,6 +57,9 @@ interface SSEEvent {
   role?: string;
   turn_index?: number;
   _eventId?: number | string;
+  // Set by the thread mux on a frame from a channel still replaying the
+  // backlog that existed when it opened; cleared by chan_caught_up.
+  _replay?: boolean;
   timestamp?: string | number;
   metadata?: Record<string, unknown>;
   tool_calls?: ToolCallData[];
@@ -222,19 +226,12 @@ interface SubagentHistoryData {
   projectedRunStartedMs?: number;
 }
 
-/** Refs passed to createStreamEventProcessor and its processEvent closure. */
-interface StreamProcessorRefs {
-  contentOrderCounterRef: { current: number };
-  currentReasoningIdRef: { current: string | null };
-  currentToolCallIdRef: { current: string | null };
+/** Refs passed to createStreamEventProcessor and its processEvent closure:
+ *  the handler-facing bag plus the fields only the main stream carries. */
+interface StreamProcessorRefs extends StreamRefs {
   steeringAtOrderRef?: { current: number | null };
-  updateTodoListCard?: ((data: Record<string, unknown>, isNew: boolean) => void) | undefined;
-  isNewConversation?: boolean;
-  subagentStateRefs?: Record<string, TaskRefs>;
   updateSubagentCard?: ((agentId: string, data: Record<string, unknown>) => void);
-  isReconnect?: boolean;
   unresolvedHistoryInterruptRef?: React.MutableRefObject<HistoryInterruptInfo[]>;
-  [key: string]: unknown;
 }
 
 /** Pair state tracked per turn_index during history replay. */

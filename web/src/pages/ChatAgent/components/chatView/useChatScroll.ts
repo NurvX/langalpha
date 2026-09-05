@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isNearBottom } from '../../utils/scrollHelpers';
 import { findMessageElement, resolveScrollContent, resolveScrollViewport } from '../../utils/scrollDom';
 import { scrollMemory } from '@/lib/scrollMemory';
@@ -117,7 +117,6 @@ export function useChatScroll({ activeAgentId, messages, isActive, isActiveRef, 
   const programmaticReleaseRef = useRef<(() => void) | null>(null);
   const settleQuietTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settleHardCapRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reapplyRafRef = useRef<number | null>(null);
   const restoredForThreadRef = useRef<string | null>(null);
   // Streaming auto-follow's deferred scroll, and the entry-restore frame —
   // tracked so a thread switch / unmount cancels a pending scroll instead of
@@ -252,27 +251,27 @@ export function useChatScroll({ activeAgentId, messages, isActive, isActiveRef, 
     [getScrollContainer, withProgrammaticScroll, armSettleTimers, setPillState],
   );
 
-  // Re-apply the pin target (rAF-coalesced); called by the ResizeObserver each
-  // time content settles, so async media finishing layout can't strand the user
-  // mid-thread ('bottom') or clamp a remembered offset short ('offset').
+  // Re-apply the pin target; called by the ResizeObserver each time content
+  // settles, so async media finishing layout can't strand the user mid-thread
+  // ('bottom') or clamp a remembered offset short ('offset'). Applied right
+  // there, not in a deferred frame: the observer already runs after layout and
+  // before paint, so the frame that shows the taller transcript is the frame
+  // that shows it scrolled. Deferring by a frame painted the growth first and
+  // the scroll a frame later, a visible snap on every reload and return.
   const reapplyPin = useCallback(() => {
-    if (reapplyRafRef.current != null) return;
-    reapplyRafRef.current = requestAnimationFrame(() => {
-      reapplyRafRef.current = null;
-      const c = getScrollContainer(scrollAreaRef);
-      const target = pinTargetRef.current;
-      if (!target || !c) return;
-      const top =
-        target.mode === 'bottom' ? c.scrollHeight : target.mode === 'offset' ? target.top : anchorTop(c, target.id);
-      if (top == null) {
-        // The anchored bubble left the transcript (edit / regenerate truncation).
-        pinTargetRef.current = null;
-        clearSettleTimers();
-        return;
-      }
-      withProgrammaticScroll(() => c.scrollTo({ top }), 'auto');
-      armSettleTimers();
-    });
+    const c = getScrollContainer(scrollAreaRef);
+    const target = pinTargetRef.current;
+    if (!target || !c) return;
+    const top =
+      target.mode === 'bottom' ? c.scrollHeight : target.mode === 'offset' ? target.top : anchorTop(c, target.id);
+    if (top == null) {
+      // The anchored bubble left the transcript (edit / regenerate truncation).
+      pinTargetRef.current = null;
+      clearSettleTimers();
+      return;
+    }
+    withProgrammaticScroll(() => c.scrollTo({ top }), 'auto');
+    armSettleTimers();
   }, [getScrollContainer, withProgrammaticScroll, armSettleTimers, clearSettleTimers]);
 
   // Scroll a bubble under the viewport top and hold it there through the settle
@@ -393,10 +392,6 @@ export function useChatScroll({ activeAgentId, messages, isActive, isActiveRef, 
       c.removeEventListener('wheel', handleUserIntent);
       c.removeEventListener('touchstart', handleUserIntent);
       ro?.disconnect();
-      if (reapplyRafRef.current != null) {
-        cancelAnimationFrame(reapplyRafRef.current);
-        reapplyRafRef.current = null;
-      }
     };
   }, [activeAgentId, getScrollContainer, getScrollContent, reapplyPin, clearSettleTimers]);
 
@@ -443,7 +438,10 @@ export function useChatScroll({ activeAgentId, messages, isActive, isActiveRef, 
   // remembered mid-thread offset (scrollMemory, survives route unmounts) wins
   // over the default bottom pin, so tabbing away and back lands where the user
   // left; 'bottom' / no memory pins to bottom through the async settle window.
-  useEffect(() => {
+  // A layout effect, applied in the same commit that renders the history: the
+  // first frame the user sees of the thread is already in position. The
+  // deferred frame remains only for a viewport that is not mounted yet.
+  useLayoutEffect(() => {
     if (!isActive) return;
     const tid = currentThreadId || threadId;
     if (!tid || tid === '__default__') return;
@@ -469,26 +467,33 @@ export function useChatScroll({ activeAgentId, messages, isActive, isActiveRef, 
       isNearBottomRef.current = false;
       pillBaselineLenRef.current = messagesLenRef.current;
       setPillState({ visible: true, hasNew: false, newCount: 0 });
-      entryRestoreRafRef.current = requestAnimationFrame(() => {
-        entryRestoreRafRef.current = null;
-        // The instance may have gone inactive (cached/hidden) before this frame.
-        const c = isActiveRef.current ? getScrollContainer(scrollAreaRef) : null;
-        if (!c) {
-          // The apply never ran — release the claim so a stale pin can't
-          // block follows when the instance reactivates.
-          if (pinTargetRef.current?.mode === 'offset') pinTargetRef.current = null;
-          return;
-        }
+    }
+    // One apply for both targets: run in this commit when the viewport is
+    // already mounted, on the next frame when it is not.
+    const apply = () => {
+      // The instance may have gone inactive (cached/hidden) before the frame.
+      const c = isActiveRef.current ? getScrollContainer(scrollAreaRef) : null;
+      if (!c) {
+        // Nothing was applied: release the claim so a stale pin can't block
+        // follows when the instance reactivates.
+        if (pinTargetRef.current?.mode === 'offset') pinTargetRef.current = null;
+        return;
+      }
+      if (typeof saved === 'number') {
         withProgrammaticScroll(() => {
           c.scrollTop = saved;
         });
         armSettleTimers();
-      });
+      } else {
+        pinToBottom('auto');
+      }
+    };
+    if (getScrollContainer(scrollAreaRef)) {
+      apply();
     } else {
       entryRestoreRafRef.current = requestAnimationFrame(() => {
         entryRestoreRafRef.current = null;
-        if (!isActiveRef.current) return;
-        pinToBottom('auto');
+        apply();
       });
     }
     return () => {
@@ -506,7 +511,6 @@ export function useChatScroll({ activeAgentId, messages, isActive, isActiveRef, 
     return () => {
       if (settleQuietTimerRef.current) clearTimeout(settleQuietTimerRef.current);
       if (settleHardCapRef.current) clearTimeout(settleHardCapRef.current);
-      if (reapplyRafRef.current != null) cancelAnimationFrame(reapplyRafRef.current);
       if (streamFollowTimerRef.current) clearTimeout(streamFollowTimerRef.current);
       if (entryRestoreRafRef.current != null) cancelAnimationFrame(entryRestoreRafRef.current);
     };

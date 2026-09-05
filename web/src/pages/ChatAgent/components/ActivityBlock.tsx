@@ -54,6 +54,8 @@ const SPRING_SNAPPY = { type: 'spring' as const, stiffness: 200, damping: 22 };
 const SPRING_FOLD = { type: 'spring' as const, stiffness: 260, damping: 30 };
 /** Quick tween for live rows clearing out — exits shouldn't draw the eye. */
 const EXIT_TWEEN = { duration: 0.18, ease: 'easeIn' as const };
+// Derived from EXIT_TWEEN so the live zone's top gap closes with its last row.
+const LIVE_ZONE_MARGIN_MS = EXIT_TWEEN.duration * 1000;
 
 type LiveState = 'active' | 'completing' | 'completed' | 'failed';
 
@@ -391,98 +393,101 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
         )}
       </AnimatePresence>
 
-      {/* Live zone (bottom) -- active/completing items + preparing */}
-      <AnimatePresence initial={false}>
-        {(hasLive || hasPreparingTools) && (
-          <motion.div
-            key="live-zone"
-            className={`${hasCompleted ? 'mt-2 ' : '-mt-1 '}space-y-2`}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0, height: 0, marginTop: 0 }}
-            transition={SPRING_SNAPPY}
-            style={{ overflow: 'hidden' }}
-          >
-            {/* Live items in chronological order */}
-            <AnimatePresence initial={false}>
-              {liveItems.map(item => {
-                if (item.type === 'reasoning') {
-                  const { title: extractedTitle, body: extractedBody } = extractLeadingBoldHeader(item.content || '');
-                  const effectiveTitle = item.reasoningTitle || extractedTitle;
-                  const liveBody = extractedTitle ? extractedBody : item.content;
-                  return (
-                    <motion.div
-                      key={`live-r-${item.id}`}
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: item._liveState === 'completing' ? 0.7 : 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0, transition: EXIT_TWEEN }}
-                      transition={SPRING_SNAPPY}
-                      style={{ overflow: 'hidden', paddingTop: '8px', paddingBottom: '8px' }}
-                      className="px-3"
-                    >
-                      <div
-                        className="flex items-center gap-2 mb-1"
-                        style={{ fontSize: '0.8125rem', color: 'var(--Labels-Secondary)' }}
-                      >
-                        <Brain className="h-4 w-4 flex-shrink-0" />
-                        {item._liveState === 'active' ? (
-                          <TextShimmer
-                            as="span"
-                            className="font-medium truncate text-[0.8125rem] [--base-color:var(--Labels-Secondary)] [--base-gradient-color:var(--color-text-primary)]"
-                            duration={1.5}
-                          >
-                            {effectiveTitle || t('toolArtifact.reasoningPending')}
-                          </TextShimmer>
-                        ) : (
-                          <span className="font-medium truncate">{effectiveTitle || t('toolArtifact.reasoningComplete')}</span>
-                        )}
-                      </div>
-
-                      {liveBody && (
-                        <AnimatedReasoningContent
-                          content={liveBody}
-                          isStreaming={item._liveState === 'active'}
-                        />
-                      )}
-                    </motion.div>
-                  );
-                }
-                if (item.type === 'tool_call') {
-                  return (
-                    <motion.div
-                      key={`live-t-${item.id || item.toolCallId}`}
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0, transition: EXIT_TWEEN }}
-                      transition={SPRING_SNAPPY}
-                      style={{ overflow: 'hidden' }}
-                    >
-                      <ToolCallLiveRow tc={item} liveState={item._liveState} />
-                    </motion.div>
-                  );
-                }
-                return null;
-              })}
-            </AnimatePresence>
-
-            {/* Preparing tool call -- always at the bottom */}
-            <AnimatePresence initial={false}>
-              {hasPreparingTools && (
+      {/* Live zone (bottom) -- active/completing items + preparing.
+          A plain block that stays mounted: the rows animate their own height
+          in and out, so the container never carries one. An animated
+          container exit is a trap here -- the next tool call routinely lands
+          mid-collapse, and framer-motion restores a re-entering element by
+          animating the exit keys back to their remembered values, leaving an
+          inline pixel height that no later render clears. The gap from the
+          accordion collapses with the last row via a CSS transition. */}
+      <div
+        data-testid="activity-live-zone"
+        className="space-y-2"
+        style={{
+          // The former mt-2 / -mt-1, kept in rem so it still tracks --app-font-scale.
+          marginTop: hasLive || hasPreparingTools ? (hasCompleted ? '0.5rem' : '-0.25rem') : 0,
+          transition: `margin-top ${LIVE_ZONE_MARGIN_MS}ms ease-in`,
+        }}
+      >
+        {/* Live items in chronological order */}
+        <AnimatePresence initial={false}>
+          {liveItems.map(item => {
+            if (item.type === 'reasoning') {
+              const { title: extractedTitle, body: extractedBody } = extractLeadingBoldHeader(item.content || '');
+              const effectiveTitle = item.reasoningTitle || extractedTitle;
+              const liveBody = extractedTitle ? extractedBody : item.content;
+              return (
                 <motion.div
-                  key="preparing"
+                  key={`live-r-${item.id}`}
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: item._liveState === 'completing' ? 0.7 : 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0, transition: EXIT_TWEEN }}
+                  transition={SPRING_SNAPPY}
+                  style={{ overflow: 'hidden', paddingTop: '8px', paddingBottom: '8px' }}
+                  className="px-3"
+                >
+                  <div
+                    className="flex items-center gap-2 mb-1"
+                    style={{ fontSize: '0.8125rem', color: 'var(--Labels-Secondary)' }}
+                  >
+                    <Brain className="h-4 w-4 flex-shrink-0" />
+                    {item._liveState === 'active' ? (
+                      <TextShimmer
+                        as="span"
+                        className="font-medium truncate text-[0.8125rem] [--base-color:var(--Labels-Secondary)] [--base-gradient-color:var(--color-text-primary)]"
+                        duration={1.5}
+                      >
+                        {effectiveTitle || t('toolArtifact.reasoningPending')}
+                      </TextShimmer>
+                    ) : (
+                      <span className="font-medium truncate">{effectiveTitle || t('toolArtifact.reasoningComplete')}</span>
+                    )}
+                  </div>
+
+                  {liveBody && (
+                    <AnimatedReasoningContent
+                      content={liveBody}
+                      isStreaming={item._liveState === 'active'}
+                    />
+                  )}
+                </motion.div>
+              );
+            }
+            if (item.type === 'tool_call') {
+              return (
+                <motion.div
+                  key={`live-t-${item.id || item.toolCallId}`}
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
+                  exit={{ opacity: 0, height: 0, transition: EXIT_TWEEN }}
                   transition={SPRING_SNAPPY}
                   style={{ overflow: 'hidden' }}
                 >
-                  <PreparingToolCallRow tc={preparingToolCall!} />
+                  <ToolCallLiveRow tc={item} liveState={item._liveState} />
                 </motion.div>
-              )}
-            </AnimatePresence>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              );
+            }
+            return null;
+          })}
+        </AnimatePresence>
+
+        {/* Preparing tool call -- always at the bottom */}
+        <AnimatePresence initial={false}>
+          {hasPreparingTools && (
+            <motion.div
+              key="preparing"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={SPRING_SNAPPY}
+              style={{ overflow: 'hidden' }}
+            >
+              <PreparingToolCallRow tc={preparingToolCall!} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 });
@@ -534,6 +539,9 @@ interface AnimatedReasoningContentProps {
   isStreaming: boolean;
 }
 
+/** Module scope, not a literal: a fresh object would defeat Markdown's memo on every tick. */
+const REASONING_STYLE = { opacity: 0.8 };
+
 function AnimatedReasoningContent({ content, isStreaming }: AnimatedReasoningContentProps): React.ReactElement {
   const displayText = useAnimatedText(content || '', { enabled: isStreaming });
   return (
@@ -541,7 +549,7 @@ function AnimatedReasoningContent({ content, isStreaming }: AnimatedReasoningCon
       variant="compact"
       content={displayText}
       className="text-xs"
-      style={{ opacity: 0.8 }}
+      style={REASONING_STYLE}
     />
   );
 }

@@ -7,6 +7,10 @@ const E2E_PORT = 5176;
 // dev server boots, not per test. So it gets a server of its own rather than a
 // flag some spec could flip.
 const E2E_AUTH_PORT = 5177;
+// PERF_BUILD only means anything under PERF: the benchmarks are the one caller
+// that wants a production build, and a PERF_BUILD left in the shell must not
+// make an ordinary e2e run wait four minutes for a vite build first.
+const PERF_BUILD = !!process.env.PERF && !!process.env.PERF_BUILD;
 
 export default defineConfig({
   testDir: './e2e',
@@ -21,8 +25,14 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `npm run dev -- --port ${E2E_PORT}`,
+      // PERF=1 PERF_BUILD=1 serves a production build instead of the dev server,
+      // so the smoothness benchmark (e2e/perf) measures shipped code rather than
+      // the dev JSX runtime and HMR client. Everything else is identical.
+      command: PERF_BUILD
+        ? `npx vite build --outDir dist-perf && npx vite preview --port ${E2E_PORT} --outDir dist-perf`
+        : `npm run dev -- --port ${E2E_PORT}`,
       port: E2E_PORT,
+      timeout: PERF_BUILD ? 240_000 : 60_000,
       // Always start fresh: the env block below is load-bearing (forces OSS mode
       // and clears Supabase vars). If we reused an existing server, a developer's
       // pre-running `pnpm dev` with personal .env would silently override these.

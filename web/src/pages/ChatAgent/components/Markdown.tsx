@@ -14,6 +14,7 @@ import WorkspaceImage from './WorkspaceImage';
 import { isFilePath, isImagePath, normalizeFilePath, parseWsPath } from './FileCard';
 import { normalizeFileRefs } from '../utils/normalizeFileRefs';
 import { mapOutsideCode, mapOutsideMultilineCode } from '../utils/markdownSegments';
+import { splitMarkdownBlocks } from '../utils/markdownBlocks';
 import CitationBubble from './CitationBubble';
 
 // Sanitize schema: extends GitHub-style defaults to allow KaTeX output,
@@ -59,7 +60,11 @@ interface CodeBlockProps {
 }
 
 // --- CodeBlock component ---
-function CodeBlock({ language, code, compact = false, codeTheme }: CodeBlockProps): React.ReactElement {
+// Memoized on its primitive props: prism re-tokenizes and rebuilds an element
+// per token on every render, which was the single largest cost of a streaming
+// reply once it contained a fence. The parent re-renders on every typewriter
+// tick; the code itself only changes while its own fence is still open.
+const CodeBlock = React.memo(function CodeBlock({ language, code, compact = false, codeTheme }: CodeBlockProps): React.ReactElement {
   const { theme } = useTheme();
   const effectiveTheme = codeTheme ?? theme;
   const [copied, setCopied] = useState(false);
@@ -141,7 +146,7 @@ function CodeBlock({ language, code, compact = false, codeTheme }: CodeBlockProp
       </div>
     </div>
   );
-}
+});
 
 // --- JSON auto-detection helper ---
 function tryFormatJson(code: string): { formatted: string; language: string } | null {
@@ -603,6 +608,39 @@ function transformCitationBubbles(content: string): string {
 
 type MarkdownVariant = 'chat' | 'panel' | 'compact';
 
+const REMARK_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['remarkPlugins'] = [
+  [remarkGfm, { singleTilde: false }], remarkCjkFriendly, remarkMath,
+];
+const REHYPE_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['rehypePlugins'] = [
+  [rehypeKatex, { strict: false }], rehypeRaw, [rehypeSanitize, sanitizeSchema],
+];
+
+interface MarkdownBlockProps {
+  source: string;
+  components: React.ComponentProps<typeof ReactMarkdown>['components'];
+}
+
+// One parsed block. Memoized on its source, so a streaming reply only re-parses
+// the block still receiving text; the blocks above it keep their DOM, and a
+// fence in them is highlighted once. The tree is keyed on the block's line
+// count so the block being streamed remounts on each newline, which clears a
+// stale inline-emphasis node React otherwise leaves behind mid-stream.
+//
+// The key is not scoped to prose blocks: a fence needs no such clearing, but a
+// block can hold both (an intro line with the fence opened right under it, no
+// blank line between), so there is no reliable per-block test. A fence still
+// arriving therefore re-highlights on each newline. The cost is bounded to the
+// one block receiving text, and the blocks already settled above it are
+// untouched, which is the whole point of splitting.
+const MarkdownBlock = React.memo(function MarkdownBlock({ source, components }: MarkdownBlockProps) {
+  const lineKey = useMemo(() => (source.match(/\n/g) || []).length, [source]);
+  return (
+    <ReactMarkdown key={lineKey} remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components}>
+      {source}
+    </ReactMarkdown>
+  );
+});
+
 interface MarkdownProps {
   content: string;
   variant?: MarkdownVariant;
@@ -633,7 +671,7 @@ function Markdown({ content, variant = 'panel', className = '', style, onOpenFil
     );
   }, [content]);
 
-  const lineKey = useMemo(() => (processed.match(/\n/g) || []).length, [processed]);
+  const blocks = useMemo(() => splitMarkdownBlocks(processed), [processed]);
 
   const components = useMemo(() => {
     let result = config.components;
@@ -717,12 +755,19 @@ function Markdown({ content, variant = 'panel', className = '', style, onOpenFil
       className={`font-content ${config.className} ${className}`.trim()}
       style={{ ...config.style, ...style }}
     >
-      <ReactMarkdown key={lineKey} remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkCjkFriendly, remarkMath]} rehypePlugins={[[rehypeKatex, { strict: false }], rehypeRaw, [rehypeSanitize, sanitizeSchema]]} components={components}>
-        {processed}
-      </ReactMarkdown>
+      {blocks.map((block, i) => (
+        <React.Fragment key={i}>
+          {/* mdast-to-hast puts a newline text node between top-level siblings;
+              keep the DOM identical to a whole-document render. */}
+          {i > 0 && '\n'}
+          <MarkdownBlock source={block} components={components} />
+        </React.Fragment>
+      ))}
     </div>
   );
 }
 
 export { transformCitationBubbles, escapeHtmlAttr };
-export default Markdown;
+// Shallow compare: a caller that varies `style` must hoist the object, or the
+// memo never hits and every tick re-parses the document.
+export default React.memo(Markdown);
