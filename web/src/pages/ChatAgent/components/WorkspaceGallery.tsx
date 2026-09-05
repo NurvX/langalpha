@@ -367,7 +367,7 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
 
   // Derive workspace list from query data
   const workspaces = useMemo((): WorkspaceRecord[] => {
-    const list = (wsData as any)?.workspaces || []; // TODO: type properly
+    const list = wsData?.workspaces || [];
     // Prepend flash workspace on first page when not searching
     if (flashWs && isFirstPage && !isSearching) {
       return [flashWs as WorkspaceRecord, ...list];
@@ -375,13 +375,13 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     return list;
   }, [wsData, flashWs, isFirstPage, isSearching]);
 
-  const totalWorkspaces = (wsData as any)?.total || 0; // TODO: type properly
+  const totalWorkspaces = wsData?.total || 0;
   const totalPages = Math.ceil((totalWorkspaces + 1) / pageSize);
 
   // Sync allWorkspaces state from query data when in reorder mode
   useEffect(() => {
-    if (isReorderMode && (allWsData as any)?.workspaces) {
-      const list = (allWsData as any).workspaces;
+    if (isReorderMode && allWsData?.workspaces) {
+      const list = allWsData.workspaces;
       setAllWorkspaces(flashWs ? [flashWs as WorkspaceRecord, ...list] : list);
     }
   }, [isReorderMode, allWsData, flashWs]);

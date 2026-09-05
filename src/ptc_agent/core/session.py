@@ -103,25 +103,31 @@ class Session:
         """Read agent.md from sandbox, with session-level caching.
 
         Returns cached content unless invalidated by invalidate_agent_md().
+
+        A failed read keeps the previous value and stays dirty. Caching the
+        failure as None would conflate "the workspace has no notes" with "the
+        sandbox did not answer", handing the model the no-agent.md placeholder
+        and inviting it to recreate a file that already exists.
         """
         if self._agent_md_dirty:
-            if self.sandbox:
-                try:
-                    self._agent_md_cache = await self.sandbox.aread_file_text(
-                        self.sandbox.normalize_path("agent.md")
-                    )
-                except Exception:
-                    # A missing agent.md is a silent None from aread_file_text;
-                    # reaching here means the read itself failed.
-                    logger.warning(
-                        "Failed to read agent.md",
-                        conversation_id=self.conversation_id,
-                        exc_info=True,
-                    )
-                    self._agent_md_cache = None
+            try:
+                content = (
+                    await self.sandbox.aread_file_text(self.sandbox.normalize_path("agent.md"))
+                    if self.sandbox
+                    else None
+                )
+            except Exception:
+                # A missing agent.md is a silent None from aread_file_text;
+                # reaching here means the read itself failed, so fall through
+                # holding the last good value and stay dirty for a retry.
+                logger.warning(
+                    "Failed to read agent.md",
+                    conversation_id=self.conversation_id,
+                    exc_info=True,
+                )
             else:
-                self._agent_md_cache = None
-            self._agent_md_dirty = False
+                self._agent_md_cache = content
+                self._agent_md_dirty = False
         return self._agent_md_cache
 
     def invalidate_agent_md(self) -> None:

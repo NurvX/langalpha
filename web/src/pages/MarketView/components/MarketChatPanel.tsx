@@ -25,6 +25,7 @@ import {
 } from '../../ChatAgent/session/subagents/resolveSubagentTelemetry';
 import type { ToolCallProcessRecord, SubagentInfo } from '../../ChatAgent/components/ToolCallDetailView';
 import type { PreviewData } from '../../ChatAgent/hooks/utils/types';
+import type { Workspace } from '@/types/api';
 import MarketChatHistoryButton from './MarketChatHistoryButton';
 import MarketDetailDialog, { type DialogPayload } from './MarketDetailDialog';
 import { getMarketThreadId, setMarketThreadId, clearMarketThreadId } from '../utils/threadPersistence';
@@ -74,13 +75,6 @@ interface ModelOptionsLike {
   model?: string | null;
   reasoningEffort?: string | null;
   fastMode?: boolean | null;
-}
-
-interface Workspace {
-  workspace_id: string;
-  name?: string;
-  status?: string;
-  [key: string]: unknown;
 }
 
 interface AttachmentItem {
@@ -999,7 +993,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
         mode={mode}
         onModeChange={onModeChange}
         ptcDisabledReason={ptcDisabledReason}
-        workspaces={ptcWorkspaces as never}
+        workspaces={ptcWorkspaces}
         selectedWorkspaceId={selectedWorkspaceId}
         onWorkspaceChange={onWorkspaceChange}
         onCaptureChart={onCaptureChart}

@@ -993,14 +993,26 @@ class TestSeedAgentMd:
         sandbox = AsyncMock()
         sandbox.awrite_file_text = AsyncMock(return_value=True)
 
-        await WorkspaceManager._seed_agent_md(sandbox, "My Workspace", "A description")
+        await WorkspaceManager._seed_agent_md(sandbox, "My Workspace")
 
         sandbox.awrite_file_text.assert_awaited_once()
         call_args = sandbox.awrite_file_text.call_args
         assert call_args[0][0] == "agent.md"
-        content = call_args[0][1]
-        assert "My Workspace" in content
-        assert "A description" in content
+        assert "## Thread Index" in call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_the_template_does_not_name_the_workspace(self):
+        # The row is the only place the name lives, and the prompt injects it
+        # from there each turn. A copy written here could only go stale, which
+        # is the whole bug the front-matter block used to cause.
+        sandbox = AsyncMock()
+        sandbox.awrite_file_text = AsyncMock(return_value=True)
+
+        await WorkspaceManager._seed_agent_md(sandbox, "My Workspace")
+
+        content = sandbox.awrite_file_text.call_args[0][1]
+        assert "My Workspace" not in content
+        assert not content.startswith("---")
 
     @pytest.mark.asyncio
     async def test_seed_agent_md_none_sandbox_noop(self):

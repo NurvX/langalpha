@@ -343,7 +343,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     enabled: !isLoading && prefs.gettingStartedDismissedAt === null && !workspaceStamped,
   });
   const hasWorkspace =
-    ((workspacesData as { workspaces?: unknown[] } | undefined)?.workspaces?.length ?? 0) > 0;
+    (workspacesData?.workspaces?.length ?? 0) > 0;
   useEffect(() => {
     if (hasWorkspace && !workspaceStamped) markTaskDone('createWorkspace');
   }, [hasWorkspace, workspaceStamped, markTaskDone]);
