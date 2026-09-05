@@ -97,6 +97,28 @@ async def test_openai_parent_does_not_rewrite_or_force_response_api():
 
 
 @pytest.mark.asyncio
+async def test_dashscope_parent_does_not_rewrite_or_force_response_api():
+    """A DashScope parent is OpenAI-shaped, so it gets the gateway treatment too.
+
+    DashScope's manifest entry declares ``sdk: "dashscope"`` to route built-in
+    Qwen models at their own client, but a custom provider under that parent is
+    still someone's own endpoint. Rewriting it would inherit the manifest's
+    ``use_response_api`` and session-cache header, putting a gateway that only
+    speaks ``/chat/completions`` onto ``/responses`` with no way to opt out.
+    """
+    provider_def = {"name": "my-qwen-gw", "parent_provider": "vendor-parent"}
+    custom_model = {"name": "eval-model", "model_id": "some-model", "provider": "my-qwen-gw"}
+    mc = _mock_mc("dashscope", parent_extra={"use_response_api": True})
+
+    p1, p2, p3 = _patches(provider_def)
+    with p1, p2, p3:
+        byok, base_url, out = await _resolve_custom_model_byok("u", "eval-model", dict(custom_model), mc)
+
+    assert out["provider"] == "my-qwen-gw"
+    assert "_use_response_api" not in out
+
+
+@pytest.mark.asyncio
 async def test_custom_provider_explicit_use_response_api_opt_in_preserved():
     """A custom provider that explicitly opts into the Responses API still gets
     the ``_use_response_api`` flag, regardless of parent SDK."""
