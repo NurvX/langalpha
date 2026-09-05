@@ -30,6 +30,10 @@ export function handleReasoningSignal({ assistantMessageId, signalContent, refs,
   eventId?: number | null;
 }): boolean {
   const { contentOrderCounterRef, currentReasoningIdRef } = refs;
+  // Stamped on arrival, not inside the updater: React runs the updater after
+  // a reconnect flush has already flipped the bag live, and a completion the
+  // backlog carried must still fold on arrival rather than take a live turn.
+  const completedAt = refs.isReconnect ? 1 : Date.now();
 
   if (signalContent === 'start') {
     // Reasoning process has started - create new reasoning process
@@ -83,7 +87,7 @@ export function handleReasoningSignal({ assistantMessageId, signalContent, refs,
               isReasoning: false,
               reasoningComplete: true,
               reasoningTitle: null,
-              _completedAt: refs.isReconnect ? 1 : Date.now(),
+              _completedAt: completedAt,
             };
           }
 
@@ -252,21 +256,17 @@ export function handleToolCalls({ assistantMessageId, toolCalls, finishReason: _
   eventId?: number | null;
 }): boolean {
   const { contentOrderCounterRef } = refs;
+  // Same arrival-time rule as the reasoning stamp: read before the updater.
+  const createdAt = refs.isReconnect ? 1 : Date.now();
 
   if (!toolCalls || !Array.isArray(toolCalls)) {
     return false;
   }
 
-  // Track creation times outside React state so handleToolCallResult can read them synchronously
-  if (!refs._toolCreatedAt) refs._toolCreatedAt = {};
-
   toolCalls.forEach((toolCall: ToolCallRecord, toolIndex: number) => {
     const toolCallId = toolCall.id;
 
     if (toolCallId) {
-      if (!refs.isReconnect && !refs._toolCreatedAt![toolCallId]) {
-        refs._toolCreatedAt![toolCallId] = Date.now();
-      }
       setMessages((prev: MessageRecord[]) =>
         prev.map((msg: MessageRecord) => {
           if (msg.id !== assistantMessageId) return msg;
@@ -293,7 +293,7 @@ export function handleToolCalls({ assistantMessageId, toolCalls, finishReason: _
               toolCallResult: null,
               isInProgress: true,
               isComplete: false,
-              _createdAt: refs.isReconnect ? 1 : Date.now(),
+              _createdAt: createdAt,
               order: currentOrder,
             };
           } else {

@@ -25,8 +25,7 @@ interface StreamRefs {
   currentReasoningIdRef: { current: string | null };
   currentToolCallIdRef: { current: string | null };
   subagentStateRefs?: Record<string, TaskRefs>;
-  isReconnect?: boolean | number;
-  _toolCreatedAt?: Record<string, number>;
+  isReconnect?: boolean;
   updateTodoListCard?: (data: Record<string, unknown>, isNew: boolean) => void;
   isNewConversation?: boolean;
   [key: string]: unknown;
