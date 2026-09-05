@@ -49,9 +49,10 @@ function shouldHideTimelineItem(item: ActivityItem): boolean {
   return fp ? isUserProfileReadmePath(fp) : false;
 }
 
-/** Spring config matching radix-accordion feel */
-const SPRING = { type: 'spring' as const, stiffness: 150, damping: 17 };
-/** Higher damping for height settles (accordion fold) — no overshoot on multi-row batches. */
+/** One spring for every fold and chevron in the block. Near critical damping on
+    purpose: an underdamped spring closing a panel to height 0 swings negative
+    (clamped, so the fold looks finished), then comes back through zero a third
+    of a second later and shifts everything below by a pixel before it settles. */
 const SPRING_FOLD = { type: 'spring' as const, stiffness: 260, damping: 30 };
 // Derived from EXIT_TWEEN so the live zone's top gap closes with its last row.
 const LIVE_ZONE_MARGIN_MS = EXIT_TWEEN.duration * 1000;
@@ -313,9 +314,12 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
             /* The fold animates its height, so it has to clip -- and its only
                child is a summary button flush against every edge, whose ring
                the clip then eats. clips-focus-ring turns it inward. */
-            className="-mt-2 clips-focus-ring"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
+            className="clips-focus-ring"
+            /* The pull-up against the bubble's top padding rides the same
+               keyframes as the height: applied as a class it lands whole on
+               the frame the zone mounts at height 0, an 8 px hop. */
+            initial={{ opacity: 0, height: 0, marginTop: 0 }}
+            animate={{ opacity: 1, height: 'auto', marginTop: '-0.5rem' }}
             transition={SPRING_FOLD}
             style={{ overflow: 'hidden' }}
           >
@@ -336,7 +340,7 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
               <span className="truncate">{summaryLabel}</span>
               <motion.div
                 animate={{ rotate: isExpanded ? 90 : 0 }}
-                transition={SPRING}
+                transition={SPRING_FOLD}
                 className="flex-shrink-0"
                 style={{ opacity: 0.6 }}
               >
@@ -351,7 +355,7 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: 'auto', opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
-                  transition={SPRING}
+                  transition={SPRING_FOLD}
                   style={{ overflow: 'hidden' }}
                 >
                   <div
@@ -716,7 +720,7 @@ const ReasoningRow = memo(function ReasoningRow({ item }: ReasoningRowProps): Re
           {hasContent && (
             <motion.div
               animate={{ rotate: expanded ? 90 : 0 }}
-              transition={SPRING}
+              transition={SPRING_FOLD}
               className="flex-shrink-0 inline-flex items-center"
               style={{ opacity: 0.6, alignSelf: 'center' }}
             >
@@ -731,7 +735,7 @@ const ReasoningRow = memo(function ReasoningRow({ item }: ReasoningRowProps): Re
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              transition={SPRING}
+              transition={SPRING_FOLD}
               style={{ overflow: 'hidden' }}
             >
               <div className="titem-reasoning-card">
@@ -911,7 +915,7 @@ const EditToolRow = memo(function EditToolRow({ item, onOpenFile }: EditToolRowP
             >
               <motion.div
                 animate={{ rotate: expanded ? 90 : 0 }}
-                transition={SPRING}
+                transition={SPRING_FOLD}
               >
                 <ChevronDown className="h-3 w-3 -rotate-90" style={{ opacity: 0.5 }} />
               </motion.div>
@@ -926,7 +930,7 @@ const EditToolRow = memo(function EditToolRow({ item, onOpenFile }: EditToolRowP
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              transition={SPRING}
+              transition={SPRING_FOLD}
               style={{ overflow: 'hidden' }}
             >
               <div className="mt-2 rounded overflow-hidden" style={{ fontSize: '0.75rem', border: '1px solid var(--color-border-muted)' }}>
