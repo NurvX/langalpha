@@ -10,7 +10,7 @@ import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, 
 import type { ProvenanceEvent } from '@/types/sse';
 import type { ProvenanceRecord, SubagentTaskRecord } from '@/types/chat';
 import { provenanceEventToRecord, provenanceRecordKey } from './provenance';
-import { extractLastReasoningTitle } from '../streamRefs';
+import { extractLastReasoningTitle, nextArrivalSeq } from '../streamRefs';
 import type { StreamRefs, ToolCallChunkRecord } from '../streamRefs';
 
 /**
@@ -142,6 +142,7 @@ export function handleReasoningContent({ assistantMessageId, content, refs, setM
         return {
           ...msg,
           reasoningProcesses,
+          arrivalSeq: nextArrivalSeq(msg),
         };
       })
     );
@@ -219,6 +220,7 @@ export function handleTextContent({ assistantMessageId, content, finishReason, r
           content: accumulatedText,
           contentType: 'text',
           isStreaming: true,
+          arrivalSeq: nextArrivalSeq(msg),
         };
       })
     );
@@ -632,7 +634,7 @@ export function handleToolCallChunks({ assistantMessageId, chunks, setMessages }
           firstSeenAt: existing.firstSeenAt,
         };
 
-        return { ...msg, pendingToolCallChunks: pending };
+        return { ...msg, pendingToolCallChunks: pending, arrivalSeq: nextArrivalSeq(msg) };
       })
     );
   });

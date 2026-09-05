@@ -40,6 +40,16 @@ interface ToolCallChunkRecord {
 }
 
 /**
+ * Next value of a message's monotonic arrival counter. Every landed reply
+ * text, reasoning text or tool-argument chunk bumps it, so a bubble can tell
+ * "text is still flowing" from "the turn has gone quiet" without re-measuring
+ * everything it holds.
+ */
+export function nextArrivalSeq(msg: { arrivalSeq?: unknown }): number {
+  return ((msg.arrivalSeq as number) ?? 0) + 1;
+}
+
+/**
  * Extracts the last markdown bold title (**...**) from reasoning content for the icon label.
  * Used only during live streaming; history always shows "Reasoning".
  * @param {string} content - Accumulated reasoning text
