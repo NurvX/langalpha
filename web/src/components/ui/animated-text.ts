@@ -51,6 +51,19 @@ export function useAnimatedText(text: string, { enabled = false }: UseAnimatedTe
   const lastUpdateTimeRef = useRef(0); // throttle onUpdate to ~30fps
   const arrivalRef = useRef({ at: 0, cps: 0 }); // filtered arrival rate, chars/s
   const finishingRef = useRef(false);
+  const chainRef = useRef(0);        // generation of the chain allowed to write state
+
+  // A superseded chain must never touch state again. framer's stop() runs one
+  // last tick at the wall clock before it tears down, so a chain older than
+  // its duration (routine in a hidden tab, where timers fire once a second)
+  // finishes synchronously inside stop() and its onComplete would start a
+  // sibling the effect no longer tracks: two cursors typing the same text.
+  const stopChain = useCallback(() => {
+    chainRef.current++;
+    controlsRef.current?.stop();
+    controlsRef.current = null;
+    animatingRef.current = false;
+  }, []);
 
   const noteArrival = useCallback((chars: number) => {
     const now = performance.now();
@@ -75,6 +88,7 @@ export function useAnimatedText(text: string, { enabled = false }: UseAnimatedTe
     }
 
     animatingRef.current = true;
+    const chain = ++chainRef.current;
 
     const segment = target.slice(from, to);
     const wordCount = segment.split(/\s+/).filter(Boolean).length || 1;
@@ -94,6 +108,7 @@ export function useAnimatedText(text: string, { enabled = false }: UseAnimatedTe
       duration,
       ease: 'linear',
       onUpdate(latest) {
+        if (chain !== chainRef.current) return;
         const idx = Math.round(latest);
         cursorRef.current = idx;
         const now = Date.now();
@@ -102,6 +117,7 @@ export function useAnimatedText(text: string, { enabled = false }: UseAnimatedTe
         setDisplayText(target.slice(0, idx));
       },
       onComplete() {
+        if (chain !== chainRef.current) return;
         cursorRef.current = to;
         setDisplayText(target.slice(0, to));
 
@@ -126,12 +142,10 @@ export function useAnimatedText(text: string, { enabled = false }: UseAnimatedTe
         // The stream ended with text still hidden: type the rest out quickly
         // rather than popping it in whole.
         finishingRef.current = true;
-        controlsRef.current?.stop();
-        animatingRef.current = false;
+        stopChain();
         startChain();
         return () => {
-          controlsRef.current?.stop();
-          animatingRef.current = false;
+          stopChain();
         };
       }
       setDisplayText(text);
@@ -159,9 +173,8 @@ export function useAnimatedText(text: string, { enabled = false }: UseAnimatedTe
 
     // If text was replaced (new message / component remount), reset
     if (!text.startsWith(targetRef.current.slice(0, cursorRef.current))) {
-      controlsRef.current?.stop();
+      stopChain();
       cursorRef.current = 0;
-      animatingRef.current = false;
       arrivalRef.current = { at: 0, cps: 0 };
     }
 
@@ -172,8 +185,7 @@ export function useAnimatedText(text: string, { enabled = false }: UseAnimatedTe
     finishingRef.current = false;
 
     if ((arrivedAtOnce || document.hidden) && text.length - cursorRef.current > CATCH_UP_CHARS) {
-      controlsRef.current?.stop();
-      animatingRef.current = false;
+      stopChain();
       cursorRef.current = text.length - LIVE_TAIL_CHARS;
       setDisplayText(text.slice(0, cursorRef.current));
     }
@@ -187,8 +199,7 @@ export function useAnimatedText(text: string, { enabled = false }: UseAnimatedTe
     }
 
     return () => {
-      controlsRef.current?.stop();
-      animatingRef.current = false;
+      stopChain();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text, enabled]);

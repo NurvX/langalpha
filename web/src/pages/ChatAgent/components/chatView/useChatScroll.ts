@@ -123,6 +123,7 @@ export function useChatScroll({ activeAgentId, messages, isActive, isActiveRef, 
   // yanking a now-stale view.
   const streamFollowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const entryRestoreRafRef = useRef<number | null>(null);
+  const visibilityRafRef = useRef<number | null>(null);
 
   // Jump-to-latest pill.
   const messagesLenRef = useRef(0);
@@ -387,13 +388,40 @@ export function useChatScroll({ activeAgentId, messages, isActive, isActiveRef, 
       });
       ro.observe(getScrollContent(c));
     }
+    // Timers are throttled to once a second in a hidden tab, so the follow
+    // above can trail the transcript by that much when the tab returns. Close
+    // the remaining gap in one instant jump, only for a reader who was
+    // following: a user who scrolled up keeps their place. The jump is made
+    // twice: at the event, and again inside the first frame, after the
+    // animations the hidden tab queued have applied their final layout
+    // (see lib/hiddenTabMotion) but before that frame paints.
+    const handleVisibility = () => {
+      if (document.visibilityState !== 'visible' || !isMain) return;
+      const jump = () => {
+        if (pinTargetRef.current || !nearBottomRef.current) return;
+        if (c.scrollHeight - c.scrollTop - c.clientHeight <= 1) return;
+        withProgrammaticScroll(() => c.scrollTo({ top: c.scrollHeight }), 'auto');
+      };
+      jump();
+      if (visibilityRafRef.current != null) cancelAnimationFrame(visibilityRafRef.current);
+      visibilityRafRef.current = requestAnimationFrame(() => {
+        visibilityRafRef.current = null;
+        jump();
+      });
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
       c.removeEventListener('scroll', handleScroll);
       c.removeEventListener('wheel', handleUserIntent);
       c.removeEventListener('touchstart', handleUserIntent);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      if (visibilityRafRef.current != null) {
+        cancelAnimationFrame(visibilityRafRef.current);
+        visibilityRafRef.current = null;
+      }
       ro?.disconnect();
     };
-  }, [activeAgentId, getScrollContainer, getScrollContent, reapplyPin, clearSettleTimers]);
+  }, [activeAgentId, getScrollContainer, getScrollContent, reapplyPin, clearSettleTimers, withProgrammaticScroll]);
 
   // Auto-scroll main chat to bottom when messages change, but only if the user is
   // near the bottom and the pin controller isn't currently owning the scroll.
@@ -423,7 +451,11 @@ export function useChatScroll({ activeAgentId, messages, isActive, isActiveRef, 
       if (pinTargetRef.current || !isNearBottomRef.current) return;
       const el = getScrollContainer(scrollAreaRef);
       if (!el) return;
-      withProgrammaticScroll(() => el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }), 'smooth');
+      // A hidden tab runs no smooth-scroll animation, so the view would sit
+      // still while the transcript grows and the first follow after the tab
+      // returns would sweep the whole gap. Jump instantly while hidden.
+      const behavior = document.hidden ? 'auto' : 'smooth';
+      withProgrammaticScroll(() => el.scrollTo({ top: el.scrollHeight, behavior }), behavior);
     }, 0);
     return () => {
       if (streamFollowTimerRef.current) {
