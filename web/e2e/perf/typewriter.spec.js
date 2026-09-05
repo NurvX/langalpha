@@ -48,11 +48,22 @@ function overrides() {
 // event, which stamps when the model finished without asking the client.
 const PROBE = `(() => {
   const P = (window.__tw = { frames: [], running: false });
+  let scroller = null;
+  function findScroller() {
+    if (scroller && scroller.isConnected) return scroller;
+    const main = document.querySelector('main') || document.body;
+    for (const el of main.querySelectorAll('*')) {
+      const oy = getComputedStyle(el).overflowY;
+      if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 50) { scroller = el; return el; }
+    }
+    return null;
+  }
   function tick(ts) {
     if (P.running) {
       const main = document.querySelector('main') || document.body;
       const live = !!document.querySelector('button[aria-label="Stop"]');
-      P.frames.push([ts, main.textContent.length, live ? 1 : 0]);
+      const sc = findScroller();
+      P.frames.push([ts, main.textContent.length, live ? 1 : 0, sc ? sc.scrollTop : -1, sc ? sc.scrollHeight - sc.clientHeight : -1]);
     }
     requestAnimationFrame(tick);
   }
@@ -92,6 +103,18 @@ function analyze(frames, replyChars) {
   const median = sorted[Math.floor(sorted.length / 2)];
   const mean = gains.reduce((a, b) => a + b, 0) / gains.length;
   const sd = Math.sqrt(gains.reduce((a, b) => a + (b - mean) ** 2, 0) / gains.length);
+  // Follow scroll while the model is talking: how far the view sits above the
+  // bottom, how often it moves backwards, and how uneven its motion is.
+  const live = frames.filter((f) => f[2] === 1 && f[3] >= 0);
+  const dist = live.map((f) => f[4] - f[3]).sort((a, b) => a - b);
+  let back = 0; const moves = [];
+  for (let i = 1; i < live.length; i++) { const d = live[i][3] - live[i - 1][3]; if (d < -1) back++; if (d > 0) moves.push(d); }
+  const mmean = moves.reduce((a, b) => a + b, 0) / (moves.length || 1);
+  const msd = Math.sqrt(moves.reduce((a, b) => a + (b - mmean) ** 2, 0) / (moves.length || 1));
+  const follow = live.length ? {
+    distP50: Math.round(dist[Math.floor(dist.length * 0.5)]), distP95: Math.round(dist[Math.floor(dist.length * 0.95)]), distMax: Math.round(dist[dist.length - 1]),
+    backwardFrames: back, movingFrames: moves.length, moveCv: +(msd / (mmean || 1)).toFixed(2), maxMovePx: Math.round(Math.max(...moves, 0)),
+  } : null;
   const fgaps = [];
   for (let i = 1; i < frames.length; i++) fgaps.push(frames[i][0] - frames[i - 1][0]);
   fgaps.sort((a, b) => a - b);
@@ -109,7 +132,7 @@ function analyze(frames, replyChars) {
     speedCv: +(sd / mean).toFixed(2),
     meanCharsPerSec: Math.round(mean * 1000 / STEP),
     frameGapP95: +fgaps[Math.floor(fgaps.length * 0.95)].toFixed(1),
-    liveFrames, replyChars,
+    liveFrames, replyChars, follow,
   };
 }
 

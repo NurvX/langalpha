@@ -16,6 +16,12 @@
  * cadence or the typewriter can produce; a "drop frame" loses text (content
  * replaced or duplicated and collapsed); a "scroll jump" moves more than
  * 300 px in one frame.
+ *
+ * PERF_CAST=1 (reload) records compositor frames around the catch-up and
+ * counts, per frame, the pixels of a marker painted at the top of the
+ * transcript: the ground truth for whether a frame was ever shown away from
+ * the bottom. PERF_SCROLL_LOG=1 records every programmatic scroll with its
+ * caller; PERF_SHOT=<path> screenshots the reconnecting state after reload.
  */
 import { configureSSE, resetMockServer, mockAPI, test, expect } from '../fixtures.js';
 import { sampleWorkspace, sampleThread, sseEvents } from '../helpers/mockResponses.js';
@@ -48,7 +54,15 @@ const PROBE = `(() => {
     nativeRaf((ts) => { for (const { cb } of q) { try { cb(ts); } catch (e) { console.error(e); } } });
   };
 
-  const P = (window.__probe = { painted: [], samples: [], shifts: [], marks: {} });
+  const P = (window.__probe = { painted: [], samples: [], shifts: [], marks: {}, scrolls: [] });
+  const ids = new WeakMap(); let nid = 0; const idOf = (el) => { if (!ids.has(el)) ids.set(el, ++nid); return ids.get(el); }; P.idOf = idOf;
+  // PERF_SCROLL_LOG=1: record every programmatic scroll with its caller.
+  if (${process.env.PERF_SCROLL_LOG ? 'true' : 'false'}) try {
+    const d = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
+    Object.defineProperty(Element.prototype, 'scrollTop', { get: d.get, set(v) { P.scrolls.push({ t: performance.now(), el: idOf(this), top: v, via: 'set', st: String(new Error().stack).split('\\n').slice(2, 12).map((l) => l.trim().slice(-48)) }); return d.set.call(this, v); }, configurable: true });
+    const orig = Element.prototype.scrollTo;
+    Element.prototype.scrollTo = function (...a) { const o = a[0]; P.scrolls.push({ t: performance.now(), el: idOf(this), top: o && typeof o === 'object' ? o.top : a[1], beh: o && typeof o === 'object' ? o.behavior : 'auto', via: 'scrollTo', st: String(new Error().stack).split('\\n').slice(2, 12).map((l) => l.trim().slice(-48)) }); return orig.apply(this, a); };
+  } catch {}
   let scroller = null;
   function findScroller() {
     if (scroller && scroller.isConnected) return scroller;
@@ -64,6 +78,7 @@ const PROBE = `(() => {
     const s = findScroller();
     const len = main.textContent.length;
     const prev = P.samples[P.samples.length - 1];
+    if (prev && len < 50000 && prev.len < 50000 && len - prev.len > 1000 && !P.marks.catchUpWall) P.marks.catchUpWall = Date.now();
     let note;
     if (prev && Math.abs(len - prev.len) > 5000) {
       const big = [];
@@ -78,14 +93,18 @@ const PROBE = `(() => {
     setTimeout(() => {
       const sc = findScroller();
       const m = document.querySelector('main') || document.body;
-      P.painted.push({ t: performance.now(), len: m.textContent.length, top: sc ? sc.scrollTop : -1, h: sc ? sc.scrollHeight - sc.clientHeight : -1 });
+      P.painted.push({ t: performance.now(), len: m.textContent.length, el: sc ? idOf(sc) : 0, cr: sc ? idOf(sc.querySelector('.max-w-3xl') || sc.firstElementChild || sc) : 0, top: sc ? sc.scrollTop : -1, h: sc ? sc.scrollHeight - sc.clientHeight : -1 });
     }, 0);
     nativeRaf(sample);
   }
   nativeRaf(sample);
   try {
     new PerformanceObserver((list) => {
-      for (const e of list.getEntries()) if (!e.hadRecentInput) P.shifts.push({ t: e.startTime, v: e.value });
+      for (const e of list.getEntries()) if (!e.hadRecentInput) P.shifts.push({ t: e.startTime, v: e.value, src: (e.sources || []).slice(0, 4).map((s) => {
+        const n = s.node; const tag = n ? (n.tagName || '').toLowerCase() + (n.className && typeof n.className === 'string' ? '.' + n.className.split(' ').slice(0, 3).join('.') : '') : '?';
+        const r = (q) => q ? [Math.round(q.x), Math.round(q.y), Math.round(q.width), Math.round(q.height)].join(',') : '-';
+        return tag.slice(0, 60) + ' ' + r(s.previousRect) + ' -> ' + r(s.currentRect);
+      }) });
     }).observe({ type: 'layout-shift', buffered: true });
   } catch {}
   P.mark = (name) => { P.marks[name] = performance.now(); };
@@ -138,13 +157,19 @@ const PROBE = `(() => {
       const d = xs[i].len - xs[i - 1].len; const j = xs[i].top - xs[i - 1].top;
       if (Math.abs(d) > 60 || Math.abs(j) > 300 || xs[i].note) notable.push({ t: Math.round(xs[i].t - t0), d, top: xs[i].top, j: Math.round(j), note: xs[i].note });
     }
-    const bigShifts = P.shifts.filter((s) => s.t >= t0 && s.v > 0.02).map((s) => ({ t: Math.round(s.t - t0), v: +s.v.toFixed(3) }));
+    const bigShifts = P.shifts.filter((s) => s.t >= t0 && s.v > 0.02).map((s) => ({ t: Math.round(s.t - t0), v: +s.v.toFixed(3), src: s.src }));
     // Painted frames, after the transcript first appears, that showed the
     // scroller more than 400 px short of the bottom: what the eye saw at the top.
     const ps = P.painted.filter((x) => x.t >= t0);
     const firstShown = ps.findIndex((x, i) => i > 0 && x.len - ps[i - 1].len > 500);
+    // A hint, not ground truth: the post-paint sample runs in a task, and a
+    // commit that lands between the paint and that task is read here as if it
+    // had been painted at scrollTop 0. PERF_CAST=1 records compositor frames
+    // and is what decides whether a frame was really shown away from the bottom.
     const paintedAwayFrames = firstShown < 0 ? -1 : ps.slice(firstShown).filter((x) => x.h > 0 && x.h - x.top > 400).length;
     return {
+      scrolls: P.scrolls.filter((x) => x.t >= t0).map((x) => ({ ...x, t: Math.round(x.t - t0) })).slice(0, 16), paintedPrev: (() => { const i = ps.findIndex((x) => x.h > 0 && x.h - x.top > 400); return i > 0 ? ps.slice(Math.max(0, i - 3), i + 2).map((x) => [Math.round(x.t - t0), x.len, x.el, x.cr, x.top, x.h]) : []; })(),
+      paintedAway: firstShown < 0 ? [] : ps.slice(firstShown).filter((x) => x.h > 0 && x.h - x.top > 400).slice(0, 5).map((x) => [Math.round(x.t - t0), x.len, x.el, x.cr, x.top, x.h]),
       paintedAwayFrames, paintedFirstTop: firstShown < 0 ? -1 : ps[firstShown].top, paintedFirstGap: firstShown < 0 ? -1 : ps[firstShown].h - ps[firstShown].top,
       frames: xs.length, burstFrames: bursts, burstChars, maxGainPerFrame: maxGain,
       catchUpMs: Math.round(lastBurstAt - t0), dropFrames: drops, maxDrop,
@@ -250,13 +275,64 @@ test.describe('catch-up glitch', () => {
     await configureSSE({ method: 'GET', path: `/api/v1/threads/${TH}/messages/stream`, events: [...backlog, ...boundary, ...tail], delay: CHUNK_MS });
 
     await page.reload();
+
+    if (process.env.PERF_SHOT) {
+      await page.locator('.page-loading__wall').waitFor({ state: 'detached', timeout: 10000 }).catch(() => {});
+      await page.locator('[role="status"]').first().waitFor({ timeout: 5000 }).catch(() => {});
+      await page.screenshot({ path: process.env.PERF_SHOT });
+    }
     await page.waitForSelector('textarea', { timeout: 10000 });
     await page.waitForFunction(() => !!window.__probe, null, { timeout: 10000 });
     await page.evaluate(() => window.__probe.watchDrops(8000));
+    // PERF_CAST=1: record compositor frames over the catch-up and look for one
+    // that shows the top of the transcript (magenta marker) after the backlog
+    // landed, the ground truth behind the sampled "painted away" frame.
+    let castFrames = null; let castCdp = null;
+    if (process.env.PERF_CAST) {
+      await page.addStyleTag({ content: 'main [data-message-id]:first-of-type::before{content:"";display:block;height:30px;background:#ff00ff}' });
+      castFrames = [];
+      castCdp = await page.context().newCDPSession(page);
+      castCdp.on('Page.screencastFrame', (f) => { castFrames.push({ ts: f.metadata.timestamp, data: f.data }); castCdp.send('Page.screencastFrameAck', { sessionId: f.sessionId }).catch(() => {}); });
+      await castCdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, everyNthFrame: 1, maxWidth: 480, maxHeight: 360 });
+      await page.waitForFunction(() => !!window.__probe.marks.catchUpWall, null, { timeout: 30_000 });
+      await page.waitForTimeout(600);
+      await castCdp.send('Page.stopScreencast');
+      const wall = await page.evaluate(() => window.__probe.marks.catchUpWall);
+      const marker = await page.evaluate(() => { const el = document.querySelector('main [data-message-id]'); return el ? [el.matches(':first-of-type'), getComputedStyle(el, '::before').height, getComputedStyle(el, '::before').backgroundColor] : null; });
+      console.log(`[cast] total frames ${castFrames.length}, ts range ${castFrames.length ? Math.round(castFrames[0].ts * 1000 - wall) : '-'}..${castFrames.length ? Math.round(castFrames[castFrames.length - 1].ts * 1000 - wall) : '-'} ms vs catch-up; now-wall=${Date.now() - wall}; marker=${JSON.stringify(marker)}`);
+      castFrames = castFrames.filter((f) => f.ts * 1000 > wall - 300);
+    }
     await expect(page.getByText(END_MARKER)).toBeVisible({ timeout: 120_000 });
+    if (castCdp) {
+      const catchUpWall = await page.evaluate(() => window.__probe.marks.catchUpWall || 0);
+      const counts = await page.evaluate(async (datas) => {
+        const out = [];
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        for (const d of datas) {
+          const img = new Image();
+          img.src = 'data:image/jpeg;base64,' + d;
+          await img.decode();
+          canvas.width = img.width; canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+          const px = ctx.getImageData(0, 0, img.width, img.height).data;
+          let magenta = 0;
+          for (let i = 0; i < px.length; i += 4) if (px[i] > 180 && px[i + 1] < 100 && px[i + 2] > 180) magenta++;
+          out.push(magenta);
+        }
+        return out;
+      }, castFrames.map((f) => f.data));
+      const rows = castFrames.map((f, i) => [Math.round(f.ts * 1000 - catchUpWall), counts[i]]);
+      console.log('[cast] frames (ms since catch-up, magenta px):', JSON.stringify(rows.filter((r) => r[0] > -400 && r[0] < 600)));
+    }
     await page.waitForTimeout(1500);
     const r = await page.evaluate(() => window.__probe.report());
     console.log('[reload] ' + JSON.stringify(r));
+    const waterfall = await page.evaluate(() => performance.getEntriesByType('resource')
+      .filter((e) => e.name.includes('/api/v1/'))
+      .map((e) => [e.name.replace(/^.*\/api\/v1/, ''), Math.round(e.startTime), Math.round(e.duration)])
+      .sort((a, b) => a[1] - b[1]));
+    console.log('[reload-waterfall] ' + JSON.stringify(waterfall));
     console.log('[reload-drop] ' + JSON.stringify(await page.evaluate(() => window.__probe.drop)));
   });
 

@@ -8,7 +8,11 @@
  * throttling and writes one JSON per run to perf-results/. PERF_BUILD serves a
  * production build (the number that matters); without it the dev server runs,
  * which is faster to iterate on but inflates React's share. PERF_PROFILE=1 adds
- * a V8 CPU profile summarized per module, for finding what to fix next.
+ * a V8 CPU profile summarized per module, for finding what to fix next;
+ * PERF_TRACE=1 adds a Chrome trace summed per event kind (Layout, Paint, ...),
+ * which is where the profiler's "(program)" time goes. Requests issued during
+ * the stream are tallied by path: a control that writes and refetches in a
+ * loop shows up there long before it shows up in the frame numbers.
  * PERF_CPU (default 4) is the CPU throttle; PERF_CHUNK_MS / PERF_CHUNK_CHARS set
  * the token cadence. The label defaults to the git short sha.
  */
@@ -27,6 +31,10 @@ const CHUNK_DELAY_MS = Number(process.env.PERF_CHUNK_MS || 8);
 const CHUNK_CHARS = Number(process.env.PERF_CHUNK_CHARS || 8);
 // PERF_PROFILE=1 also records a V8 CPU profile and writes self-time per module.
 const PROFILE = !!process.env.PERF_PROFILE;
+// PERF_TRACE=1 records a Chrome trace and sums renderer time per event kind
+// (Layout, UpdateLayoutTree, Paint, ...), which is where the JS profiler's
+// "(program)" bucket goes.
+const TRACE = !!process.env.PERF_TRACE;
 
 function label() {
   if (process.env.PERF_LABEL) return process.env.PERF_LABEL;
@@ -99,6 +107,30 @@ function summarizeProfile(p) {
   return { byModule: top(byModule), byFunction: top(byFunction) };
 }
 
+/** Wall time per trace event name, for the renderer main thread only. */
+function summarizeTrace(events) {
+  const byName = new Map();
+  const count = new Map();
+  const open = new Map();
+  for (const e of events) {
+    if (e.cat && !/devtools\.timeline/.test(e.cat)) continue;
+    if (e.ph === 'X' && typeof e.dur === 'number') {
+      byName.set(e.name, (byName.get(e.name) || 0) + e.dur);
+      count.set(e.name, (count.get(e.name) || 0) + 1);
+    } else if (e.ph === 'B') {
+      open.set(`${e.name}:${e.tid}`, e.ts);
+    } else if (e.ph === 'E') {
+      const k = `${e.name}:${e.tid}`;
+      if (open.has(k)) {
+        byName.set(e.name, (byName.get(e.name) || 0) + (e.ts - open.get(k)));
+        count.set(e.name, (count.get(e.name) || 0) + 1);
+        open.delete(k);
+      }
+    }
+  }
+  return [...byName].map(([k, us]) => [k, Math.round(us / 1000), count.get(k)]).sort((a, b) => b[1] - a[1]).slice(0, 25);
+}
+
 test.describe('streaming smoothness', () => {
   test.skip(!process.env.PERF, 'set PERF=1 to run the smoothness benchmark');
   test.setTimeout(180_000);
@@ -136,7 +168,17 @@ test.describe('streaming smoothness', () => {
     // Let the throttled page settle before the clock starts.
     await page.waitForTimeout(500);
     if (PROFILE) await cdp.send('Profiler.start');
+    const traceEvents = [];
+    if (TRACE) {
+      cdp.on('Tracing.dataCollected', (d) => traceEvents.push(...d.value));
+      await cdp.send('Tracing.start', {
+        traceConfig: { includedCategories: ['devtools.timeline', 'disabled-by-default-devtools.timeline'] },
+        transferMode: 'ReportEvents',
+      });
+    }
 
+    const reqs = new Map();
+    page.on('request', (r) => { const k = `${r.method()} ${new URL(r.url()).pathname}`; reqs.set(k, (reqs.get(k) || 0) + 1); });
     await page.locator('textarea').fill('Give me an earnings deep dive on NVDA');
     await page.evaluate(() => window.__smooth.start(document.querySelector('main') || document.body));
     await page.locator('button[aria-label="Send message"]').click();
@@ -150,6 +192,13 @@ test.describe('streaming smoothness', () => {
       const { profile: p } = await cdp.send('Profiler.stop');
       profile = summarizeProfile(p);
     }
+    let trace = null;
+    if (TRACE) {
+      const done = new Promise((resolve) => cdp.once('Tracing.tracingComplete', resolve));
+      await cdp.send('Tracing.end');
+      await done;
+      trace = summarizeTrace(traceEvents);
+    }
     if (CPU_RATE > 1) await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
 
     const run = {
@@ -158,6 +207,7 @@ test.describe('streaming smoothness', () => {
       config: { build: process.env.PERF_BUILD ? 'production' : 'dev', cpuRate: CPU_RATE, chunkDelayMs: CHUNK_DELAY_MS, chunkChars: CHUNK_CHARS, events: events.length, replyChars: buildReply().length },
       metrics: m,
       profile,
+      trace,
     };
     const dir = path.resolve('perf-results');
     fs.mkdirSync(dir, { recursive: true });
@@ -171,6 +221,12 @@ test.describe('streaming smoothness', () => {
       for (const [mod, ms] of profile.byModule.slice(0, 18)) console.log(`    ${String(ms).padStart(6)}  ${mod}`);
       console.log(`[perf ${run.label}] top functions (ms):`);
       for (const [fn, ms] of profile.byFunction.slice(0, 18)) console.log(`    ${String(ms).padStart(6)}  ${fn}`);
+    }
+    if (trace) {
+      console.log(`[perf ${run.label}] requests during the stream:`);
+      for (const [k, n] of [...reqs].sort((a, b) => b[1] - a[1]).slice(0, 12)) console.log(`    ${String(n).padStart(6)}  ${k}`);
+      console.log(`[perf ${run.label}] trace time by event (ms, count):`);
+      for (const [name, ms, n] of trace) console.log(`    ${String(ms).padStart(6)}  ${String(n).padStart(6)}  ${name}`);
     }
     expect(m.frames).toBeGreaterThan(0);
   });

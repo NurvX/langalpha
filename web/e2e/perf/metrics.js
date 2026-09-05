@@ -78,7 +78,7 @@ export const PROBE_SOURCE = `(() => {
       loafTotalMs: Math.round(S.loaf.reduce((s, e) => s + e.dur, 0)),
       loafBlockingMs: Math.round(S.loaf.reduce((s, e) => s + e.block, 0)),
       loafMaxMs: Math.round(S.loaf.reduce((m, e) => Math.max(m, e.dur), 0)),
-      loafTop: S.loaf.slice().sort((a, b) => b.dur - a.dur).slice(0, 5).map((e) => ({ dur: Math.round(e.dur), scripts: e.scripts })),
+      loafTop: S.loaf.slice().sort((a, b) => b.dur - a.dur).slice(0, 5).map((e) => ({ at: Math.round(e.start - S.t0), dur: Math.round(e.dur), styleLayout: Math.round(e.styleLayout), scripts: e.scripts })),
       longTasks: S.longTasks.length,
       longTaskMaxMs: Math.round(S.longTasks.reduce((m, d) => Math.max(m, d), 0)),
       mutations: S.mutations, nodesAdded: S.nodesAdded, nodesRemoved: S.nodesRemoved, charDataChanges: S.charDataChanges,

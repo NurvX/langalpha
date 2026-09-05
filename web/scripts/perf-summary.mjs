@@ -72,6 +72,6 @@ for (const l of labels) {
   console.log(`\nworst long animation frames (${l}, first run):`);
   for (const e of top) {
     const s = e.scripts.map((x) => `${x.fn || '?'}@${(x.src || '').split('/').pop().slice(0, 40)} ${x.dur}ms`).join('; ');
-    console.log(`  ${String(e.dur).padStart(5)} ms  ${s}`);
+    console.log(`  ${String(e.dur).padStart(5)} ms  at ${String(e.at ?? '?').padStart(6)} ms  style+layout ${String(e.styleLayout ?? '?').padStart(3)} ms  ${s}`);
   }
 }
