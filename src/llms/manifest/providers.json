@@ -948,7 +948,7 @@
       "display_name": "DashScope (Qwen)",
       "variants": {
         "dashscope": {
-          "sdk": "openai",
+          "sdk": "dashscope",
           "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
           "use_response_api": true,
           "default_headers": {
@@ -956,7 +956,7 @@
           }
         },
         "dashscope-intl": {
-          "sdk": "openai",
+          "sdk": "dashscope",
           "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
           "env_key": "DASHSCOPE_API_KEY_INT",
           "use_response_api": true,

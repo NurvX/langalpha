@@ -143,6 +143,13 @@ async def _walk_byok_candidates(
     return None, None
 
 
+# SDKs that speak the OpenAI wire shape, so the ``"openai"`` a custom provider
+# derives by default already reaches them. A parent on this list is skipped by
+# ``_inherit_custom_provider_sdk`` below; anything added here must be routable
+# by a plain ``ChatOpenAI`` against a third-party gateway.
+_OPENAI_SHAPED_SDKS = (None, "openai", "dashscope")
+
+
 def _inherit_custom_provider_sdk(custom_config, parent_provider, provider_def, mc):
     """Make a custom provider inherit its manifest parent's SDK/headers (#221).
 
@@ -152,14 +159,14 @@ def _inherit_custom_provider_sdk(custom_config, parent_provider, provider_def, m
     (``/chat/completions`` vs ``/v1/messages``). Rewriting ``provider`` to the
     manifest parent fixes the SDK and ``default_headers``.
 
-    Skip the rewrite for openai parents: the default already yields
-    ``sdk="openai"``, and inheriting the manifest openai entry would force
-    ``use_response_api`` / ``prompt_cache_key`` onto OpenAI-compatible gateways
-    (vLLM/LiteLLM/OpenRouter) that only speak ``/chat/completions``. The custom
-    provider's own ``use_response_api`` opt-in is honoured either way.
+    Skip the rewrite for OpenAI-shaped parents: the default already reaches
+    them, and inheriting the manifest entry would force ``use_response_api`` /
+    ``prompt_cache_key`` onto OpenAI-compatible gateways (vLLM/LiteLLM/
+    OpenRouter) that only speak ``/chat/completions``. The custom provider's own
+    ``use_response_api`` opt-in is honoured either way.
     """
     updates: dict = {}
-    if mc.get_provider_info(parent_provider).get("sdk") not in (None, "openai"):
+    if mc.get_provider_info(parent_provider).get("sdk") not in _OPENAI_SHAPED_SDKS:
         updates["provider"] = parent_provider
     if provider_def.get("use_response_api"):
         updates["_use_response_api"] = True
