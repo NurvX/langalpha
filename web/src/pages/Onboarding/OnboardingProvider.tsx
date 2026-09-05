@@ -266,14 +266,15 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       ((pathname === '/dashboard' && !personalizationSnoozed) ||
         pathname === '/chat/t/__default__'));
 
-  // Getting-started: auto-complete route-visit tasks. markTaskDone aborts when
-  // already stamped, so repeat visits are write-free.
+  // Getting-started: auto-complete route-visit tasks. markTaskDone owns the
+  // once-per-task guard, so a refused write is not re-sent on the prefs
+  // identities its rollback and refetch produce.
   useEffect(() => {
     if (isLoading) return;
     for (const task of OFFERED_TASKS) {
-      if (task.visitRoute?.(pathname, search) && prefs.gettingStartedDoneAt[task.id] == null) {
-        markTaskDone(task.id);
-      }
+      if (!task.visitRoute?.(pathname, search)) continue;
+      if (prefs.gettingStartedDoneAt[task.id] != null) continue;
+      markTaskDone(task.id);
     }
   }, [isLoading, pathname, search, prefs, markTaskDone]);
 
