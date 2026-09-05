@@ -176,6 +176,9 @@ _UPSTREAM_MODULE_PREFIXES: tuple[str, ...] = (
     "google.generativeai",
     "cohere",
     "httpx",
+    # Our own wrappers around a provider stream. They quote the provider and
+    # are raised fresh rather than chained, so nothing below would match them.
+    "src.llms.extension",
     # LangChain wrappers — their exceptions may not chain through the raw SDK
     # when the wrapper normalizes errors, so match them directly.
     "langchain_openai",

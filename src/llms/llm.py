@@ -477,7 +477,7 @@ class LLM:
             if spec.use_response_api_override is None
             else spec.use_response_api_override
         )
-        self.use_response_api = bool(response_api) and self.sdk in ("openai", "codex")
+        self.use_response_api = bool(response_api) and self.sdk in ("openai", "codex", "dashscope")
         self.use_previous_response_id = self.provider_info.get("use_previous_response_id", False) if self.sdk == "openai" else False
         # prompt_cache_key: opt-in for sdk="openai"; codex applies it always-on.
         self.prompt_cache_key_enabled = (
@@ -574,6 +574,8 @@ class LLM:
             client = self._get_openai_llm(cache_key=effective_cache_key)
         elif self.sdk == "codex":
             client = self._get_codex_llm(cache_key=effective_cache_key)
+        elif self.sdk == "dashscope":
+            client = self._get_dashscope_llm(cache_key=effective_cache_key)
         elif self.sdk == "deepseek":
             client = self._get_deepseek_llm()
         elif self.sdk == "glm":
@@ -677,8 +679,12 @@ class LLM:
             url = url.replace("{HOST_IP}", HOST_IP)
         return {param_name: url}
 
-    def _get_openai_llm(self, cache_key: str | None = None):
-        """Get OpenAI or OpenAI-compatible LLM."""
+    def _build_openai_params(self, cache_key: str | None = None) -> dict:
+        """Build the constructor kwargs every OpenAI-SDK chat client shares.
+
+        Split out so a provider that needs its own ChatOpenAI subclass differs
+        by the class alone, not by a second copy of this that drifts.
+        """
         params = {
             "model": self.model,
             "api_key": self._resolve_api_key(),
@@ -722,7 +728,17 @@ class LLM:
             existing_mk = params.get("model_kwargs") or {}
             params["model_kwargs"] = {**existing_mk, "prompt_cache_key": cache_key}
 
-        return ChatOpenAI(**params)
+        return params
+
+    def _get_openai_llm(self, cache_key: str | None = None):
+        """Get OpenAI or OpenAI-compatible LLM."""
+        return ChatOpenAI(**self._build_openai_params(cache_key))
+
+    def _get_dashscope_llm(self, cache_key: str | None = None):
+        """Get DashScope (Qwen) LLM via ``ChatDashScope`` (streamed reasoning bridge)."""
+        from src.llms.extension import ChatDashScope
+
+        return ChatDashScope(**self._build_openai_params(cache_key))
 
     def _get_codex_llm(self, cache_key: str | None = None):
         """Get Codex OAuth LLM (store=false, stateless)."""
