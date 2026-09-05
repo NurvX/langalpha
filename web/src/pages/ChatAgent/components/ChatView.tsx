@@ -375,6 +375,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     isActive,
     isActiveRef,
     isLoadingHistory,
+    // A pending interrupt or rejection clears isLoading but the turn is still
+    // open: the reply resumes once the reader answers, so the follow keeps its claim.
+    isStreaming: isLoading || !!pendingInterrupt || !!pendingRejection,
     currentThreadId,
     threadId,
   });
