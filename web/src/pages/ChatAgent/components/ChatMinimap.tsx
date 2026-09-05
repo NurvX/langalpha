@@ -8,6 +8,7 @@ import type { MessageRecord } from './messageList/types';
 import { buildEntries, entriesEqual } from './minimapEntries';
 import type { PinTarget } from './chatView/useChatScroll';
 import './ChatMinimap.css';
+import { prefersReducedMotion } from '@/lib/reducedMotion';
 
 interface ChatMinimapProps {
   messages: MessageRecord[];
@@ -51,10 +52,6 @@ function keyboardFocused(el: HTMLElement): boolean {
   } catch {
     return true;
   }
-}
-
-function prefersReducedMotion(): boolean {
-  return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 }
 
 interface TickProps {

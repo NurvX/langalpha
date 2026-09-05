@@ -18,9 +18,13 @@ const SCROLLEND_FALLBACK_MS = 600;
 const ANCHOR_OFFSET_PX = 16;
 
 /** scrollTop that puts bubble `id` just under the viewport top, or null once it is no longer in the transcript. */
-function anchorTop(c: HTMLElement, id: string): number | null {
-  const el = findMessageElement(c, id);
-  if (!el) return null;
+function anchorTop(c: HTMLElement, id: string, part?: AnchorPart): number | null {
+  const msg = findMessageElement(c, id);
+  if (!msg) return null;
+  // The reply part is the bubble's last prose block, so a turn that opened with
+  // commentary and tool rows lands on the answer; a bubble without prose is
+  // its own start.
+  const el = (part === 'reply' && msg.querySelector<HTMLElement>('[data-reply-start]')) || msg;
   return Math.max(0, c.scrollTop + el.getBoundingClientRect().top - c.getBoundingClientRect().top - ANCHOR_OFFSET_PX);
 }
 
@@ -35,7 +39,8 @@ function anchorTop(c: HTMLElement, id: string): number | null {
  * (minimap navigation), re-measured on every re-apply so media above it
  * finishing layout can't shift the landing.
  */
-export type PinTarget = { mode: 'bottom' } | { mode: 'offset'; top: number } | { mode: 'anchor'; id: string };
+export type AnchorPart = 'reply';
+export type PinTarget = { mode: 'bottom' } | { mode: 'offset'; top: number } | { mode: 'anchor'; id: string; part?: AnchorPart };
 
 export function useChatScroll({
   activeAgentId,
@@ -298,7 +303,7 @@ export function useChatScroll({
     const target = pinTargetRef.current;
     if (!target || !c) return;
     const top =
-      target.mode === 'bottom' ? c.scrollHeight : target.mode === 'offset' ? target.top : anchorTop(c, target.id);
+      target.mode === 'bottom' ? c.scrollHeight : target.mode === 'offset' ? target.top : anchorTop(c, target.id, target.part);
     if (top == null) {
       // The anchored bubble left the transcript (edit / regenerate truncation).
       pinTargetRef.current = null;
@@ -313,12 +318,12 @@ export function useChatScroll({
   // window. Anything short of the newest turn hands the user the jump pill and
   // a false near-bottom, so a streaming follow can't yank them back down.
   const pinToMessage = useCallback(
-    (id: string, behavior: 'auto' | 'smooth' = 'auto', isLatest = false) => {
+    (id: string, behavior: 'auto' | 'smooth' = 'auto', isLatest = false, part?: AnchorPart) => {
       const c = getScrollContainer(scrollAreaRef);
       if (!c) return;
-      const top = anchorTop(c, id);
+      const top = anchorTop(c, id, part);
       if (top == null) return;
-      pinTargetRef.current = { mode: 'anchor', id };
+      pinTargetRef.current = { mode: 'anchor', id, part };
       // A request past the maximum clamps, so any turn near enough to the end
       // reads as "at the bottom" by position alone. Only the newest one really
       // is: under an earlier turn the transcript still has room to grow, and

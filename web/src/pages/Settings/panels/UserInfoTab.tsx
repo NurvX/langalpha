@@ -12,6 +12,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
 import { useTheme } from '@/contexts/ThemeContext';
 import { FONT_SCALES, getFontScale, setFontScale } from '@/lib/fontScale';
+import { turnEndScrollPatch, readTurnEndScroll, type TurnEndScroll } from '@/lib/turnEndScroll';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '@/components/ui/use-toast';
 import ConfirmDialog from '@/pages/Dashboard/components/ConfirmDialog';
@@ -174,15 +175,28 @@ export function UserInfoTab() {
   useEffect(() => () => { if (dirtyRef.current) flushUserInfoSave(); }, [flushUserInfoSave]);
 
   const handleVoiceInputToggle = async () => {
-    const currentOtherPref = (prefsData as any)?.other_preference || {};
-    const currentEnabled = !!currentOtherPref.voice_input_enabled;
+    const currentEnabled = !!((prefsData as Preferences | null)?.other_preference?.voice_input_enabled);
     try {
+      // One key only: the server merges other_preference key by key, and
+      // writing the cached object back would overwrite a sibling another tab
+      // changed since this one last fetched.
       await updatePrefsMutation.mutateAsync({
-        other_preference: {
-          ...currentOtherPref,
-          voice_input_enabled: !currentEnabled,
-        },
+        other_preference: { voice_input_enabled: !currentEnabled },
       });
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: t('common.error'),
+        description: t('settings.failedToSaveSettings'),
+      });
+    }
+  };
+
+  const turnEndScroll = readTurnEndScroll(prefsData);
+  const handleTurnEndScrollChange = async (next: TurnEndScroll) => {
+    if (next === turnEndScroll) return;
+    try {
+      await updatePrefsMutation.mutateAsync(turnEndScrollPatch(next));
     } catch {
       toast({
         variant: 'destructive',
@@ -379,6 +393,31 @@ export function UserInfoTab() {
           onChange={handleVoiceInputToggle}
           ariaLabel={t('settings.voiceInput')}
         />
+      </div>
+
+      {/* Where the transcript lands when a reply finishes */}
+      <div className="settings-row">
+        <div className="space-y-0.5">
+          <label className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.turnEndScroll')}</label>
+          <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>{t('settings.turnEndScrollDesc')}</p>
+        </div>
+        <div role="group" aria-label={t('settings.turnEndScroll')} className="inline-flex rounded-lg overflow-hidden clips-focus-ring" style={{ border: '1px solid var(--color-border-muted)' }}>
+          {(['bottom', 'reply_start'] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={turnEndScroll === value}
+              onClick={() => { void handleTurnEndScrollChange(value); }}
+              className="px-2 py-1 text-[0.8125rem] font-medium transition-colors"
+              style={{
+                backgroundColor: turnEndScroll === value ? 'var(--color-accent-soft)' : 'transparent',
+                color: turnEndScroll === value ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)',
+              }}
+            >
+              {value === 'bottom' ? t('settings.turnEndScrollBottom') : t('settings.turnEndScrollReplyStart')}
+            </button>
+          ))}
+        </div>
       </div>
       </div>
 
