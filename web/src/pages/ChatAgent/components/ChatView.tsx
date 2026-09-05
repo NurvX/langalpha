@@ -1607,7 +1607,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
 
             {/* Input Area */}
             <div className={`flex-shrink-0 ${isMobile ? 'p-3' : 'p-4'} flex justify-center`}>
-              <div className="w-full max-w-3xl space-y-3">
+              <div className="w-full max-w-3xl space-y-3 relative">
                 {activeAgentId === 'main' ? (
                   <>
                     <TodoDrawer todoData={cards['todo-list-card']?.todoData ?? null} />
@@ -1641,16 +1641,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                     )}
                     {messageError && !isLoading && (
                       <ErrorBanner error={messageError} />
-                    )}
-                    {isReconnecting && (
-                      <div className="flex items-center gap-2 px-3 py-1.5 text-xs"
-                        role="status" aria-live="polite"
-                        style={{ color: 'var(--color-text-tertiary)' }}>
-                        <span aria-hidden="true" className="flex-shrink-0">
-                          <Loader size={14} className="text-[color:var(--color-accent-primary)]" />
-                        </span>
-                        {t('chat.reconnecting', 'Reconnecting…')}
-                      </div>
                     )}
                     <ModelStatusPill modelStatus={modelStatus} isLoading={isLoading} />
                     <FallbackSuggestionPill
@@ -1747,6 +1737,24 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       mode={isFlashMode ? 'fast' : 'ptc'}
                       selectedWorkspaceId={workspaceId}
                     />
+                    {/* Floats above the composer instead of sitting in it: a
+                        reconnect that painted before its backlog landed would
+                        otherwise remove this row on catch-up and drop the whole
+                        input by one line, the one visible hop left on a
+                        mid-stream reload. Last in the stack on purpose: the
+                        parent's space-y gives every sibling after the first a
+                        top margin, so a row mounted ahead of the composer
+                        would shift it by that margin and hand the hop back. */}
+                    {isReconnecting && (
+                      <div className="absolute bottom-full left-0 mb-1 flex items-center gap-2 px-3 py-1.5 text-xs"
+                        role="status" aria-live="polite"
+                        style={{ color: 'var(--color-text-tertiary)' }}>
+                        <span aria-hidden="true" className="flex-shrink-0">
+                          <Loader size={14} className="text-[color:var(--color-accent-primary)]" />
+                        </span>
+                        {t('chat.reconnecting', 'Reconnecting…')}
+                      </div>
+                    )}
                   </>
                 ) : activeAgent && activeAgent.type !== WORKFLOW_TASK_TYPE ? (
                   // Workflow runs are script-driven and take no steering input —
