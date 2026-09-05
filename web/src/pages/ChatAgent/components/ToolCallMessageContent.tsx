@@ -18,6 +18,16 @@ const FILE_TOOLS = ['Write', 'Edit', 'Read'];
  */
 const INLINE_TOOLS = new Set(['Glob', 'Grep', 'Write', 'Read', 'Edit', 'ExecuteCode']);
 
+/** Module scope, not literals: a fresh object would defeat Markdown's memo on every tick. */
+const RESULT_STYLE = {
+  backgroundColor: 'var(--color-bg-elevated)',
+  border: '1px solid var(--color-border-muted)',
+};
+const RESULT_ERROR_STYLE = {
+  backgroundColor: 'var(--color-loss-soft)',
+  border: '1px solid var(--color-border-loss)',
+};
+
 interface ToolCallData {
   name?: string;
   args?: Record<string, unknown>;

@@ -59,7 +59,11 @@ interface CodeBlockProps {
 }
 
 // --- CodeBlock component ---
-function CodeBlock({ language, code, compact = false, codeTheme }: CodeBlockProps): React.ReactElement {
+// Memoized on its primitive props: prism re-tokenizes and rebuilds an element
+// per token on every render, which was the single largest cost of a streaming
+// reply once it contained a fence. The parent re-renders on every typewriter
+// tick; the code itself only changes while its own fence is still open.
+const CodeBlock = React.memo(function CodeBlock({ language, code, compact = false, codeTheme }: CodeBlockProps): React.ReactElement {
   const { theme } = useTheme();
   const effectiveTheme = codeTheme ?? theme;
   const [copied, setCopied] = useState(false);
@@ -141,7 +145,7 @@ function CodeBlock({ language, code, compact = false, codeTheme }: CodeBlockProp
       </div>
     </div>
   );
-}
+});
 
 // --- JSON auto-detection helper ---
 function tryFormatJson(code: string): { formatted: string; language: string } | null {
@@ -725,4 +729,16 @@ function Markdown({ content, variant = 'panel', className = '', style, onOpenFil
 }
 
 export { transformCitationBubbles, escapeHtmlAttr };
-export default Markdown;
+// Callers pass fresh inline `style` objects, so a plain memo would never hit.
+function markdownPropsEqual(a: MarkdownProps, b: MarkdownProps): boolean {
+  if (a.content !== b.content || a.variant !== b.variant || a.className !== b.className
+    || a.onOpenFile !== b.onOpenFile || a.codeTheme !== b.codeTheme) return false;
+  const sa = a.style, sb = b.style;
+  if (sa === sb) return true;
+  if (!sa || !sb) return false;
+  const ka = Object.keys(sa) as (keyof React.CSSProperties)[];
+  if (ka.length !== Object.keys(sb).length) return false;
+  return ka.every((k) => sa[k] === sb[k]);
+}
+
+export default React.memo(Markdown, markdownPropsEqual);
