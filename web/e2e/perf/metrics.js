@@ -7,11 +7,11 @@
  *  - Long Animation Frames from PerformanceObserver (why a frame was late)
  *  - DOM mutation churn on the transcript (how much the renderer touches)
  */
-export const PROBE_SOURCE = `(() => {
+export function installSmoothProbe() {
   const S = (window.__smooth = {
     running: false, t0: 0, t1: 0,
     frameGaps: [], loaf: [], longTasks: [],
-    mutations: 0, nodesAdded: 0, nodesRemoved: 0, charDataChanges: 0,
+    mutations: 0, nodesAdded: 0, nodesRemoved: 0, charDataChanges: 0, attrChanges: 0,
   });
   let last = 0;
   function loop(ts) {
@@ -35,24 +35,27 @@ export const PROBE_SOURCE = `(() => {
         S.loaf.push({ start: e.startTime, dur: e.duration, block: e.blockingDuration, styleLayout: (e.styleAndLayoutStart ? e.startTime + e.duration - e.styleAndLayoutStart : 0), scripts });
       }
     }).observe({ type: 'long-animation-frame', buffered: false });
-  } catch {}
+  } catch { /* entry type unsupported in this browser */ }
   try {
     new PerformanceObserver((list) => {
       if (!S.running) return;
       for (const e of list.getEntries()) S.longTasks.push(e.duration);
     }).observe({ type: 'longtask', buffered: false });
-  } catch {}
+  } catch { /* entry type unsupported in this browser */ }
 
   let mo = null;
   S.start = (root) => {
     S.frameGaps = []; S.loaf = []; S.longTasks = [];
-    S.mutations = 0; S.nodesAdded = 0; S.nodesRemoved = 0; S.charDataChanges = 0;
+    S.mutations = 0; S.nodesAdded = 0; S.nodesRemoved = 0; S.charDataChanges = 0; S.attrChanges = 0;
     mo = new MutationObserver((records) => {
       S.mutations += records.length;
       for (const r of records) {
         S.nodesAdded += r.addedNodes.length;
         S.nodesRemoved += r.removedNodes.length;
         if (r.type === 'characterData') S.charDataChanges += 1;
+        // Counted apart from the node churn: an attribute write is a class or
+        // style flip, which costs style recalc but no reconciliation.
+        if (r.type === 'attributes') S.attrChanges += 1;
       }
     });
     mo.observe(root || document.body, { childList: true, subtree: true, characterData: true, attributes: true });
@@ -81,7 +84,8 @@ export const PROBE_SOURCE = `(() => {
       loafTop: S.loaf.slice().sort((a, b) => b.dur - a.dur).slice(0, 5).map((e) => ({ at: Math.round(e.start - S.t0), dur: Math.round(e.dur), styleLayout: Math.round(e.styleLayout), scripts: e.scripts })),
       longTasks: S.longTasks.length,
       longTaskMaxMs: Math.round(S.longTasks.reduce((m, d) => Math.max(m, d), 0)),
-      mutations: S.mutations, nodesAdded: S.nodesAdded, nodesRemoved: S.nodesRemoved, charDataChanges: S.charDataChanges,
+      mutations: S.mutations, nodesAdded: S.nodesAdded, nodesRemoved: S.nodesRemoved,
+      charDataChanges: S.charDataChanges, attrChanges: S.attrChanges,
     };
   };
-})();`;
+}

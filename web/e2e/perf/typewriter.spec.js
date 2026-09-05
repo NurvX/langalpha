@@ -1,87 +1,35 @@
 /**
- * Typewriter feel benchmark. Not part of the default e2e run.
- *
- *   PERF=1 PERF_LABEL=<label> pnpm exec playwright test e2e/perf/typewriter.spec.js
- *
- * Streams the long reply at a fast model's pace twice: once as an even token
- * stream and once in lumps (what a proxy or a Redis batch delivers), and
- * records what the eye would notice in the reveal: how far the text trails
- * the model, how long it keeps typing after the model stopped, stalls, and
- * jumps. Writes one JSON per scenario to perf-results/.
+ * Typewriter feel: the long reply at a fast model's pace, once as an even
+ * token stream and once in lumps (what a proxy or a Redis batch delivers).
+ * Records what the eye notices in the reveal - how far the text trails the
+ * model, how long it keeps typing after the model stopped, stalls and jumps.
+ * Off by default; flags and invocations are in e2e/perf/README.md.
  */
-import fs from 'node:fs';
-import path from 'node:path';
-import { execSync } from 'node:child_process';
 import { configureSSE, resetMockServer, mockAPI, test, expect } from '../fixtures.js';
-import { sampleWorkspace, sampleThread, sseEvents } from '../helpers/mockResponses.js';
+import { sseEvents } from '../helpers/mockResponses.js';
+import { TH, chatViewOverrides } from '../helpers/chatScenario.js';
 import { buildReply, chunk, END_MARKER } from './streamFixture.js';
+import { installProbe } from './probe.js';
+import { label, writeRun } from './run.js';
 
-const WS = 'a0000001-0000-4000-8000-000000000001';
-const TH = 'b0000001-0000-4000-8000-000000000001';
 // ~500 chars/s, the pace of a fast model.
 const SCENARIOS = [
   { name: 'even', chars: 16, delayMs: 32 },
   { name: 'lumpy', chars: 160, delayMs: 320 },
 ];
 
-function label() {
-  if (process.env.PERF_LABEL) return process.env.PERF_LABEL;
-  try { return execSync('git rev-parse --short HEAD').toString().trim(); } catch { return 'unlabeled'; }
-}
-
-function overrides() {
-  const ws = sampleWorkspace();
-  const th = sampleThread();
-  return {
-    'GET /workspaces': { workspaces: [ws], total: 1, limit: 20, offset: 0 },
-    [`GET /workspaces/${WS}`]: ws,
-    'GET /threads': { threads: [th], total: 1 },
-    [`GET /threads/${TH}`]: th,
-    [`GET /threads/${TH}/status`]: { can_reconnect: false, status: 'idle' },
-    [`GET /threads/${TH}/turns`]: { thread_id: TH, turns: [{ turn_index: 0, edit_checkpoint_id: 'cp-edit-0', regenerate_checkpoint_id: 'cp-regen-0' }], retry_checkpoint_id: 'cp-retry-0' },
-    [`GET /workspaces/${WS}/files`]: { files: [] },
-  };
-}
-
-// Per frame: transcript text length and whether the composer still shows the
-// stop control (the stream is live). The stop control flips on the final
-// event, which stamps when the model finished without asking the client.
-const PROBE = `(() => {
-  const P = (window.__tw = { frames: [], running: false });
-  let scroller = null;
-  function findScroller() {
-    if (scroller && scroller.isConnected) return scroller;
-    const main = document.querySelector('main') || document.body;
-    for (const el of main.querySelectorAll('*')) {
-      const oy = getComputedStyle(el).overflowY;
-      if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 50) { scroller = el; return el; }
-    }
-    return null;
-  }
-  function tick(ts) {
-    if (P.running) {
-      const main = document.querySelector('main') || document.body;
-      const live = !!document.querySelector('button[aria-label="Stop"]');
-      const sc = findScroller();
-      P.frames.push([ts, main.textContent.length, live ? 1 : 0, sc ? sc.scrollTop : -1, sc ? sc.scrollHeight - sc.clientHeight : -1]);
-    }
-    requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
-  P.start = () => { P.frames = []; P.running = true; };
-  P.stop = () => { P.running = false; return P.frames; };
-})();`;
-
 function analyze(frames, replyChars) {
   // Resample to fixed 50 ms buckets so the numbers do not depend on the
   // machine's frame rate (headless Chromium runs rAF at ~110 fps, no vsync).
+  // The text measured is the message bubbles' alone (the probe's reply
+  // column), so composer, status and activity text never count as reveal.
   const STEP = 50;
   const t0 = frames[0][0], t1 = frames[frames.length - 1][0];
   const at = [];
   let j = 0;
   for (let t = t0; t <= t1; t += STEP) {
     while (j + 1 < frames.length && frames[j + 1][0] <= t) j++;
-    at.push([t, frames[j][1], frames[j][2]]);
+    at.push([t, frames[j][5], frames[j][2]]);
   }
   let first = -1, last = -1;
   for (let i = 1; i < at.length; i++) if (at[i][1] > at[i - 1][1]) { if (first < 0) first = i; last = i; }
@@ -126,13 +74,15 @@ function analyze(frames, replyChars) {
     // Buckets that showed more than three times the typical amount: a visible jump.
     jumps: gains.filter((g) => g > Math.max(3 * median, 60)).length,
     maxGainPer50ms: maxGain, maxGainAtMs: maxGainAt, medianGainPer50ms: median,
-    // Text still hidden when the model finished: what the final frame has to pop or type.
-    backlogAtModelDone: modelDoneAt === null ? at[last][1] - at[Math.max(first, last - 1)][1] : null,
+    // Text still hidden when the model finished, against what finally
+    // rendered rather than the Markdown source, whose syntax never shows:
+    // what the final frame has to pop or type (null: stop control never seen).
+    backlogAtModelDone: modelDoneAt === null ? null : at[last][1] - at[liveEnd][1],
     // Unevenness of the reveal, bucket to bucket (0 = perfectly steady).
     speedCv: +(sd / mean).toFixed(2),
     meanCharsPerSec: Math.round(mean * 1000 / STEP),
     frameGapP95: +fgaps[Math.floor(fgaps.length * 0.95)].toFixed(1),
-    liveFrames, replyChars, follow,
+    frames: frames.length, liveFrames, replyChars, follow,
   };
 }
 
@@ -146,8 +96,12 @@ test.describe('typewriter feel', () => {
 
   for (const sc of SCENARIOS) {
     test(`fast model, ${sc.name} arrival`, async ({ page }, testInfo) => {
-      await page.addInitScript(PROBE);
-      await mockAPI(page, overrides());
+      // `live` adds the stop-control read per frame, which is what stamps when
+      // the model finished, and `reply` the bubble-only text length the reveal
+      // is measured on; the painted and scroll-log passes stay off so the
+      // probe costs the reveal as little as possible.
+      await page.addInitScript(installProbe, { live: true, reply: true });
+      await mockAPI(page, chatViewOverrides());
       await configureSSE({ method: 'GET', path: `/api/v1/threads/${TH}/messages/replay`, events: [sseEvents.replayDone()], delay: 10 });
       const reply = buildReply();
       const events = [];
@@ -160,18 +114,18 @@ test.describe('typewriter feel', () => {
       await page.waitForSelector('textarea', { timeout: 10000 });
       await page.waitForTimeout(500);
       await page.locator('textarea').fill('Give me an earnings deep dive on NVDA');
-      await page.evaluate(() => window.__tw.start());
+      await page.evaluate(() => window.__probe.mark('send'));
       await page.locator('button[aria-label="Send message"]').click();
       await expect(page.getByText(END_MARKER)).toBeVisible({ timeout: 150_000 });
       await page.waitForTimeout(1500);
-      const frames = await page.evaluate(() => window.__tw.stop());
+      const frames = await page.evaluate(() => window.__probe.framesSince('send'));
       const m = analyze(frames, reply.length);
       const run = { label: label(), scenario: sc, at: new Date().toISOString(), metrics: m };
-      const dir = path.resolve('perf-results');
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, `typewriter-${sc.name}-${run.label}-${Date.now()}-${testInfo.repeatEachIndex}.json`), JSON.stringify(run, null, 2));
+      writeRun(`typewriter-${sc.name}`, run, testInfo);
       console.log(`[typewriter ${sc.name} ${run.label}] ${JSON.stringify(m)}`);
-      expect(m).not.toBeNull();
+      // The sampler has to have run for the bucketed numbers to mean anything:
+      // under 10 fps across the reveal, they are noise.
+      expect(m.frames).toBeGreaterThan(m.revealMs / 100);
     });
   }
 });
