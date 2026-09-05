@@ -1,9 +1,9 @@
 import { chartInstanceKey, planChartAnnotationCards } from '../chartAnnotationGrouping';
 import { INLINE_ARTIFACT_TOOLS } from '../charts/InlineArtifactCards';
 import { normalizeSubagentText } from './normalizeSubagentText';
+import { MIN_LIVE_EXPOSURE_MS } from './liveZoneTiming';
 import type { ContentSegmentRecord, ToolCallProcessRecord } from './types';
 
-const MIN_LIVE_EXPOSURE_MS = 1800; // minimum time a just-completed item stays in the live zone before folding
 const MAX_IN_PROGRESS_MS = 15000; // max time a tool call can stay in-progress in live view before archiving (independent of MIN_LIVE_EXPOSURE_MS)
 /** Tools that should stay in the live zone for their entire duration (no MAX_IN_PROGRESS_MS cap) */
 const ALWAYS_LIVE_TOOLS = new Set(['TaskOutput', 'WebFetch']);
