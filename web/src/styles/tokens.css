@@ -516,6 +516,36 @@ html {
     outline: none;
   }
 
+  /* Menu and listbox items are tabindex="-1" as well (roving focus), but they
+     are the one landing spot the user drives through: someone arrowing down a
+     menu needs the ring to travel with them. Inward, because the menu clips at
+     its own padding. currentColor rather than the ink token: a highlighted
+     item swaps its text to the accent foreground, and a ring in the page ink
+     drawn inside that fill reads at under 2:1 against it.
+
+     The ring below it is transparent rather than absent, and it is on every
+     item rather than the focused one: forced colors drops the highlight tint
+     that marks the current row everywhere else, and what it repaints instead
+     is an outline that was already drawn. A row with no outline at all is a
+     row the OS has nothing to paint, which under a mouse is every row in the
+     menu. This is the `outline-none` the items used to carry as a utility
+     class, kept where the rest of the rule lives. */
+  [role="menuitem"],
+  [role="menuitemcheckbox"],
+  [role="menuitemradio"],
+  [role="option"] {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+  }
+
+  [role="menuitem"]:focus-visible,
+  [role="menuitemcheckbox"]:focus-visible,
+  [role="menuitemradio"]:focus-visible,
+  [role="option"]:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: -2px;
+  }
+
   /* The browser matches :focus-visible on a mouse click for any control that
      might take a keystroke next -- text fields, <select>, the number and date
      widgets -- and Chromium carries it across a programmatic focus move on top
