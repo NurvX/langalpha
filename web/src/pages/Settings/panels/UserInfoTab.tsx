@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { User, LogOut, Sun, Moon, Monitor } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
@@ -44,6 +44,9 @@ export function UserInfoTab() {
   const queryClient = useQueryClient();
   const { theme: _theme, preference, setTheme: setThemePref } = useTheme();
   const [fontScale, setFontScaleState] = useState(getFontScale);
+  const themeLabelId = useId();
+  const fontSizeLabelId = useId();
+  const turnEndLabelId = useId();
   const { t, i18n } = useTranslation();
 
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -318,10 +321,10 @@ export function UserInfoTab() {
       {/* Theme Toggle */}
       <div className="settings-row">
         <div className="space-y-0.5">
-          <label className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.theme')}</label>
+          <label id={themeLabelId} className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.theme')}</label>
         </div>
         <SegmentedControl
-          ariaLabel={t('settings.theme')}
+          labelledBy={themeLabelId}
           value={preference}
           onChange={setThemePref}
           options={[
@@ -335,10 +338,10 @@ export function UserInfoTab() {
       {/* Font size — multiplies the browser's own font-size preference */}
       <div className="settings-row">
         <div className="space-y-0.5">
-          <label className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.fontSize', 'Font size')}</label>
+          <label id={fontSizeLabelId} className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.fontSize', 'Font size')}</label>
         </div>
         <SegmentedControl
-          ariaLabel={t('settings.fontSize', 'Font size')}
+          labelledBy={fontSizeLabelId}
           value={String(fontScale)}
           onChange={(v) => { const next = Number(v) as FontScale; setFontScale(next); setFontScaleState(next); }}
           options={FONT_SCALES.map((scale) => ({ value: String(scale), label: `${Math.round(scale * 100)}%` }))}
@@ -361,11 +364,11 @@ export function UserInfoTab() {
       {/* Where the transcript lands when a reply finishes */}
       <div className="settings-row">
         <div className="space-y-0.5">
-          <label className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.turnEndScroll')}</label>
+          <label id={turnEndLabelId} className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.turnEndScroll')}</label>
           <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>{t('settings.turnEndScrollDesc')}</p>
         </div>
         <SegmentedControl
-          ariaLabel={t('settings.turnEndScroll')}
+          labelledBy={turnEndLabelId}
           value={turnEndScroll}
           onChange={(v) => { void handleTurnEndScrollChange(v); }}
           options={[
