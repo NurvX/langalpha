@@ -515,6 +515,12 @@ test.describe('a native select', () => {
     const clicked = await outlineOn(page, SELECT);
     expect(unpainted(clicked.style, clicked.color)).toBe(true);
 
+    // The click left the option list up, and while it is the browser widget
+    // owns the keyboard: on the Linux runner the arrow below never reaches the
+    // page, on this machine it does. Escape hands the keys back either way,
+    // and it is itself a keystroke on the same element, so whichever of the
+    // two lands on the page is the one that does the refresh.
+    await page.keyboard.press('Escape');
     // The gesture the refresh exists for: same element, same focus, keyboard
     // from here on.
     await page.keyboard.press('ArrowDown');
