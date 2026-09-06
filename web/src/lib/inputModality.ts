@@ -9,6 +9,8 @@
  * restore when no keyboard was involved.
  */
 
+import { registerAuthReset } from '@/lib/authResets';
+
 /** Held alone, a modifier is someone reaching for Cmd-Tab, not navigating. */
 const MODIFIERS = new Set(['Meta', 'Control', 'Alt', 'Shift']);
 
@@ -150,6 +152,17 @@ if (typeof window !== 'undefined') {
     },
     true,
   );
+  // Sign-out and account switch clear the record with the session. Nothing
+  // here is user-scoped, and the next press or keystroke would overwrite it
+  // anyway, but a `keyboard` left true carries one account's keystroke into
+  // the first focus the next one is handed, and focus the page places on its
+  // own is exactly what this module holds the ring off for.
+  registerAuthReset(() => {
+    pointer = false;
+    keyboard = false;
+    parked = null;
+    document.documentElement.toggleAttribute(POINTER_FOCUS, false);
+  });
 }
 
 export function lastInputWasPointer(): boolean {
