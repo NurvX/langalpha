@@ -249,6 +249,7 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
               items={(block as ActivityRenderBlock).items as any} // TODO: type properly — ActivityItem[] not exported
               preparingToolCall={blockIdx === lastActivityBlockIdx ? preparingToolCall : null}
               isStreaming={isStreaming ?? false}
+              isFirst={blockIdx === 0}
               onToolCallClick={onToolCallDetailClick as any} // TODO: type properly
               onOpenFile={onOpenFile}
             />
@@ -431,6 +432,7 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
           items={[]}
           preparingToolCall={preparingToolCall}
           isStreaming={isStreaming ?? false}
+          isFirst={renderBlocks.length === 0}
           onToolCallClick={onToolCallDetailClick as any} // TODO: type properly
           onOpenFile={onOpenFile}
         />

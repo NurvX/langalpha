@@ -221,16 +221,16 @@ const chatP = ({ node: _node, ...props }: MarkdownComponentProps) => (
   <p className="my-[1px] py-[3px] whitespace-pre-wrap break-words first:mt-0 last:mb-0" style={{ color: 'var(--color-text-primary)' }} {...props} />
 );
 const chatH1 = ({ node: _node, ...props }: MarkdownComponentProps) => (
-  <h1 className="first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.75em', fontWeight: 700, lineHeight: '1.3', marginTop: '1.5em', marginBottom: '0.5em' }} {...props} />
+  <h1 className="mt-[1.5em] mb-[0.5em] first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.75em', fontWeight: 700, lineHeight: '1.3' }} {...props} />
 );
 const chatH2 = ({ node: _node, ...props }: MarkdownComponentProps) => (
-  <h2 className="first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.4em', fontWeight: 700, lineHeight: '1.3', marginTop: '1.4em', marginBottom: '0.4em' }} {...props} />
+  <h2 className="mt-[1.4em] mb-[0.4em] first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.4em', fontWeight: 700, lineHeight: '1.3' }} {...props} />
 );
 const chatH3 = ({ node: _node, ...props }: MarkdownComponentProps) => (
-  <h3 className="first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.2em', fontWeight: 600, lineHeight: '1.3', marginTop: '1.2em', marginBottom: '0.3em' }} {...props} />
+  <h3 className="mt-[1.2em] mb-[0.3em] first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.2em', fontWeight: 600, lineHeight: '1.3' }} {...props} />
 );
 const chatH4 = ({ node: _node, ...props }: MarkdownComponentProps) => (
-  <h4 className="first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.05em', fontWeight: 600, lineHeight: '1.4', marginTop: '1em', marginBottom: '0.25em' }} {...props} />
+  <h4 className="mt-[1em] mb-[0.25em] first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.05em', fontWeight: 600, lineHeight: '1.4' }} {...props} />
 );
 const chatCode = ({ node: _node, className, children, ...props }: MarkdownComponentProps) => {
   const isBlock = /language-/.test(className || '');
@@ -309,16 +309,16 @@ const panelP = ({ node: _node, ...props }: MarkdownComponentProps) => (
   <p className="my-1 whitespace-pre-wrap break-words" style={{ color: 'var(--color-text-primary)' }} {...props} />
 );
 const panelH1 = ({ node: _node, ...props }: MarkdownComponentProps) => (
-  <h1 className="first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.5em', fontWeight: 700, lineHeight: '1.3', marginTop: '1.2em', marginBottom: '0.4em' }} {...props} />
+  <h1 className="mt-[1.2em] mb-[0.4em] first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.5em', fontWeight: 700, lineHeight: '1.3' }} {...props} />
 );
 const panelH2 = ({ node: _node, ...props }: MarkdownComponentProps) => (
-  <h2 className="first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.25em', fontWeight: 700, lineHeight: '1.3', marginTop: '1.1em', marginBottom: '0.35em' }} {...props} />
+  <h2 className="mt-[1.1em] mb-[0.35em] first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.25em', fontWeight: 700, lineHeight: '1.3' }} {...props} />
 );
 const panelH3 = ({ node: _node, ...props }: MarkdownComponentProps) => (
-  <h3 className="first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.1em', fontWeight: 600, lineHeight: '1.3', marginTop: '1em', marginBottom: '0.3em' }} {...props} />
+  <h3 className="mt-[1em] mb-[0.3em] first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.1em', fontWeight: 600, lineHeight: '1.3' }} {...props} />
 );
 const panelH4 = ({ node: _node, ...props }: MarkdownComponentProps) => (
-  <h4 className="first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1em', fontWeight: 600, lineHeight: '1.4', marginTop: '0.8em', marginBottom: '0.2em' }} {...props} />
+  <h4 className="mt-[0.8em] mb-[0.2em] first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1em', fontWeight: 600, lineHeight: '1.4' }} {...props} />
 );
 const panelCode = ({ node: _node, className, children, ...props }: MarkdownComponentProps) => {
   const isBlock = /language-/.test(className || '');
@@ -369,13 +369,13 @@ const compactP = ({ node: _node, ...props }: MarkdownComponentProps) => (
   <p className="my-[1px] py-[3px] whitespace-pre-wrap break-words first:mt-0 last:mb-0" style={{ color: 'var(--color-text-primary)' }} {...props} />
 );
 const compactH1 = ({ node: _node, ...props }: MarkdownComponentProps) => (
-  <h1 className="first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.25em', fontWeight: 700, lineHeight: '1.3', marginTop: '0.8em', marginBottom: '0.2em' }} {...props} />
+  <h1 className="mt-[0.8em] mb-[0.2em] first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.25em', fontWeight: 700, lineHeight: '1.3' }} {...props} />
 );
 const compactH2 = ({ node: _node, ...props }: MarkdownComponentProps) => (
-  <h2 className="first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.15em', fontWeight: 700, lineHeight: '1.3', marginTop: '0.7em', marginBottom: '0.15em' }} {...props} />
+  <h2 className="mt-[0.7em] mb-[0.15em] first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.15em', fontWeight: 700, lineHeight: '1.3' }} {...props} />
 );
 const compactH3 = ({ node: _node, ...props }: MarkdownComponentProps) => (
-  <h3 className="first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.05em', fontWeight: 600, lineHeight: '1.3', marginTop: '0.6em', marginBottom: '0.1em' }} {...props} />
+  <h3 className="mt-[0.6em] mb-[0.1em] first:mt-0" style={{ color: 'var(--color-text-primary)', fontSize: '1.05em', fontWeight: 600, lineHeight: '1.3' }} {...props} />
 );
 const compactCode = ({ node: _node, className, children, ...props }: MarkdownComponentProps) => {
   const isBlock = /language-/.test(className || '');
