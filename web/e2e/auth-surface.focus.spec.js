@@ -151,6 +151,24 @@ test.describe('a field on the auth surface', () => {
     expect(tabbed.shadow).not.toBe(clicked.shadow);
     expect(clicked.shadow).not.toBe('none');
   });
+
+  test('keeps the muted halo while the user is typing into it', async ({ page }) => {
+    // This rule reads the *absence* of the recorded device, and typing is a
+    // keydown. lib/inputModality.ts refreshes that record on a keydown so a
+    // clicked <select> rings once the keyboard takes over, and the guard that
+    // stops the refresh reaching a text field is what keeps the ember off an
+    // address someone is halfway through. The outline assertions above cannot
+    // see this one: the ember is a border and a shadow, not an outline.
+    await emailView(page);
+    await page.locator(EMAIL).click();
+    const clicked = await paintOn(page, EMAIL);
+
+    await page.keyboard.type('someone@example.com');
+    const typed = await paintOn(page, EMAIL);
+    expect(typed.focused).toBe(true);
+    expect(typed.border).toBe(clicked.border);
+    expect(typed.shadow).toBe(clicked.shadow);
+  });
 });
 
 test.describe('a button or link on the auth surface', () => {

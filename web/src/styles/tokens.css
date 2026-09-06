@@ -422,56 +422,34 @@ html {
     padding: 0;
   }
 
-  /* The ring every control gets unless it draws its own. Without a baseline the
-     fallback is Chromium's -- `outline: auto` in a blue this product uses
-     nowhere -- and that was the ring on four out of five controls, the chat
-     transcript included. Lives in the base layer, so a component that does draw
-     its own still wins: a Tailwind `focus-visible:` utility by layer order, a
-     hand-written `.class:focus-visible` by specificity. */
+  /* Tailwind's preflight carries `:-moz-focusring { outline: auto }`, and it
+     lands here unlayered, so in Firefox it would beat the whole focus layer
+     below: its own ring on a keyboard focus, and one on a clicked field the
+     layer means to keep quiet. Same specificity and later in source, so this
+     wins, and revert-layer hands the decision back to the layer. */
+  :-moz-focusring {
+    outline: revert-layer;
+  }
+}
+
+/* Focus rings.
+
+   Everything in here is a default: the ring a control gets unless something
+   draws its own. It sits in a cascade layer of its own so that "its own"
+   means any rule outside this layer, whatever its specificity -- a Tailwind
+   `focus-visible:` utility, a hand-written `.class:focus-visible`, a
+   box-shadow ring on a sidebar row. Unlayered styles beat layered ones
+   outright, so a component never has to out-specify this block. (Tailwind's
+   `@layer base` above is not a cascade layer: the plugin unwraps it into plain
+   unlayered CSS, where a rule here and a component's would be settled by
+   specificity and source order instead.) */
+@layer focus-defaults {
+  /* Without a baseline the fallback is Chromium's -- `outline: auto` in a blue
+     this product uses nowhere -- and that was the ring on four out of five
+     controls, the chat transcript included. */
   :focus-visible {
     outline: 2px solid var(--color-focus-ring);
     outline-offset: 2px;
-  }
-
-  /* A text field is the one control the browser matches :focus-visible on for
-     either device. The heuristic is deliberate -- a field about to receive
-     typing has to look focused -- but it means the rule above rings a field
-     the mouse just clicked, where the same click on a button rings nothing.
-     No selector separates the two, so lib/inputModality.ts records how focus
-     arrived and this reads it back. A field the mouse focused keeps the caret
-     and its own border change; a Tab still brings the ring.
-
-     Spelled out type by type because the exemption has to be the narrow set
-     where every key is typing. A checkbox, a range, a number spinner and a
-     date field all take keys that are *commands*, and Chromium starts matching
-     :focus-visible the moment one arrives -- while this record still says
-     pointer, because focus never moved and no focusin fired. Written as
-     `input` those controls go dark under the user's own first keystroke.
-     Anything left off this list keeps a ring on a click, which is the mild
-     half of the trade. `contenteditable` is qualified for the same reason the
-     inputs are: the bare attribute selector also matches
-     `contenteditable="false"`, which is not a field and does not take typing.
-
-     Transparent rather than `none`, which is not a stylistic choice: forced
-     colors repaints every outline in the system palette but cannot paint one
-     that was never drawn, and it drops the box-shadow and normalizes the
-     border a field would otherwise be distinguished by. `none` here leaves a
-     high-contrast user with a clicked field marked by nothing but the caret.
-     A transparent outline is invisible everywhere else and becomes the
-     system's own focus color there -- the same reason Tailwind's
-     `outline-none` compiles to this and not to `outline: none`. */
-  :root[data-pointer-focus] :is(
-    textarea,
-    [contenteditable]:not([contenteditable="false"]),
-    input:not([type]),
-    input[type="text"],
-    input[type="email"],
-    input[type="password"],
-    input[type="search"],
-    input[type="tel"],
-    input[type="url"]
-  ):focus-visible {
-    outline: 2px solid transparent;
   }
 
   /* A field that fills a bordered container has nowhere to put a ring of its
@@ -482,9 +460,9 @@ html {
 
      Scoped to a direct-child input so a button sharing the container -- a clear
      affordance, a chip's remove -- still rings itself instead of lighting the
-     whole box. Gated like the rule above and for the same reason: the field
-     inside matches :focus-visible for either device, so ungated this would
-     light the container on a click.
+     whole box. Held off under the pointer like everything else here, and for
+     the same reason: the field inside matches :focus-visible for either
+     device, so ungated this would light the container on a click.
 
      All three sit behind @supports because only the first of them survives a
      parser without :has(): taking the ring off the field is a plain selector,
@@ -501,9 +479,9 @@ html {
       outline-offset: 2px;
     }
 
-    /* Transparent for the reason the field rule above is. */
+    /* Transparent for the reason the rule at the end of this layer is. */
     :root[data-pointer-focus] .rings-within:has(> input:focus-visible) {
-      outline: 2px solid transparent;
+      outline-color: transparent;
     }
   }
 
@@ -536,6 +514,33 @@ html {
      so without this the ring draws around an entire dialog. */
   [tabindex="-1"]:focus-visible {
     outline: none;
+  }
+
+  /* The browser matches :focus-visible on a mouse click for any control that
+     might take a keystroke next -- text fields, <select>, the number and date
+     widgets -- and Chromium carries it across a programmatic focus move on top
+     of that: the first control a dialog focuses after a click, the trigger a
+     menu hands focus back to, the item under the mouse as it crosses a menu.
+     No selector tells any of those from a Tab, so lib/inputModality.ts records
+     whether a key placed the focus the page holds, and while it says no the
+     ring this sheet draws is held off. A keystroke lifts the record, so the
+     same control rings the moment the keyboard takes over. It out-specifies
+     both the baseline and the item rule above, so it reaches every ring in
+     this layer. Only the color, so a rule that already set `outline: none`
+     stays at none -- and a component painting a ring of its own outside this
+     layer keeps it, which is why one that can light under a pointer reads the
+     same record itself (`:root:not([data-pointer-focus])`, LoginPage.css).
+
+     Transparent rather than `none`, which is not a stylistic choice: forced
+     colors repaints every outline in the system palette but cannot paint one
+     that was never drawn, and it drops the box-shadow and normalizes the
+     border a field would otherwise be distinguished by. `none` here leaves a
+     high-contrast user with a clicked field marked by nothing but the caret.
+     A transparent outline is invisible everywhere else and becomes the
+     system's own focus color there -- the same reason Tailwind's
+     `outline-none` compiles to this and not to `outline: none`. */
+  :root[data-pointer-focus] :focus-visible {
+    outline-color: transparent;
   }
 }
 
