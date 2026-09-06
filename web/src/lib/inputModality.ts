@@ -104,7 +104,12 @@ if (typeof window !== 'undefined') {
       // Any key, modifier included, is a real keystroke: a parked focus that
       // sees one was not restored by a window trip.
       parked = null;
-      if (MODIFIERS.has(event.key)) return;
+      // A held modifier makes the keystroke a shortcut rather than a move.
+      // Cmd-C sends a second keydown whose `key` is the letter with `metaKey`
+      // still set, and reading that as navigation rings the <select> the user
+      // clicked a moment ago, for as long as the focus stays there. Shift is
+      // not one of these: Shift-Tab is how a keyboard user walks backwards.
+      if (MODIFIERS.has(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
       pointer = false;
       keyboard = true;
       // Focus does not move when someone clicks a control and then drives it
