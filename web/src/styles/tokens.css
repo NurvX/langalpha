@@ -203,15 +203,17 @@ html {
   --destructive-foreground: 0 0% 98%;
   --border: 0 0% 100% / 0.08;
   --input: 220 4% 14.5%;
-  /* Focus ring is the navy this product carried before the amber. Amber is the
+  /* Focus ring is the primary text color, carrying no hue at all. Amber is the
      active/selected language here, so a ring painted in it reads as "selected"
-     rather than "focused" — which is the whole reason the ring is not the brand
-     color (DESIGN.md). Lightness is set by the *lightest* surface a ring can
-     land on, not the page: at 52% it cleared 3:1 (WCAG 1.4.11) against the
-     sidebar and the cards but came to 2.98:1 on --color-bg-elevated, the menus
-     and tooltips. 55% lands at 3.35:1 there and higher everywhere else. Opaque
-     rather than a wash, so that margin does not move with the backdrop. */
-  --ring: 221 43% 55%;
+     rather than "focused", and any other hue would be a color the product uses
+     nowhere else (DESIGN.md). Ink is what the eye already reads as "this one":
+     a control gains the same edge its label has. It also clears WCAG 1.4.11 by
+     a wide margin on every surface, 11:1 on --color-bg-elevated, the menus and
+     tooltips, where the previous navy was tuned to reach 3.35:1. Kept as an
+     HSL triplet, and derived rather than repeated, because Tailwind composes
+     `ring-ring` as `hsl(var(--ring) / <alpha>)` and DESIGN.md publishes the
+     equality with the text ink as a contract. */
+  --ring: var(--foreground);
   --radius: 0.5rem;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.25);
 
@@ -374,8 +376,8 @@ html {
   --destructive-foreground: 0 0% 100%;
   --border: 60 2% 12% / 0.09;
   --input: 60 4% 96.5%;
-  /* Same navy as dark, one step down: on paper the lighter face washes out. */
-  --ring: 221 43% 45%;
+  /* The light theme's text ink, for the same reason. */
+  --ring: var(--foreground);
   /* Kept tight rather than dropped: floating overlays (AgentEventOverlay,
      SelectionCommentOverlay, JumpToLatestPill) rely on this to separate from
      a now-pure-white page — the workspace cards carry their own border. */
