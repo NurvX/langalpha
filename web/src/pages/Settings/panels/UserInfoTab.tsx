@@ -3,6 +3,7 @@ import { User, LogOut, Sun, Moon, Monitor } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { ToggleSwitch } from '@/components/ui/switch';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { updateCurrentUser, uploadAvatar } from '@/pages/Dashboard/utils/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUser } from '@/hooks/useUser';
@@ -11,7 +12,8 @@ import { useUpdatePreferences } from '@/hooks/useUpdatePreferences';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
 import { useTheme } from '@/contexts/ThemeContext';
-import { FONT_SCALES, getFontScale, setFontScale } from '@/lib/fontScale';
+import { FONT_SCALES, getFontScale, setFontScale, type FontScale } from '@/lib/fontScale';
+import { turnEndScrollPatch, readTurnEndScroll, type TurnEndScroll } from '@/lib/turnEndScroll';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '@/components/ui/use-toast';
 import ConfirmDialog from '@/pages/Dashboard/components/ConfirmDialog';
@@ -174,15 +176,28 @@ export function UserInfoTab() {
   useEffect(() => () => { if (dirtyRef.current) flushUserInfoSave(); }, [flushUserInfoSave]);
 
   const handleVoiceInputToggle = async () => {
-    const currentOtherPref = (prefsData as any)?.other_preference || {};
-    const currentEnabled = !!currentOtherPref.voice_input_enabled;
+    const currentEnabled = !!((prefsData as Preferences | null)?.other_preference?.voice_input_enabled);
     try {
+      // One key only: the server merges other_preference key by key, and
+      // writing the cached object back would overwrite a sibling another tab
+      // changed since this one last fetched.
       await updatePrefsMutation.mutateAsync({
-        other_preference: {
-          ...currentOtherPref,
-          voice_input_enabled: !currentEnabled,
-        },
+        other_preference: { voice_input_enabled: !currentEnabled },
       });
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: t('common.error'),
+        description: t('settings.failedToSaveSettings'),
+      });
+    }
+  };
+
+  const turnEndScroll = readTurnEndScroll(prefsData);
+  const handleTurnEndScrollChange = async (next: TurnEndScroll) => {
+    if (next === turnEndScroll) return;
+    try {
+      await updatePrefsMutation.mutateAsync(turnEndScrollPatch(next));
     } catch {
       toast({
         variant: 'destructive',
@@ -305,44 +320,16 @@ export function UserInfoTab() {
         <div className="space-y-0.5">
           <label className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.theme')}</label>
         </div>
-        <div className="inline-flex rounded-lg overflow-hidden clips-focus-ring" style={{ border: '1px solid var(--color-border-muted)' }}>
-          <button
-            type="button"
-            onClick={() => setThemePref('dark')}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-[0.8125rem] font-medium transition-colors"
-            style={{
-              backgroundColor: preference === 'dark' ? 'var(--color-accent-soft)' : 'transparent',
-              color: preference === 'dark' ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)',
-            }}
-          >
-            <Moon className="h-3.5 w-3.5" />
-            {t('settings.dark')}
-          </button>
-          <button
-            type="button"
-            onClick={() => setThemePref('light')}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-[0.8125rem] font-medium transition-colors"
-            style={{
-              backgroundColor: preference === 'light' ? 'var(--color-accent-soft)' : 'transparent',
-              color: preference === 'light' ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)',
-            }}
-          >
-            <Sun className="h-3.5 w-3.5" />
-            {t('settings.light')}
-          </button>
-          <button
-            type="button"
-            onClick={() => setThemePref('auto')}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-[0.8125rem] font-medium transition-colors"
-            style={{
-              backgroundColor: preference === 'auto' ? 'var(--color-accent-soft)' : 'transparent',
-              color: preference === 'auto' ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)',
-            }}
-          >
-            <Monitor className="h-3.5 w-3.5" />
-            {t('settings.auto', 'Auto')}
-          </button>
-        </div>
+        <SegmentedControl
+          ariaLabel={t('settings.theme')}
+          value={preference}
+          onChange={setThemePref}
+          options={[
+            { value: 'dark', label: <><Moon className="h-3.5 w-3.5" />{t('settings.dark')}</> },
+            { value: 'light', label: <><Sun className="h-3.5 w-3.5" />{t('settings.light')}</> },
+            { value: 'auto', label: <><Monitor className="h-3.5 w-3.5" />{t('settings.auto', 'Auto')}</> },
+          ]}
+        />
       </div>
 
       {/* Font size — multiplies the browser's own font-size preference */}
@@ -350,22 +337,12 @@ export function UserInfoTab() {
         <div className="space-y-0.5">
           <label className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.fontSize', 'Font size')}</label>
         </div>
-        <div className="inline-flex rounded-lg overflow-hidden clips-focus-ring" style={{ border: '1px solid var(--color-border-muted)' }}>
-          {FONT_SCALES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => { setFontScale(s); setFontScaleState(s); }}
-              className="px-2 py-1 text-[0.8125rem] font-medium transition-colors"
-              style={{
-                backgroundColor: fontScale === s ? 'var(--color-accent-soft)' : 'transparent',
-                color: fontScale === s ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)',
-              }}
-            >
-              {Math.round(s * 100)}%
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          ariaLabel={t('settings.fontSize', 'Font size')}
+          value={String(fontScale)}
+          onChange={(v) => { const next = Number(v) as FontScale; setFontScale(next); setFontScaleState(next); }}
+          options={FONT_SCALES.map((scale) => ({ value: String(scale), label: `${Math.round(scale * 100)}%` }))}
+        />
       </div>
 
       {/* Voice Input Toggle */}
@@ -378,6 +355,23 @@ export function UserInfoTab() {
           checked={(prefsData as Preferences | null)?.other_preference?.voice_input_enabled === true}
           onChange={handleVoiceInputToggle}
           ariaLabel={t('settings.voiceInput')}
+        />
+      </div>
+
+      {/* Where the transcript lands when a reply finishes */}
+      <div className="settings-row">
+        <div className="space-y-0.5">
+          <label className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.turnEndScroll')}</label>
+          <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>{t('settings.turnEndScrollDesc')}</p>
+        </div>
+        <SegmentedControl
+          ariaLabel={t('settings.turnEndScroll')}
+          value={turnEndScroll}
+          onChange={(v) => { void handleTurnEndScrollChange(v); }}
+          options={[
+            { value: 'bottom', label: t('settings.turnEndScrollBottom') },
+            { value: 'reply_start', label: t('settings.turnEndScrollReplyStart') },
+          ]}
         />
       </div>
       </div>

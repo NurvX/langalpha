@@ -33,6 +33,37 @@ const MAX_PACE = 2.5;
 const FINISH_S = 0.35;
 const MIN_CHAIN_S = 0.05;
 
+// A Latin word wraps as a unit, so a cursor parked inside one shows a stub at
+// the line end that hops to the next line once the rest arrives. The cursor
+// only rests at word boundaries, and a run still open at the end of the text
+// (a token split mid-word, or a word whose following space is the next token)
+// stays hidden until something follows it or the stream ends. Scripts that
+// wrap per character (CJK) or are not space-delimited (Thai and beyond) are
+// boundaries at every character, so their reveal is unchanged. Arrows and
+// math symbols wrap glued to their neighbours, like letters.
+const isWordChar = (ch: string) => {
+  const c = ch.charCodeAt(0);
+  return !/\s/.test(ch) && (c < 0x0e00 || (c >= 0x2190 && c <= 0x27bf));
+};
+// A run longer than this is not a word that will wrap as a unit but a URL,
+// a hash or a minified line, and holding it back until whitespace arrives
+// would hide it whole. Inside a longer run the reveal trails the cursor by
+// this many characters, so it moves continuously instead of stalling and
+// then dumping the run.
+const MAX_WORD_CHARS = 24;
+// The nearest boundary at or before `idx`. The end of the text counts as
+// inside a word: its next character has not arrived yet.
+const wordStart = (text: string, idx: number) => {
+  if (idx <= 0 || idx > text.length) return idx;
+  if (!isWordChar(text[idx - 1]) || (idx < text.length && !isWordChar(text[idx]))) return idx;
+  let i = idx;
+  while (i > 0 && isWordChar(text[i - 1])) {
+    if (idx - i >= MAX_WORD_CHARS) return idx - MAX_WORD_CHARS;
+    i--;
+  }
+  return i;
+};
+
 /**
  * useAnimatedText - Smooth typing animation for streamed text.
  *
@@ -80,7 +111,7 @@ export function useAnimatedText(text: string, { enabled = false }: UseAnimatedTe
   const startChain = useCallback(() => {
     const from = cursorRef.current;
     const target = targetRef.current;
-    const to = target.length;
+    const to = finishingRef.current ? target.length : wordStart(target, target.length);
 
     if (from >= to) {
       animatingRef.current = false;
@@ -109,7 +140,9 @@ export function useAnimatedText(text: string, { enabled = false }: UseAnimatedTe
       ease: 'linear',
       onUpdate(latest) {
         if (chain !== chainRef.current) return;
-        const idx = Math.round(latest);
+        // Never behind `from`: a cursor that already sits inside a word
+        // (mounted mid-stream) holds there rather than retracting the stub.
+        const idx = Math.max(from, wordStart(target, Math.round(latest)));
         cursorRef.current = idx;
         const now = Date.now();
         if (now - lastUpdateTimeRef.current < 32) return;
@@ -186,7 +219,9 @@ export function useAnimatedText(text: string, { enabled = false }: UseAnimatedTe
 
     if ((arrivedAtOnce || document.hidden) && text.length - cursorRef.current > CATCH_UP_CHARS) {
       stopChain();
-      cursorRef.current = text.length - LIVE_TAIL_CHARS;
+      // Never behind what is already on screen: the boundary can sit before
+      // the cursor when the snap point falls inside the run it was typing.
+      cursorRef.current = Math.max(cursorRef.current, wordStart(text, text.length - LIVE_TAIL_CHARS));
       setDisplayText(text.slice(0, cursorRef.current));
     }
 

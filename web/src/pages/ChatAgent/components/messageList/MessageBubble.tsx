@@ -355,22 +355,25 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
           )}
           </OverflowCollapse>
 
-          {/* Streaming indicator -- hidden when dot-loader is already showing
-              for pending chunks. Stays mounted for the whole stream and only
+          {/* Streaming indicator. Stays mounted for the whole stream and only
               fades: while text is landing it is invisible (the text is the
               liveness signal), in a pause it fades back in so the turn never
               looks finished. Fading rather than unmounting keeps its row, so
               the transcript bottom does not hop by a line on every pause. */}
-          {isStreaming && !Object.keys((message.pendingToolCallChunks as Record<string, unknown>) || {}).length && (() => {
+          {isStreaming && (() => {
             const contentSegments = message.contentSegments as ContentSegmentRecord[] | undefined;
             const hasContent = contentSegments?.some(s => s.content?.trim()) || (message.content as string)?.trim();
+            // A tool call being generated shows its own row in the activity
+            // block; the spinner fades for it like for any other activity.
+            const preparingTool = Object.keys((message.pendingToolCallChunks as Record<string, unknown>) || {}).length > 0;
+            const quiet = arrivalQuiet && !preparingTool;
             return (
               <div
                 className={`${hasContent ? 'mt-2' : 'mt-0'} transition-opacity duration-200`}
-                style={{ opacity: arrivalQuiet ? 1 : 0 }}
-                aria-hidden={!arrivalQuiet}
+                style={{ opacity: quiet ? 1 : 0 }}
+                aria-hidden={!quiet}
                 data-testid="streaming-indicator"
-                data-quiet={arrivalQuiet ? 'true' : 'false'}
+                data-quiet={quiet ? 'true' : 'false'}
               >
                 <LissajousLoading className={`${isMobile ? 'w-5 h-5' : 'w-6 h-6'} text-neutral-500 dark:text-neutral-400`} />
               </div>

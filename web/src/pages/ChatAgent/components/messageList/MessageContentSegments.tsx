@@ -79,10 +79,12 @@ interface TextBlockProps {
   hasError: boolean;
   structuredError?: import('@/utils/rateLimitError').StructuredError;
   isSubagentView: boolean;
+  /** The message's last prose block: where a turn-end landing puts the viewport top. */
+  isReplyStart: boolean;
   onOpenFile?: (path: string, workspaceId?: string) => void;
 }
 
-function TextBlock({ block, isFirst, isStreaming, hasError, structuredError, isSubagentView, onOpenFile }: TextBlockProps): React.ReactElement | null {
+function TextBlock({ block, isFirst, isStreaming, hasError, structuredError, isSubagentView, isReplyStart, onOpenFile }: TextBlockProps): React.ReactElement | null {
   const raw = block.segment.content ?? '';
   // A schema-constrained subagent answers with one JSON object, which the
   // transcript would otherwise show as a raw dump. Mid-stream text is excluded
@@ -111,7 +113,9 @@ function TextBlock({ block, isFirst, isStreaming, hasError, structuredError, isS
   // 32px logo center. Reasoning-leading blocks handle their own offset inside
   // ActivityBlock. Guard on textContent so an empty streaming block doesn't render
   // an empty wrapper that shifts later siblings.
-  return isFirst && textContent ? <div className="-mt-1">{textEl}</div> : textEl;
+  const el = isFirst && textContent ? <div className="-mt-1">{textEl}</div> : textEl;
+  // An empty block has no line to land on; the landing falls back to the bubble.
+  return isReplyStart && textContent ? <div data-reply-start="">{el}</div> : el;
 }
 
 export const MessageContentSegments = memo(function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesses, todoListProcesses: _todoListProcesses, subagentTasks, planApprovals = EMPTY_OBJ, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, hasError, structuredError, isAssistant = false, compactToolCalls = false, isSubagentView = false, readOnly = false, allowFiles = false, ptcAgentProposals = EMPTY_OBJ, secretaryActionProposals = EMPTY_OBJ, creditPauses = EMPTY_OBJ, htmlWidgetProcesses = EMPTY_OBJ, flashContext }: MessageContentSegmentsProps): React.ReactElement {
@@ -279,6 +283,7 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
               block={block as TextRenderBlock}
               isFirst={blockIdx === 0}
               isStreaming={!!(isStreaming && blockIdx === lastTextBlockIdx && !hasAnyTrulyInProgress)}
+              isReplyStart={blockIdx === lastTextBlockIdx}
               hasError={!!hasError}
               structuredError={structuredError}
               isSubagentView={isSubagentView}

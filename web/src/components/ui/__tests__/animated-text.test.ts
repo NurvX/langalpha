@@ -30,6 +30,42 @@ describe('useAnimatedText catch-up', () => {
     expect(next.startsWith(result.current)).toBe(true);
   });
 
+  it('lands the catch-up cursor on a word boundary, never inside a word', () => {
+    const { result, rerender } = renderHook(({ text }) => useAnimatedText(text, { enabled: true }), {
+      initialProps: { text: 'seed ' },
+    });
+    // Eleven-char units: the raw snap point (length - 320) falls mid-word.
+    const next = 'seed ' + Array.from({ length: 300 }, (_, i) => `word${String(i).padStart(7, "0")}`).join(' ') + ' ';
+    act(() => rerender({ text: next }));
+    // Within one word of the raw snap point, so the snap itself is what ran.
+    expect(result.current.length).toBeGreaterThanOrEqual(next.length - 320 - 12);
+    expect(result.current.length).toBeLessThan(next.length);
+    expect(next.startsWith(result.current)).toBe(true);
+    expect(result.current.endsWith(' ')).toBe(true);
+  });
+
+  it('never retracts revealed text when the catch-up snap lands inside a run', () => {
+    const { result, rerender } = renderHook(({ text }) => useAnimatedText(text, { enabled: true }), {
+      initialProps: { text: 'https://example.com/path' },
+    });
+    const shown = result.current;
+    act(() => rerender({ text: 'https://example.com/path' + 'x'.repeat(1000) }));
+    expect(result.current.startsWith(shown)).toBe(true);
+    expect(result.current.length).toBeGreaterThanOrEqual(shown.length);
+  });
+
+  it('caps the word hold so a long unbroken run still reveals', () => {
+    const { result, rerender } = renderHook(({ text }) => useAnimatedText(text, { enabled: true }), {
+      initialProps: { text: 'seed ' },
+    });
+    act(() => rerender({ text: 'seed ' + 'a'.repeat(2000) }));
+    // 2000 chars in one update is a catch-up; a boundary-only cursor would
+    // have snapped back to the run start and shown nothing but the seed.
+    // The snap trails the raw point by the cap, never more.
+    expect(result.current.length).toBeGreaterThanOrEqual('seed '.length + 2000 - 320 - 24);
+    expect(result.current.length).toBeLessThan('seed '.length + 2000 - 320);
+  });
+
   it('keeps typing when a fast stream builds the same backlog chunk by chunk', () => {
     const { result, rerender } = renderHook(({ text }) => useAnimatedText(text, { enabled: true }), {
       initialProps: { text: 'seed ' },

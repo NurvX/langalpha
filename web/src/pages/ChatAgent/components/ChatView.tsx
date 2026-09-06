@@ -8,6 +8,7 @@ import { useStableHandler } from '@/hooks/useStableHandler';
 import { useNarrowContainer } from '@/hooks/useNarrowContainer';
 import { ScrollArea } from '../../../components/ui/scroll-area';
 import { usePreferences } from '@/hooks/usePreferences';
+import { readTurnEndScroll } from '@/lib/turnEndScroll';
 import { useUpdatePreferences } from '@/hooks/useUpdatePreferences';
 import { useFeatureEnabled } from '@/hooks/useFeatures';
 import { useQueryClient } from '@tanstack/react-query';
@@ -77,6 +78,7 @@ import { FallbackSuggestionPill } from './chatView/FallbackSuggestionPill';
 import { useToolCallAnnouncer } from './chatView/useToolCallAnnouncer';
 import { useNavPanel } from './chatView/useNavPanel';
 import { useChatScroll } from './chatView/useChatScroll';
+import { useTurnEndScroll } from './chatView/useTurnEndScroll';
 import { useSubagentTabs } from './chatView/useSubagentTabs';
 import { publishSidebarAgents, clearSidebarAgents } from './sidebarAgentsBridge';
 import { useRightPanel } from './chatView/useRightPanel';
@@ -352,7 +354,21 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // Keep resolvedThreadIdRef in sync with the resolved thread ID from useChatMessages
   resolvedThreadIdRef.current = currentThreadId || threadId;
 
+  // A pending interrupt or rejection clears isLoading but the turn is still
+  // open: the reply resumes once the reader answers, so the follow keeps its
+  // claim and the turn-end landing waits.
+  const isStreaming = isLoading || !!pendingInterrupt || !!pendingRejection;
   // Chat transcript scroll controller + tab scroll memory (chatView/useChatScroll).
+  const scroll = useChatScroll({
+    activeAgentId,
+    messages,
+    isActive,
+    isActiveRef,
+    isLoadingHistory,
+    isStreaming,
+    currentThreadId,
+    threadId,
+  });
   const {
     scrollAreaRef,
     subagentScrollAreaRef,
@@ -369,15 +385,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     restoredForThreadRef,
     pinToMessage,
     pinTargetRef,
-  } = useChatScroll({
-    activeAgentId,
-    messages,
-    isActive,
-    isActiveRef,
-    isLoadingHistory,
-    currentThreadId,
-    threadId,
-  });
+  } = scroll;
+  useTurnEndScroll(scroll, { messages, isStreaming, isActiveRef, turnEndScroll: readTurnEndScroll(preferences) });
 
   // Subagent tab registry + card refresh (chatView/useSubagentTabs).
   const {

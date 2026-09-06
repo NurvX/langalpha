@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect, useId, memo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { Brain, ChevronDown, Wrench, X as XIcon } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -23,6 +23,8 @@ import {
 } from './charts/InlineArtifactCards';
 import { useTranslation } from 'react-i18next';
 import './ActivityBlock.css';
+import { LiveRow } from './messageList/LiveRow';
+import { SPRING_SNAPPY, EXIT_TWEEN } from './messageList/liveZoneTiming';
 
 /** Tool names where clicking should open the file in the FilePanel */
 const FILE_NAV_TOOLS = new Set(['Read', 'Write']);
@@ -47,13 +49,11 @@ function shouldHideTimelineItem(item: ActivityItem): boolean {
   return fp ? isUserProfileReadmePath(fp) : false;
 }
 
-/** Spring config matching radix-accordion feel */
-const SPRING = { type: 'spring' as const, stiffness: 150, damping: 17 };
-const SPRING_SNAPPY = { type: 'spring' as const, stiffness: 200, damping: 22 };
-/** Higher damping for height settles (accordion fold) — no overshoot on multi-row batches. */
+/** One spring for every fold and chevron in the block. Near critical damping on
+    purpose: an underdamped spring closing a panel to height 0 swings negative
+    (clamped, so the fold looks finished), then comes back through zero a third
+    of a second later and shifts everything below by a pixel before it settles. */
 const SPRING_FOLD = { type: 'spring' as const, stiffness: 260, damping: 30 };
-/** Quick tween for live rows clearing out — exits shouldn't draw the eye. */
-const EXIT_TWEEN = { duration: 0.18, ease: 'easeIn' as const };
 // Derived from EXIT_TWEEN so the live zone's top gap closes with its last row.
 const LIVE_ZONE_MARGIN_MS = EXIT_TWEEN.duration * 1000;
 
@@ -115,6 +115,7 @@ interface ActivityBlockProps {
 const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, isStreaming, onToolCallClick, onOpenFile }: ActivityBlockProps): React.ReactElement | null {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
+  const reduceMotion = useReducedMotion();
   const prevCompletedIdsRef = useRef<Set<string | undefined>>(new Set());
   // Stable per-instance id pair for the toggle button + the timeline panel it
   // controls — assistive tech needs both `aria-expanded`/`aria-controls` and
@@ -313,9 +314,12 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
             /* The fold animates its height, so it has to clip -- and its only
                child is a summary button flush against every edge, whose ring
                the clip then eats. clips-focus-ring turns it inward. */
-            className="-mt-2 clips-focus-ring"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
+            className="clips-focus-ring"
+            /* The pull-up against the bubble's top padding rides the same
+               keyframes as the height: applied as a class it lands whole on
+               the frame the zone mounts at height 0, an 8 px hop. */
+            initial={{ opacity: 0, height: 0, marginTop: 0 }}
+            animate={{ opacity: 1, height: 'auto', marginTop: '-0.5rem' }}
             transition={SPRING_FOLD}
             style={{ overflow: 'hidden' }}
           >
@@ -336,7 +340,7 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
               <span className="truncate">{summaryLabel}</span>
               <motion.div
                 animate={{ rotate: isExpanded ? 90 : 0 }}
-                transition={SPRING}
+                transition={SPRING_FOLD}
                 className="flex-shrink-0"
                 style={{ opacity: 0.6 }}
               >
@@ -351,7 +355,7 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: 'auto', opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
-                  transition={SPRING}
+                  transition={SPRING_FOLD}
                   style={{ overflow: 'hidden' }}
                 >
                   <div
@@ -403,11 +407,11 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
           accordion collapses with the last row via a CSS transition. */}
       <div
         data-testid="activity-live-zone"
-        className="space-y-2"
         style={{
           // The former mt-2 / -mt-1, kept in rem so it still tracks --app-font-scale.
           marginTop: hasLive || hasPreparingTools ? (hasCompleted ? '0.5rem' : '-0.25rem') : 0,
-          transition: `margin-top ${LIVE_ZONE_MARGIN_MS}ms ease-in`,
+          // The rows leave instantly under reduced motion; the gap goes with them.
+          transition: reduceMotion ? 'none' : `margin-top ${LIVE_ZONE_MARGIN_MS}ms ease-in`,
         }}
       >
         {/* Live items in chronological order */}
@@ -418,14 +422,10 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
               const effectiveTitle = item.reasoningTitle || extractedTitle;
               const liveBody = extractedTitle ? extractedBody : item.content;
               return (
-                <motion.div
+                <LiveRow
                   key={`live-r-${item.id}`}
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: item._liveState === 'completing' ? 0.7 : 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0, transition: EXIT_TWEEN }}
-                  transition={SPRING_SNAPPY}
-                  style={{ overflow: 'hidden', paddingTop: '8px', paddingBottom: '8px' }}
-                  className="px-3"
+                  opacity={item._liveState === 'completing' ? 0.7 : 1}
+                  className="px-3 py-2"
                 >
                   <div
                     className="flex items-center gap-2 mb-1"
@@ -451,21 +451,14 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
                       isStreaming={item._liveState === 'active'}
                     />
                   )}
-                </motion.div>
+                </LiveRow>
               );
             }
             if (item.type === 'tool_call') {
               return (
-                <motion.div
-                  key={`live-t-${item.id || item.toolCallId}`}
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0, transition: EXIT_TWEEN }}
-                  transition={SPRING_SNAPPY}
-                  style={{ overflow: 'hidden' }}
-                >
+                <LiveRow key={`live-t-${item.id || item.toolCallId}`}>
                   <ToolCallLiveRow tc={item} liveState={item._liveState} />
-                </motion.div>
+                </LiveRow>
               );
             }
             return null;
@@ -475,16 +468,9 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
         {/* Preparing tool call -- always at the bottom */}
         <AnimatePresence initial={false}>
           {hasPreparingTools && (
-            <motion.div
-              key="preparing"
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={SPRING_SNAPPY}
-              style={{ overflow: 'hidden' }}
-            >
+            <LiveRow key="preparing">
               <PreparingToolCallRow tc={preparingToolCall!} />
-            </motion.div>
+            </LiveRow>
           )}
         </AnimatePresence>
       </div>
@@ -734,7 +720,7 @@ const ReasoningRow = memo(function ReasoningRow({ item }: ReasoningRowProps): Re
           {hasContent && (
             <motion.div
               animate={{ rotate: expanded ? 90 : 0 }}
-              transition={SPRING}
+              transition={SPRING_FOLD}
               className="flex-shrink-0 inline-flex items-center"
               style={{ opacity: 0.6, alignSelf: 'center' }}
             >
@@ -749,7 +735,7 @@ const ReasoningRow = memo(function ReasoningRow({ item }: ReasoningRowProps): Re
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              transition={SPRING}
+              transition={SPRING_FOLD}
               style={{ overflow: 'hidden' }}
             >
               <div className="titem-reasoning-card">
@@ -929,7 +915,7 @@ const EditToolRow = memo(function EditToolRow({ item, onOpenFile }: EditToolRowP
             >
               <motion.div
                 animate={{ rotate: expanded ? 90 : 0 }}
-                transition={SPRING}
+                transition={SPRING_FOLD}
               >
                 <ChevronDown className="h-3 w-3 -rotate-90" style={{ opacity: 0.5 }} />
               </motion.div>
@@ -944,7 +930,7 @@ const EditToolRow = memo(function EditToolRow({ item, onOpenFile }: EditToolRowP
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              transition={SPRING}
+              transition={SPRING_FOLD}
               style={{ overflow: 'hidden' }}
             >
               <div className="mt-2 rounded overflow-hidden" style={{ fontSize: '0.75rem', border: '1px solid var(--color-border-muted)' }}>
