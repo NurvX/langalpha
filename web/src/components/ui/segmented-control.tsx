@@ -9,8 +9,8 @@ interface SegmentedControlProps<T extends string> {
   value: T;
   onChange: (value: T) => void;
   options: ReadonlyArray<SegmentedOption<T>>;
-  /** Accessible name for the group; the row label beside it is not associated. */
-  ariaLabel: string;
+  /** id of the visible row label, so the group is named by the text a sighted reader sees. */
+  labelledBy: string;
 }
 
 /**
@@ -19,9 +19,9 @@ interface SegmentedControlProps<T extends string> {
  * ToggleGroup: it keeps the markup and theme-var styling the rows already
  * shipped, and the pressed state is read by screen readers as a toggle.
  */
-export function SegmentedControl<T extends string>({ value, onChange, options, ariaLabel }: SegmentedControlProps<T>): React.ReactElement {
+export function SegmentedControl<T extends string>({ value, onChange, options, labelledBy }: SegmentedControlProps<T>): React.ReactElement {
   return (
-    <div role="group" aria-label={ariaLabel} className="inline-flex rounded-lg overflow-hidden clips-focus-ring" style={{ border: '1px solid var(--color-border-muted)' }}>
+    <div role="group" aria-labelledby={labelledBy} className="inline-flex rounded-lg overflow-hidden clips-focus-ring" style={{ border: '1px solid var(--color-border-muted)' }}>
       {options.map((option) => {
         const selected = option.value === value;
         return (
@@ -33,7 +33,9 @@ export function SegmentedControl<T extends string>({ value, onChange, options, a
             className="flex items-center gap-1.5 px-2.5 py-1 text-[0.8125rem] font-medium transition-colors"
             style={{
               backgroundColor: selected ? 'var(--color-accent-soft)' : 'transparent',
-              color: selected ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)',
+              // Secondary, not tertiary: the tertiary grey reads under 2.5:1
+              // on the light surface, below AA for 13 px text.
+              color: selected ? 'var(--color-accent-primary)' : 'var(--color-text-secondary)',
             }}
           >
             {option.label}

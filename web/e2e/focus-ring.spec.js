@@ -459,3 +459,73 @@ test.describe('a field left focused while the user is in another app', () => {
     expect(ring.style === 'solid' || ring.shadow !== 'none').toBe(true);
   });
 });
+
+/**
+ * A <select> matches :focus-visible on a click the way a text field does, so a
+ * click used to leave the app's ring sitting on it while the same click on a
+ * button left nothing, on every native select in the app.
+ *
+ * Holding the ring off under the pointer is only half of it. Focus does not
+ * move when someone clicks a select and then arrows it to a new option, so no
+ * focusin fires, the record still says the mouse placed the focus, and the
+ * control stays dark for a user who is now on the keyboard. What makes the
+ * rule safe is the keydown refresh in lib/inputModality.ts, and the third test
+ * here is the only place that difference exists -- the first two pass either
+ * way.
+ */
+test.describe('a native select', () => {
+  // The timezone field, the one select on this tab carrying grouped options.
+  // Named rather than taken positionally so the helpers below stay strict: a
+  // selector matching two controls should fail loudly, not silently pick one.
+  const SELECT = 'select:has(optgroup)';
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/settings');
+    await expect(page.locator(SELECT)).toBeVisible();
+  });
+
+  /**
+   * Click the box itself. Playwright's `.click()` on a select opens the native
+   * popup, an OS surface no assertion here can see past.
+   */
+  async function clickSelect(page) {
+    const box = await page.locator(SELECT).boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  }
+
+  test('wears no ring when the mouse focused it', async ({ page }) => {
+    await clickSelect(page);
+    const clicked = await outlineOn(page, SELECT);
+    expect(clicked.focused).toBe(true);
+    expect(unpainted(clicked.style, clicked.color)).toBe(true);
+    // Transparent rather than none, for the forced-colors reason the fields
+    // above are: the substitution needs an outline box to repaint.
+    expect(clicked.style).toBe('solid');
+  });
+
+  test('rings when the keyboard focused it', async ({ page }) => {
+    await keyboardFocus(page, SELECT);
+    const tabbed = await outlineOn(page, SELECT);
+    expect(tabbed.focused).toBe(true);
+    expect(unpainted(tabbed.style, tabbed.color)).toBe(false);
+  });
+
+  test('rings again on the first key after a click, without focus moving', async ({ page }) => {
+    await clickSelect(page);
+    const clicked = await outlineOn(page, SELECT);
+    expect(unpainted(clicked.style, clicked.color)).toBe(true);
+
+    // The click left the option list up, and while it is the browser widget
+    // owns the keyboard: on the Linux runner the arrow below never reaches the
+    // page, on this machine it does. Escape hands the keys back either way,
+    // and it is itself a keystroke on the same element, so whichever of the
+    // two lands on the page is the one that does the refresh.
+    await page.keyboard.press('Escape');
+    // The gesture the refresh exists for: same element, same focus, keyboard
+    // from here on.
+    await page.keyboard.press('ArrowDown');
+    const arrowed = await outlineOn(page, SELECT);
+    expect(arrowed.focused).toBe(true);
+    expect(unpainted(arrowed.style, arrowed.color)).toBe(false);
+  });
+});

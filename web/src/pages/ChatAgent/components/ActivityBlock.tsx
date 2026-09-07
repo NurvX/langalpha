@@ -101,6 +101,8 @@ interface ActivityBlockProps {
   items: ActivityItem[];
   preparingToolCall?: PreparingToolCallData | null;
   isStreaming: boolean;
+  /** First block of the message: the accordion sits against the bubble's top padding. */
+  isFirst: boolean;
   onToolCallClick?: (item: ActivityItem) => void;
   onOpenFile?: (path: string, workspaceId?: string) => void;
 }
@@ -112,7 +114,7 @@ interface ActivityBlockProps {
  * eliminating the visible gap that separate components caused between
  * fade-out and reappear across render cycles.
  */
-const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, isStreaming, onToolCallClick, onOpenFile }: ActivityBlockProps): React.ReactElement | null {
+const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, isStreaming, isFirst, onToolCallClick, onOpenFile }: ActivityBlockProps): React.ReactElement | null {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
   const reduceMotion = useReducedMotion();
@@ -317,9 +319,11 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
             className="clips-focus-ring"
             /* The pull-up against the bubble's top padding rides the same
                keyframes as the height: applied as a class it lands whole on
-               the frame the zone mounts at height 0, an 8 px hop. */
+               the frame the zone mounts at height 0, an 8 px hop. It is
+               only owed at the top of the bubble: lower down, or under an
+               inline card, it would eat the gap to whatever sits above. */
             initial={{ opacity: 0, height: 0, marginTop: 0 }}
-            animate={{ opacity: 1, height: 'auto', marginTop: '-0.5rem' }}
+            animate={{ opacity: 1, height: 'auto', marginTop: isFirst && !hasInlineCharts ? '-0.5rem' : 0 }}
             transition={SPRING_FOLD}
             style={{ overflow: 'hidden' }}
           >
