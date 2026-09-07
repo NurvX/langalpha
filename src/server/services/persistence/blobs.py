@@ -18,6 +18,7 @@ from src.server.database.blob_keys import (
     RELAY_MAX_BYTES,
     blob_key,
 )
+from src.server.database.workspace_file import bulk_upsert_files
 from src.server.database.workspace_file_blobs import (
     BlobUploadError,
     register_blobs,
@@ -34,6 +35,8 @@ from src.server.services.persistence._rows import (
 )
 from src.server.services.persistence.transfer import (
     transfer_mode,
+    INPROCESS_MAX_INFLIGHT_BYTES,
+    ByteBudget,
     pack_direct,
     unlink_direct,
     ScanEntry,
@@ -44,8 +47,9 @@ from src.server.services.persistence.transfer import (
 from src.utils.storage import get_signed_upload_url
 
 # Files moved through this process (inline rows, or blobs when direct
-# transfer is unavailable). The sandbox's own download semaphore is the
-# tighter bound; this one keeps the gather from fanning out unboundedly.
+# transfer is unavailable). The count keeps the gather from fanning out
+# unboundedly; INPROCESS_MAX_INFLIGHT_BYTES bounds what those files weigh, which
+# is the bound that matters now that the direct path caps no file.
 RELAY_CONCURRENCY = 8
 
 
@@ -282,25 +286,26 @@ async def _relay_blobs(
 
     registered: set[str] = set()
     changed: set[str] = set()
-    sem = asyncio.Semaphore(RELAY_CONCURRENCY)
+    budget = ByteBudget(INPROCESS_MAX_INFLIGHT_BYTES, RELAY_CONCURRENCY)
 
     async def _one(sha: str, entry: ScanEntry) -> None:
-        async with sem:
-            if entry.size > RELAY_MAX_BYTES:
-                # The direct path caps nothing, so a file this large is normal
-                # until the store turns out to be unreachable and the push
-                # lands here instead. Downloading it would pull the whole
-                # thing into this process. Left unregistered, so the caller
-                # counts an error, keeps the previous row, and the next sync
-                # retries: unlike a scan-time rejection this is a passing
-                # condition, not a limit the file will always exceed.
-                logger.error(
-                    f"Cannot relay {entry.path} for workspace {workspace_id}: "
-                    f"{entry.size} bytes exceeds the {RELAY_MAX_BYTES} byte "
-                    f"relay limit, and object storage was unreachable from "
-                    f"the sandbox. Keeping the previous manifest row"
-                )
-                return
+        if entry.size > RELAY_MAX_BYTES:
+            # The direct path caps nothing, so a file this large is normal
+            # until the store turns out to be unreachable and the push lands
+            # here instead. Downloading it would pull the whole thing into
+            # this process. Left unregistered, so the caller counts an error,
+            # keeps the previous row, and the next sync retries: unlike a
+            # scan-time rejection this is a passing condition, not a limit
+            # the file will always exceed. Checked before the budget, since
+            # holding weight for bytes we refuse to move helps nobody.
+            logger.error(
+                f"Cannot relay {entry.path} for workspace {workspace_id}: "
+                f"{entry.size} bytes exceeds the {RELAY_MAX_BYTES} byte "
+                f"relay limit, and object storage was unreachable from "
+                f"the sandbox. Keeping the previous manifest row"
+            )
+            return
+        async with budget.hold(entry.size):
             try:
                 content = await sandbox.adownload_file_bytes(
                     _entry_abs_path(entry, layout)
@@ -456,64 +461,99 @@ async def _persist_packed(
     return rows, errors, 0
 
 
+def _batched_by_weight(
+    entries: list[ScanEntry], max_bytes: int, max_count: int
+) -> list[list[ScanEntry]]:
+    """Split entries into runs bounded by combined size and by count.
+
+    An entry heavier than the whole allowance gets a run to itself rather
+    than one that can never be filled.
+    """
+    batches: list[list[ScanEntry]] = []
+    run: list[ScanEntry] = []
+    weight = 0
+    for entry in entries:
+        size = max(int(entry.size or 0), 0)
+        if run and (len(run) >= max_count or weight + size > max_bytes):
+            batches.append(run)
+            run, weight = [], 0
+        run.append(entry)
+        weight += size
+    if run:
+        batches.append(run)
+    return batches
+
+
 async def _persist_inline(
     workspace_id: str,
     sandbox: Any,
     entries: list[ScanEntry],
     *,
     layout: WorkspaceLayout,
-) -> tuple[list[dict[str, Any]], int]:
-    """No object store: bytes go into the manifest row itself."""
-    rows: list[dict[str, Any]] = []
+    conn: Any,
+) -> tuple[int, int]:
+    """No object store: bytes go into the manifest row itself.
+
+    Written a batch at a time rather than gathered and upserted once, because
+    an inline row *is* its bytes: holding every row for one final write would
+    make the peak the whole changed working set, which is exactly what
+    bounding in-flight bytes is supposed to prevent. Each batch's rows are
+    released as soon as they are stored, so the bound is the batch.
+    """
+    synced = 0
     errors = 0
-    sem = asyncio.Semaphore(RELAY_CONCURRENCY)
 
     async def _one(entry: ScanEntry) -> dict[str, Any] | None:
-        async with sem:
-            try:
-                content = await sandbox.adownload_file_bytes(
-                    _entry_abs_path(entry, layout)
-                )
-                if content is None:
-                    return None
-                # The row describes the bytes it carries, so hash and size
-                # come from the download even if the scan saw an earlier
-                # version of the file.
-                content_hash = hashlib.sha256(content).hexdigest()
-                is_binary = _detect_is_binary(entry.path, content)
-                content_text = None
-                content_binary = None
-                if is_binary:
-                    content_binary = content
-                else:
-                    try:
-                        content_text = content.decode("utf-8")
-                    except UnicodeDecodeError:
-                        is_binary = True
-                        content_binary = content
-                row = _row_base(entry)
-                mime, _ = mimetypes.guess_type(entry.path)
-                row.update(
-                    {
-                        "file_size": len(content),
-                        "content_hash": content_hash,
-                        "content_text": content_text,
-                        "content_binary": content_binary,
-                        "mime_type": mime,
-                        "is_binary": is_binary,
-                    }
-                )
-                return row
-            except Exception as e:
-                logger.warning(
-                    f"Error downloading file {entry.path} "
-                    f"for workspace {workspace_id}: {e}"
-                )
+        try:
+            content = await sandbox.adownload_file_bytes(
+                _entry_abs_path(entry, layout)
+            )
+            if content is None:
                 return None
+            # The row describes the bytes it carries, so hash and size
+            # come from the download even if the scan saw an earlier
+            # version of the file.
+            content_hash = hashlib.sha256(content).hexdigest()
+            is_binary = _detect_is_binary(entry.path, content)
+            content_text = None
+            content_binary = None
+            if is_binary:
+                content_binary = content
+            else:
+                try:
+                    content_text = content.decode("utf-8")
+                except UnicodeDecodeError:
+                    is_binary = True
+                    content_binary = content
+            row = _row_base(entry)
+            mime, _ = mimetypes.guess_type(entry.path)
+            row.update(
+                {
+                    "file_size": len(content),
+                    "content_hash": content_hash,
+                    "content_text": content_text,
+                    "content_binary": content_binary,
+                    "mime_type": mime,
+                    "is_binary": is_binary,
+                }
+            )
+            return row
+        except Exception as e:
+            logger.warning(
+                f"Error downloading file {entry.path} "
+                f"for workspace {workspace_id}: {e}"
+            )
+            return None
 
-    for payload in await asyncio.gather(*(_one(e) for e in entries)):
-        if payload is None:
-            errors += 1
-        else:
-            rows.append(payload)
-    return rows, errors
+    for batch in _batched_by_weight(
+        entries, INPROCESS_MAX_INFLIGHT_BYTES, RELAY_CONCURRENCY
+    ):
+        rows: list[dict[str, Any]] = []
+        for payload in await asyncio.gather(*(_one(e) for e in batch)):
+            if payload is None:
+                errors += 1
+            else:
+                rows.append(payload)
+        if rows:
+            synced += await bulk_upsert_files(workspace_id, rows, conn=conn)
+    return synced, errors

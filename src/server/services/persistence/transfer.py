@@ -13,12 +13,15 @@ denylist by design, and this exchange is the server's, not the agent's.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
 import shlex
 import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -105,6 +108,13 @@ PACK_CUTOFF = 256 * 1024
 PACK_MAX_BYTES = 32 * 1024 * 1024
 PACK_DIR = SandboxLayout.PACKS_DIR
 
+# What one transfer may hold in memory at once on the paths that move bytes
+# through this process. The direct path caps no file, so a count alone bounds
+# nothing that matters: eight files is eight files whether they are 4 KiB or
+# 256 MiB apiece. Each backup or restore takes its own budget, so a worker
+# running several at once may hold a multiple of this.
+INPROCESS_MAX_INFLIGHT_BYTES = 512 * 1024 * 1024
+
 
 def transfer_mode(sandbox: Any) -> str:
     # PTCSandbox holds the whole CoreConfig; the provider name is on its
@@ -133,6 +143,62 @@ def scan_cap_bytes(sandbox: Any, *, blobs_on: bool) -> int | None:
     if transfer_mode(sandbox) == "direct":
         return None
     return RELAY_MAX_BYTES
+
+
+class ByteBudget:
+    """Admission for files held whole in this process, by weight and by count.
+
+    Both bind and the tighter one wins: weight alone would admit thousands of
+    tiny files and exhaust everything that is per-request rather than
+    per-byte, while count alone is the bound that let an uncapped file
+    through. A file too large for the whole budget runs alone rather than
+    deadlocking behind a budget it can never fit.
+
+    The sandbox runtime carries a twin of this by hand, since it ships as a
+    stdlib-only script and cannot import it.
+    """
+
+    def __init__(self, max_bytes: int, max_files: int) -> None:
+        self._max_bytes = max(1, int(max_bytes))
+        self._max_files = max(1, int(max_files))
+        self._bytes = 0
+        self._files = 0
+        # The count bound queues in FIFO order ahead of the byte check, so at
+        # most ``max_files`` holders ever wait on the condition. Callers gather
+        # every item at once, and waking all of them on each release made a
+        # large transfer quadratic in its file count.
+        self._slots = asyncio.Semaphore(self._max_files)
+        self._cv = asyncio.Condition()
+
+    @asynccontextmanager
+    async def hold(self, size: int | None) -> AsyncIterator[None]:
+        # An unknown weight is charged the whole budget, not nothing: a bound
+        # that admits freely whenever it cannot measure an item is not a
+        # bound. A measured zero still costs zero.
+        want = (
+            self._max_bytes
+            if size is None
+            else min(max(int(size), 0), self._max_bytes)
+        )
+        async with self._slots:
+            async with self._cv:
+                while self._files and self._bytes + want > self._max_bytes:
+                    await self._cv.wait()
+                self._files += 1
+                self._bytes += want
+            try:
+                yield
+            finally:
+                # Released before any await: a cancelled holder (a client
+                # that disconnected) can be cancelled again at the lock, and
+                # a release lost there leaks its weight for the process's life.
+                self._files -= 1
+                self._bytes -= want
+                await asyncio.shield(self._wake())
+
+    async def _wake(self) -> None:
+        async with self._cv:
+            self._cv.notify_all()
 
 
 class TransferRuntimeError(Exception):

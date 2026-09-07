@@ -25,7 +25,7 @@ from src.server.database.workspace import (
     set_files_restore_incomplete,
     workspace_owner,
 )
-from src.server.database.blob_keys import blob_key
+from src.server.database.blob_keys import RELAY_MAX_BYTES, blob_key
 from src.server.database.workspace_file_blobs import fetch_blob
 from src.server.services.persistence._rows import (
     _has_inline_bytes,
@@ -38,15 +38,18 @@ from src.server.services.persistence.resolve import (
 from src.server.services.persistence.transfer import (
     SYNC_MARKER_NAME,
     transfer_mode,
+    INPROCESS_MAX_INFLIGHT_BYTES,
+    ByteBudget,
     all_unreachable,
     pull_direct,
     transfer_timeout_s,
 )
 from src.utils.storage import get_signed_url
 
-# Relayed restore uploads in flight. Higher than RELAY_CONCURRENCY because an
-# upload costs this process nothing but a socket, where a relayed backup also
-# holds the file's bytes in memory while it hashes and stores them.
+# Relayed restore uploads in flight. A restore holds each file's bytes in this
+# process exactly as a relayed backup does: _stage_relayed_file resolves the
+# whole row before it uploads. So this is a count only, and what those files
+# weigh is bounded by INPROCESS_MAX_INFLIGHT_BYTES alongside it.
 RESTORE_UPLOAD_CONCURRENCY = 16
 
 logger = logging.getLogger(__name__)
@@ -412,10 +415,26 @@ async def _restore_relay(
     backup. ``dirs`` are the structure pass's directory items, carried again
     so their modes and mtimes are applied after the last file is in.
     """
-    sem = asyncio.Semaphore(RESTORE_UPLOAD_CONCURRENCY)
+    budget = ByteBudget(INPROCESS_MAX_INFLIGHT_BYTES, RESTORE_UPLOAD_CONCURRENCY)
 
     async def _stage(row: dict) -> tuple[dict, tuple[str, str, int] | None]:
-        async with sem:
+        size = row.get("file_size")
+        if size is not None and int(size) > RELAY_MAX_BYTES:
+            # The direct path caps nothing, so a blob this large is normal
+            # until the store turns out to be unreachable and the restore
+            # lands here instead. Resolving it would pull the whole thing
+            # into this process; the budget cannot help, since an item over
+            # the whole budget is admitted anyway rather than deadlocking.
+            # Reported as an error, so the file is retried when the store is
+            # reachable again rather than silently skipped.
+            logger.error(
+                f"Cannot relay {row['file_path']} for workspace "
+                f"{workspace_id}: {size} bytes exceeds the {RELAY_MAX_BYTES} "
+                f"byte relay limit, and object storage was unreachable from "
+                f"the sandbox. The file is left unrestored"
+            )
+            return (row, None)
+        async with budget.hold(size):
             try:
                 return (
                     row,
@@ -508,7 +527,7 @@ async def _stage_relayed_file(
     """Upload one row's bytes; returns the staging name, their digest and length.
 
     Byte resolution happens here rather than in the caller so blob fetches
-    run under the restore semaphore: concurrency is bounded for free.
+    run under the caller's byte budget: what this holds is bounded for free.
 
     The digest and length describe the bytes actually sent, not the row's
     ``content_hash`` and ``file_size``. The check they feed asks whether the

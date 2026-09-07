@@ -334,12 +334,17 @@ async def _sync_locked(
             persisted, errors = await _persist_blobs(
                 user_id, workspace_id, sandbox, needs_bytes, layout=layout
             )
+            rows.extend(persisted)
+            result["errors"] += errors
         else:
-            persisted, errors = await _persist_inline(
-                workspace_id, sandbox, needs_bytes, layout=layout
+            # Inline rows carry their own bytes, so they are written in
+            # bounded batches rather than joining ``rows`` and being held
+            # until the single upsert below.
+            inline_synced, errors = await _persist_inline(
+                workspace_id, sandbox, needs_bytes, layout=layout, conn=conn
             )
-        rows.extend(persisted)
-        result["errors"] += errors
+            result["synced"] += inline_synced
+            result["errors"] += errors
 
     if pack_members:
         packed, errors, skipped = await _persist_packed(
@@ -369,7 +374,7 @@ async def _sync_locked(
             result["errors"] += len(stamp_updates)
 
     if rows:
-        result["synced"] = await bulk_upsert_files(
+        result["synced"] += await bulk_upsert_files(
             workspace_id, rows, conn=conn
         )
 

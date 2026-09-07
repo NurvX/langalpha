@@ -90,13 +90,18 @@ CLOCK = datetime(2026, 9, 3, 12, 0, 0, tzinfo=timezone.utc)
 @pytest.fixture
 def db():
     """Every database and store seam, so each test states only what differs."""
+    _upsert = AsyncMock(side_effect=lambda ws, rows, conn=None: len(rows))
     with (
         patch.object(backup, "manifest_clock", new=AsyncMock(return_value=CLOCK)),
         patch.object(backup, "get_file_metadata_for_sync", new=AsyncMock(return_value={})) as meta,
         patch.object(backup, "files_restore_incomplete", new=AsyncMock(return_value=False)),
         patch.object(backup, "delete_removed_files", new=AsyncMock(return_value=0)) as deleter,
         patch.object(backup, "get_workspace_total_size", new=AsyncMock(return_value=0)),
-        patch.object(backup, "bulk_upsert_files", new=AsyncMock(side_effect=lambda ws, rows, conn=None: len(rows))) as upsert,
+        # The inline path writes its own batches from blobs; both names are
+        # the same seam, so a test asserts on the rows, not on which module
+        # carried them.
+        patch.object(backup, "bulk_upsert_files", new=_upsert) as upsert,
+        patch.object(blobs, "bulk_upsert_files", new=_upsert),
         patch.object(backup, "bulk_update_file_stamps", new=AsyncMock()) as mtimes,
         patch.object(backup, "is_storage_enabled", return_value=True),
         patch.object(backup, "workspace_owner", new=AsyncMock(return_value=USER)),
@@ -117,7 +122,11 @@ def db():
 
 
 def _rows(db):
-    return {r["file_path"]: r for r in db["upsert"].await_args.args[1]}
+    return {
+        r["file_path"]: r
+        for call in db["upsert"].await_args_list
+        for r in call.args[1]
+    }
 
 
 # --- timestamps ------------------------------------------------------------
