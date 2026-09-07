@@ -49,11 +49,12 @@ from .caching import (
     ToolResultCacheState,
 )
 
-# File operations middleware (includes MultimodalMiddleware for images/PDFs)
+# File operations middleware (includes the multimodal write/read halves)
 from .file_operations import (
     FileOperationMiddleware,
     FileOperationState,
     MultimodalMiddleware,
+    MultimodalStripMiddleware,
 )
 
 # Todo operations middleware
@@ -149,6 +150,7 @@ __all__ = [
     "CreditGateMiddleware",
     # Multimodal middleware (for read_file image/PDF support)
     "MultimodalMiddleware",
+    "MultimodalStripMiddleware",
     # Tool middleware
     "CodeValidationMiddleware",
     "EmptyToolCallRetryMiddleware",

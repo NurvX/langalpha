@@ -23,7 +23,7 @@ from ptc_agent.agent.middleware import (
     SkillsMiddleware,
     AskUserMiddleware,
     LeakDetectionMiddleware,
-    MultimodalMiddleware,
+    MultimodalStripMiddleware,
     ProvenanceMiddleware,
     ReasoningCompatibilityMiddleware,
 )
@@ -299,16 +299,18 @@ class FlashAgent:
             fallback_models=[name for name, _ in model_resilience.fallbacks],
         )
 
-        # Only the read-side strip is live here: Flash exposes no filesystem
-        # tool at all, so the injection half has nothing to intercept. Without
-        # it, a mid-thread switch to a text-only model replays an earlier turn's
+        # Only the strip half is wired here: Flash exposes no filesystem tool at
+        # all, so the injection half has nothing to intercept. Without the strip,
+        # a mid-thread switch to a text-only model replays an earlier turn's
         # image/PDF blocks and strict providers reject the request outright.
         # Inside model resilience so it strips against the post-fallback model.
+        # ``can_extract=False`` for the same reason: there is no workspace to
+        # tell it to pull the file apart in.
         main_middleware.append(
-            MultimodalMiddleware(
-                sandbox=None,
+            MultimodalStripMiddleware(
                 model_name=self.config.llm.flash_name,
                 custom_modalities=self.config.input_modalities,
+                can_extract=False,
             )
         )
 
