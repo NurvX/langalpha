@@ -82,6 +82,7 @@ def _grant(**overrides) -> dict:
         "destination_url": DESTINATION,
         "allowed_methods": ["POST"],
         "tool_denylist": None,
+        "tool_direct_only": None,
         "grant_status": "active",
         "connection_status": "connected",
     }
@@ -96,6 +97,7 @@ def _jwt(
     workspace_id: str = WORKSPACE_ID,
     sandbox_id: str = SANDBOX_ID,
     ttl_seconds: int = 3600,
+    caller: str = "sandbox",
 ) -> str:
     return mint_relay_jwt(
         secret,
@@ -103,6 +105,7 @@ def _jwt(
         workspace_id=workspace_id,
         sandbox_id=sandbox_id,
         ttl_seconds=ttl_seconds,
+        caller=caller,
     ).token
 
 
@@ -584,6 +587,53 @@ class TestGrantAuthorization:
         env.grant = _grant(tool_denylist=[])
 
         resp = await _post(client, token=_jwt(), body=_rpc(name="place_order"))
+
+        assert resp.status_code == 200
+        assert env.vendor.sends == 1
+
+    @pytest.mark.asyncio
+    async def test_a_directly_bound_tool_is_refused_to_the_sandbox(self, env, client):
+        """The composite drops the wrapper; this is what makes that a gate.
+
+        The policy middleware runs only on the backend's own call, so a sandbox
+        that hand-wrote the frame would have a path around it.
+        """
+        env.grant = _grant(tool_direct_only=["place_order"])
+
+        resp = await _post(client, token=_jwt(), body=_rpc(name="place_order"))
+
+        assert resp.status_code == 403
+        assert _error(resp) == "tool_blocked"
+        assert env.vendor.sends == 0
+
+    @pytest.mark.asyncio
+    async def test_a_directly_bound_tool_passes_for_the_host(self, env, client):
+        env.grant = _grant(tool_direct_only=["place_order"])
+
+        resp = await _post(
+            client, token=_jwt(caller="host"), body=_rpc(name="place_order")
+        )
+
+        assert resp.status_code == 200
+        assert env.vendor.sends == 1
+
+    @pytest.mark.asyncio
+    async def test_the_host_still_honours_the_consent_denial(self, env, client):
+        """The caller claim lifts one refusal, never the user's own."""
+        env.grant = _grant(tool_denylist=["place_order"], tool_direct_only=["place_order"])
+
+        resp = await _post(
+            client, token=_jwt(caller="host"), body=_rpc(name="place_order")
+        )
+
+        assert resp.status_code == 403
+        assert env.vendor.sends == 0
+
+    @pytest.mark.asyncio
+    async def test_a_direct_set_leaves_other_sandbox_tools_alone(self, env, client):
+        env.grant = _grant(tool_direct_only=["place_order"])
+
+        resp = await _post(client, token=_jwt(), body=_rpc(name="list_positions"))
 
         assert resp.status_code == 200
         assert env.vendor.sends == 1
@@ -1379,6 +1429,45 @@ class TestStreaming:
         assert response.status_code == 200
         assert body == b"data: first\n\n"  # the post-stall chunk never lands
         assert stream.closed is True
+
+    @pytest.mark.asyncio
+    async def test_a_flooding_vendor_is_cut_at_the_response_cap(self, env):
+        # The wall clock bounds how long a vendor may stream, not how much. The
+        # host-side direct client reads the whole reply into the API worker, so
+        # without a byte bound one connector can walk a shared container into
+        # its memory limit inside the 55s budget.
+        stream = _Stream([b"data: aaaa\n\n", b"data: bbbb\n\n", b"data: cccc\n\n"])
+        env.set_vendor(_vendor_sse(stream))
+
+        with patch("src.server.app.egress_relay.MAX_RESPONSE_BYTES", 15):
+            response = await _call_route({"authorization": f"Bearer {_jwt()}"})
+            body = b"".join([chunk async for chunk in response.body_iterator])
+
+        # Cut, not clipped: the breaching chunk is never yielded, so nothing
+        # past the cap reaches the caller.
+        assert body == b"data: aaaa\n\n"
+        assert stream.closed is True
+
+    @pytest.mark.asyncio
+    async def test_a_reply_landing_exactly_on_the_cap_passes_whole(self, env):
+        stream = _Stream([b"data: aaaa\n\n", b"data: bbbb\n\n"])
+        env.set_vendor(_vendor_sse(stream))
+
+        with patch("src.server.app.egress_relay.MAX_RESPONSE_BYTES", 24):
+            response = await _call_route({"authorization": f"Bearer {_jwt()}"})
+            body = b"".join([chunk async for chunk in response.body_iterator])
+
+        assert body == b"data: aaaa\n\ndata: bbbb\n\n"
+
+    @pytest.mark.asyncio
+    async def test_the_relay_cap_matches_the_sandbox_clients_own_ceiling(self):
+        # Two terminal consumers read this stream and the sandbox one caps
+        # itself; the relay's bound exists so the host half is not the weaker
+        # of the pair. Pinned together so they cannot drift apart silently.
+        from src.ptc_agent.core.sandbox.mcp_client_runtime import _REPLY_MAX_BYTES
+        from src.server.services.egress.relay import MAX_RESPONSE_BYTES
+
+        assert MAX_RESPONSE_BYTES == _REPLY_MAX_BYTES
 
     @pytest.mark.asyncio
     async def test_wall_clock_on_the_dial_answers_504(self, env, client):

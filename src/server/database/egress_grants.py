@@ -38,7 +38,9 @@ class GrantSync:
 
 async def _tool_policies(
     cur: Any, *, user_id: str, connection_ids: Sequence[str]
-) -> tuple[list[str], list[str | None], list[str | None], list[bool]]:
+) -> tuple[
+    list[str], list[str | None], list[str | None], list[bool], list[str | None]
+]:
     """Expand each connection's stored consent into the denial its grant carries.
 
     Read inside the caller's transaction and keyed only by connection_id, so
@@ -62,7 +64,11 @@ async def _tool_policies(
     allowlist refuses it, the denylist permits it), and the stricter reading is
     the right one to hand a version on its way out.
 
-    Returned as four parallel arrays for the INSERT's ``unnest`` join. A
+    The fifth array is the direct-only set: granted tools bound to the model
+    as JSON tools, which the relay refuses to a sandbox caller so the one
+    path per tool holds at the choke point and not only in the composite.
+
+    Returned as parallel arrays for the INSERT's ``unnest`` join. A
     connection we curate no groups for contributes a NULL denial and
     ``policy_required`` false, which the relay reads as no policy at all.
     """
@@ -71,12 +77,16 @@ async def _tool_policies(
         tools_for,
         vendor_for_url,
     )
+    from src.server.services.tool_binding import inputs_from_row, resolve_plan
 
     await cur.execute(
         """
-        SELECT connection_id, server_url, granted_capabilities
-        FROM user_mcp_oauth_connections
-        WHERE connection_id = ANY(%s::uuid[]) AND user_id = %s
+        SELECT c.connection_id, c.server_url, c.granted_capabilities,
+               s.tool_binding, s.binding_preset
+        FROM user_mcp_oauth_connections c
+        LEFT JOIN user_mcp_servers s
+               ON s.user_id = c.user_id AND s.name = c.server_name
+        WHERE c.connection_id = ANY(%s::uuid[]) AND c.user_id = %s
         """,
         (list(connection_ids), user_id),
     )
@@ -84,6 +94,7 @@ async def _tool_policies(
     denylists: list[str | None] = []
     allowlists: list[str | None] = []
     required: list[bool] = []
+    direct_only: list[str | None] = []
     for row in await cur.fetchall():
         # The vendor comes from the consented address, never the row's name.
         # The name is the user's to pick and to edit, so keying on it let a row
@@ -99,7 +110,28 @@ async def _tool_policies(
             None if permitted is None else json.dumps(sorted(permitted))
         )
         required.append(tools is not None)
-    return ids, denylists, allowlists, required
+        bound = resolve_plan(vendor, granted, inputs_from_row(row)).sandbox_excluded
+        direct_only.append(json.dumps(sorted(bound)) if bound else None)
+    return ids, denylists, allowlists, required, direct_only
+
+
+async def lock_user_egress_state(conn, user_id: str) -> None:
+    """Serialize every writer of one user's egress policy for the transaction.
+
+    Consent, the binding map and the grant set are each derived from the
+    others, and every writer reads the current state before rewriting it, so
+    two workers editing the same user must queue rather than interleave. The
+    lock is re-entrant within a transaction: a caller that already holds it can
+    call into another holder without waiting on itself.
+    """
+    # Deferred, as sync_oauth_grants' import is: writer_guard reaches back
+    # into src.server.database.pool, and a module-scope import would close a
+    # database -> services -> database loop.
+    from src.server.services.writer_guard import advisory_key
+
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(%s)", (advisory_key("EGU", user_id),)
+    )
 
 
 async def sync_oauth_grants(
@@ -148,10 +180,7 @@ async def sync_oauth_grants(
             # new workspace cannot read the old consent and commit it after the
             # narrowing. Always in this order, so two holders never wait on each
             # other.
-            await cur.execute(
-                "SELECT pg_advisory_xact_lock(%s)",
-                (advisory_key("EGU", user_id),),
-            )
+            await lock_user_egress_state(cur, user_id)
             # Serialize this workspace's replacements across workers, THEN
             # re-read the version under that lock. The lock alone would only
             # order a stale writer last; the CAS alone could pass and then be
@@ -180,7 +209,9 @@ async def sync_oauth_grants(
 
             granted: dict[str, str] = {}
             if connection_ids:
-                ids, denylists, allowlists, required = await _tool_policies(
+                (
+                    ids, denylists, allowlists, required, direct_only,
+                ) = await _tool_policies(
                     cur, user_id=user_id, connection_ids=connection_ids
                 )
                 await cur.execute(
@@ -188,16 +219,20 @@ async def sync_oauth_grants(
                     INSERT INTO sandbox_egress_grants
                         (user_id, workspace_id, kind, connection_id,
                          destination_url, tool_denylist, tool_allowlist,
-                         policy_required, status, created_at, updated_at)
+                         policy_required, tool_direct_only,
+                         status, created_at, updated_at)
                     SELECT %s, %s::uuid, %s, c.connection_id, c.server_url,
                            p.denylist, p.allowlist, COALESCE(p.required, false),
+                           p.direct_only,
                            'active', NOW(), NOW()
                     FROM user_mcp_oauth_connections c
                     LEFT JOIN (
                         SELECT * FROM unnest(
                             %s::uuid[], %s::text[]::jsonb[],
-                            %s::text[]::jsonb[], %s::boolean[]
-                        ) AS t(connection_id, denylist, allowlist, required)
+                            %s::text[]::jsonb[], %s::boolean[],
+                            %s::text[]::jsonb[]
+                        ) AS t(connection_id, denylist, allowlist, required,
+                               direct_only)
                     ) p ON p.connection_id = c.connection_id
                     WHERE c.connection_id = ANY(%s::uuid[]) AND c.user_id = %s
                       AND c.status = ANY(%s)
@@ -206,13 +241,14 @@ async def sync_oauth_grants(
                         tool_denylist = EXCLUDED.tool_denylist,
                         tool_allowlist = EXCLUDED.tool_allowlist,
                         policy_required = EXCLUDED.policy_required,
+                        tool_direct_only = EXCLUDED.tool_direct_only,
                         status = 'active',
                         updated_at = NOW()
                     RETURNING connection_id, grant_id
                     """,
                     (
                         user_id, workspace_id, GRANT_KIND_OAUTH_MCP,
-                        ids, denylists, allowlists, required,
+                        ids, denylists, allowlists, required, direct_only,
                         list(connection_ids), user_id, SERVABLE_PARAM,
                     ),
                 )
@@ -255,6 +291,7 @@ async def fetch_grant_for_relay(grant_id: str) -> dict[str, Any] | None:
                 """
                 SELECT g.user_id, g.workspace_id, g.connection_id,
                        g.destination_url, g.allowed_methods, g.tool_denylist,
+                       g.tool_direct_only,
                        g.status AS grant_status,
                        c.status AS connection_status
                 FROM sandbox_egress_grants g
@@ -273,6 +310,7 @@ async def fetch_grant_for_relay(grant_id: str) -> dict[str, Any] | None:
                 "destination_url": row["destination_url"],
                 "allowed_methods": row["allowed_methods"],
                 "tool_denylist": row["tool_denylist"],
+                "tool_direct_only": row["tool_direct_only"],
                 "grant_status": row["grant_status"],
                 "connection_status": row["connection_status"],
             }
@@ -320,7 +358,7 @@ async def apply_consent_to_active_grants(connection_id: str, *, conn=None) -> in
         tools_for,
         vendor_for_url,
     )
-    from src.server.services.writer_guard import advisory_key
+    from src.server.services.tool_binding import inputs_from_row, resolve_plan
 
     async with get_db_connection(conn) as db, db.transaction():
         async with db.cursor(row_factory=dict_row) as cur:
@@ -343,15 +381,15 @@ async def apply_consent_to_active_grants(connection_id: str, *, conn=None) -> in
             owner = await cur.fetchone()
             if owner is None:
                 return 0
-            await cur.execute(
-                "SELECT pg_advisory_xact_lock(%s)",
-                (advisory_key("EGU", str(owner["user_id"])),),
-            )
+            await lock_user_egress_state(cur, str(owner["user_id"]))
             await cur.execute(
                 """
-                SELECT server_url, granted_capabilities
-                FROM user_mcp_oauth_connections
-                WHERE connection_id = %s
+                SELECT c.server_url, c.granted_capabilities,
+                       s.tool_binding, s.binding_preset
+                FROM user_mcp_oauth_connections c
+                LEFT JOIN user_mcp_servers s
+                       ON s.user_id = c.user_id AND s.name = c.server_name
+                WHERE c.connection_id = %s
                 """,
                 (connection_id,),
             )
@@ -365,17 +403,20 @@ async def apply_consent_to_active_grants(connection_id: str, *, conn=None) -> in
             # blue/green colour enforces the allowlist, and a consent change
             # that touched only the denial never reached it.
             permitted = tools_for(vendor, granted)
+            bound = resolve_plan(vendor, granted, inputs_from_row(row)).sandbox_excluded
             await cur.execute(
                 """
                 UPDATE sandbox_egress_grants
                 SET tool_denylist = %s::jsonb, tool_allowlist = %s::jsonb,
-                    policy_required = %s, updated_at = NOW()
+                    policy_required = %s, tool_direct_only = %s::jsonb,
+                    updated_at = NOW()
                 WHERE connection_id = %s AND status = 'active'
                 """,
                 (
                     None if tools is None else json.dumps(sorted(tools)),
                     None if permitted is None else json.dumps(sorted(permitted)),
                     tools is not None,
+                    json.dumps(sorted(bound)) if bound else None,
                     connection_id,
                 ),
             )

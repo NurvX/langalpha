@@ -23,13 +23,14 @@ import httpx
 from src.config.env import EGRESS_RELAY_SECRET
 from src.server.database.egress_grants import fetch_grant_for_relay
 from src.server.services.brokerages import brokerage_for_url
-from src.server.services.egress import RelayError, RelayRejection, fold_tool_name
+from src.server.services.egress import RelayError, RelayRejection, folded_contains
 from src.server.services.egress.jsonrpc import (
     CanonicalRequest,
     JsonRpcRejected,
     canonicalize_request,
 )
 from src.server.services.egress.relay_jwt import (
+    CALLER_HOST,
     RelayClaims,
     RelayJwtError,
     validate_relay_jwt,
@@ -52,6 +53,16 @@ CONNECT_TIMEOUT_S = 5.0
 WRITE_TIMEOUT_S = 10.0
 READ_IDLE_TIMEOUT_S = 45.0
 WALL_CLOCK_S = 55.0
+
+# Ceiling on one relayed response, mirroring the sandbox client's own
+# ``_REPLY_MAX_BYTES``. The wall clock bounds how LONG a vendor may stream, not
+# how MUCH: 55s of a fast connection is hundreds of megabytes. That was survivable
+# while every terminal consumer sat in a disposable per-user interpreter that
+# capped itself; the host-side direct client reads the whole body into the API
+# worker, where the parsed objects are a multiple of the bytes again and the
+# container's memory limit is shared by every worker. Cut here rather than in
+# either client so both paths and both agents are covered by one bound.
+MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 # Connection pool. httpx defaults keepalive_expiry to 5s, which is shorter than
 # the model latency between two execute_code blocks — so every burst of MCP
@@ -201,13 +212,28 @@ async def prepare_relay(
         # strings while the vendor decides what it considers the same name, and
         # under an allowlist a variant spelling failed shut where here it would
         # sail through.
-        if denylist and fold_tool_name(canonical.tool_name) in {
-            fold_tool_name(name) for name in denylist
-        }:
+        if denylist and folded_contains(denylist, canonical.tool_name):
             raise RelayRejection(
                 403,
                 RelayError.TOOL_BLOCKED,
                 "tool refused by this connection's policy",
+            )
+        # A tool bound directly to the model has no sandbox wrapper, and this
+        # is what keeps it that way: the policy middleware gates the direct
+        # call, and a sandbox that could reach the same tool by hand-writing
+        # the frame would have a path around it. The host's own relay calls
+        # carry the claim that lifts this refusal; a token without one is the
+        # sandbox, whatever minted it.
+        direct_only = grant.get("tool_direct_only")
+        if (
+            direct_only
+            and claims.caller != CALLER_HOST
+            and folded_contains(direct_only, canonical.tool_name)
+        ):
+            raise RelayRejection(
+                403,
+                RelayError.TOOL_BLOCKED,
+                "tool is bound directly to the model and is not callable from the sandbox",
             )
 
     try:
