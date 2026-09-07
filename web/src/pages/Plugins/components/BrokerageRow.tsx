@@ -19,6 +19,7 @@ import {
 } from '@/pages/ChatAgent/components/mcp/McpPrimitives';
 import type { CatalogServer } from '@/pages/ChatAgent/utils/api';
 import { settledGrant, type Brokerage } from '../brokerages';
+import { useFlashWorkspace } from '../hooks/useFlashWorkspace';
 import { isPluginOwned } from '../utils/provenance';
 import {
   ConnectButton,
@@ -89,6 +90,7 @@ export function BrokerageRow({
   onOpen: () => void;
 }) {
   const { t } = useTranslation();
+  const flashWorkspace = useFlashWorkspace();
   const status = row?.oauth_status ?? null;
   // The same question the MCP tab asks of its own rows, because past the first
   // write this is one of them: the registry ships an http address, but the row
@@ -218,6 +220,7 @@ export function BrokerageRow({
                 scopeWorkspaceId={null}
                 disabledWorkspaceIds={row.disabled_workspace_ids ?? []}
                 checklistLocked={scopeLocked(row)}
+                flashWorkspace={flashWorkspace}
                 // A brokerage is an account-wide identity, so the only scope
                 // question it has is which workspaces may reach it. Moving one
                 // into a single workspace would strand the OAuth connection,
