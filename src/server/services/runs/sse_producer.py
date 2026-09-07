@@ -1638,6 +1638,13 @@ class RunSSEProducer:
             # Tool Message - Return the result of the tool call
             event_stream_message["tool_call_id"] = message_chunk.tool_call_id
 
+            # The whole status travels, not just the failing one. An explicit
+            # success is what stops a client from reading prose that merely
+            # looks like a failure.
+            tool_status = getattr(message_chunk, "status", None)
+            if tool_status:
+                event_stream_message["status"] = tool_status
+
             # Check for artifact (native LangChain pattern for metadata)
             # Artifact contains complete metadata (URLs, favicons, images) for frontend
             # while message content is filtered for LLM consumption

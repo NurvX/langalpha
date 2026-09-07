@@ -926,6 +926,37 @@ class TestToolNodeInnerLLMSuppression:
             for e in events
         ), f"tool_call_result event missing content; events={events!r}"
 
+    def test_tool_message_status_rides_the_live_result(self):
+        """The live path carries the ToolMessage status whatever it holds.
+
+        A direct MCP tool whose successful output opens with "Refused:" reads
+        as a refusal to every prose heuristic, so a client that saw no status
+        would render a success as a failure.
+        """
+        from langchain_core.messages import ToolMessage
+        handler = self._handler()
+        ok = ToolMessage(content="Refused: 7 applications", tool_call_id="c3")
+        events = asyncio.run(self._drain(
+            handler._process_message_chunk(ok, "tools", {"langgraph_node": "tools"})
+        ))
+        assert any(
+            "tool_call_result" in e
+            and '"tool_call_id": "c3"' in e
+            and '"status": "success"' in e
+            for e in events
+        ), f"tool_call_result event missing success status; events={events!r}"
+
+        failed = ToolMessage(content="Refused: not permitted", tool_call_id="c4", status="error")
+        events = asyncio.run(self._drain(
+            handler._process_message_chunk(failed, "tools", {"langgraph_node": "tools"})
+        ))
+        assert any(
+            "tool_call_result" in e
+            and '"tool_call_id": "c4"' in e
+            and '"status": "error"' in e
+            for e in events
+        ), f"tool_call_result event missing error status; events={events!r}"
+
     def test_missing_metadata_defaults_to_emit(self):
         """If metadata is None or omits langgraph_node, the chunk is treated
         as user-facing (not a tool-internal call)."""

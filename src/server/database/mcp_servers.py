@@ -47,19 +47,28 @@ MAX_CATALOG_SERVERS_PER_USER = 100
 
 # Mutable catalog columns, split by how a value binds. Anything outside the
 # union is rejected by ``update_catalog_server`` rather than silently dropped.
-_CATALOG_JSONB_COLUMNS = frozenset({"args", "env", "headers"})
+_CATALOG_JSONB_COLUMNS = frozenset({"args", "env", "headers", "tool_binding"})
 _CATALOG_SCALAR_COLUMNS = frozenset({
     "transport", "command", "url", "description", "instruction",
     "tool_exposure_mode", "discovery_uses_secrets",
 })
-CATALOG_COLUMNS = _CATALOG_JSONB_COLUMNS | _CATALOG_SCALAR_COLUMNS
+CATALOG_COLUMNS = (_CATALOG_JSONB_COLUMNS - {"tool_binding"}) | _CATALOG_SCALAR_COLUMNS
+
+# How the row's tools reach the model. Writable through the binding endpoint
+# only and kept OUT of ``CATALOG_COLUMNS``: a PUT replaces the connection
+# config whole, and a form that never showed these must not reset them.
+_CATALOG_BINDING_COLUMNS = frozenset({
+    "tool_binding", "binding_preset", "order_approval",
+})
 
 # Plugin provenance is writable too, but stays OUT of ``CATALOG_COLUMNS``:
 # that set is what a request body binds against, so ownership can never be
 # smuggled in from the wire. The catalog-edit service is the only caller that
 # names these, and only to clear them.
 _CATALOG_PROVENANCE_COLUMNS = frozenset({"plugin_id", "plugin_server_key"})
-_WRITABLE_CATALOG_COLUMNS = CATALOG_COLUMNS | _CATALOG_PROVENANCE_COLUMNS
+_WRITABLE_CATALOG_COLUMNS = (
+    CATALOG_COLUMNS | _CATALOG_PROVENANCE_COLUMNS | _CATALOG_BINDING_COLUMNS
+)
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +85,7 @@ _CATALOG_SELECT = """
     SELECT s.user_mcp_server_id, s.user_id, s.name, s.transport, s.command,
            s.args, s.url, s.env, s.headers, s.description, s.instruction,
            s.tool_exposure_mode, s.discovery_uses_secrets, s.enabled,
+           s.tool_binding, s.binding_preset, s.order_approval,
            s.created_at, s.updated_at, s.plugin_id, s.plugin_server_key,
            p.name AS plugin_name, p.enabled AS plugin_enabled
     FROM user_mcp_servers s
@@ -755,6 +765,11 @@ def _catalog_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         "tool_exposure_mode": row["tool_exposure_mode"],
         "discovery_uses_secrets": bool(row["discovery_uses_secrets"]),
         "enabled": bool(row["enabled"]),
+        # .get(): rows built by tests and by the plugin planner predate the
+        # binding columns; an absent value is the untouched-row default.
+        "tool_binding": dict(row.get("tool_binding") or {}),
+        "binding_preset": row.get("binding_preset"),
+        "order_approval": bool(row.get("order_approval", True)),
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
     }

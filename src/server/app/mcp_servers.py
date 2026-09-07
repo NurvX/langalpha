@@ -768,7 +768,11 @@ async def edit_server(
 async def set_enabled(
     workspace_id: str, name: str, body: EnabledInput, user_id: CurrentUserId
 ) -> dict:
-    await _require_owned_workspace(workspace_id, user_id)
+    workspace = await _require_owned_workspace(workspace_id, user_id)
+    # The flash workspace has no sandbox to warm: its next turn re-resolves
+    # on its own, and the toggle only decides whether Flash binds the
+    # server's direct tools.
+    is_flash = workspace.get("status") == "flash"
 
     if name in builtin_names():
         # Built-ins are toggled by an explicit (source='builtin', enabled=false)
@@ -791,7 +795,8 @@ async def set_enabled(
             await upsert_workspace_server(
                 workspace_id, name, source="builtin", enabled=False, config=None
             )
-        _schedule_proactive_apply(workspace_id, user_id)
+        if not is_flash:
+            _schedule_proactive_apply(workspace_id, user_id)
         return {"name": name, "enabled": body.enabled}
 
     ref = await classify_server_name(workspace_id, user_id, name)
@@ -815,7 +820,8 @@ async def set_enabled(
         case _:
             # A disable-marker whose built-in no longer exists: nothing to toggle.
             raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    _schedule_proactive_apply(workspace_id, user_id)
+    if not is_flash:
+        _schedule_proactive_apply(workspace_id, user_id)
     return {"name": name, "enabled": body.enabled}
 
 
