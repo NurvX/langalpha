@@ -24,6 +24,7 @@ from src.server.utils.content_normalizer import (
 from src.server.utils.pg_sanitize import finite_json_dumps
 from src.llms.content_utils import extract_reasoning_summary_index
 from src.utils.tracking import ExecutionTracker
+from src.config import settings as app_settings
 from src.config.settings import (
     get_workflow_timeout,
     is_sse_event_log_enabled,
@@ -199,6 +200,33 @@ _STATUS_CODE_RE = re.compile(r"\b([45]\d{2})\b")
 def _parse_status_from_message(text: str) -> Optional[int]:
     match = _STATUS_CODE_RE.search(text)
     return int(match.group(1)) if match else None
+
+
+# Statuses meaning the provider refused the request we sent: bad shape,
+# unsupported content, oversized payload. Never the caller's credential and
+# never the provider's health, so the only honest hint is to move to a model
+# that accepts the request. 401/403/404 are absent because they have their own
+# branches; they are about access, not about the request body.
+_REQUEST_REFUSED_STATUSES: frozenset[int] = frozenset({400, 405, 413, 422})
+
+# Hints that ask the user to go fix a credential. Only truthful when the user
+# is the one holding it.
+_CREDENTIAL_HINTS: frozenset[str] = frozenset({"api_key", "model_access"})
+
+
+def user_owns_credential(credential_source: Any) -> bool:
+    """Whether the reader of the error holds the credential that ran the call.
+
+    Both halves are load-bearing, because ``platform`` means opposite things in
+    the two host modes: in OSS the key is the operator's own ``.env`` entry and
+    the operator is the user, while on the hosted service the user has no key at
+    all and "check your API key" sends them to a page that is not the cause.
+    An unknown source fails closed, since a wrong credential hint is worse than
+    a missing one.
+    """
+    if app_settings.HOST_MODE == "oss":
+        return True
+    return str(credential_source) in ("oauth", "byok")
 
 
 def find_resilience_trace(exc: BaseException) -> Optional[Dict[str, Any]]:
@@ -1818,6 +1846,10 @@ class RunSSEProducer:
         the frontend to render user-actionable guidance. The legacy ``error``
         and ``message`` fields stay so older clients keep working.
 
+        Hints are chosen by status and then filtered by who holds the credential
+        (see ``user_owns_credential``), so a platform-billed turn never asks the
+        user to check a key they do not have.
+
         Args:
             error_message: Raw error text (usually ``str(exc)``).
             exc: The exception itself — enables classification. Optional to
@@ -1868,23 +1900,30 @@ class RunSSEProducer:
                 # "check your API key" first on a 503 is misleading.
                 status = info.get("status_code")
                 if status in (401, 403):
-                    data["hints"] = [
-                        "api_key",
-                        "model_access",
-                        "try_another_model",
-                    ]
+                    hints = ["api_key", "model_access", "try_another_model"]
                 elif status == 404:
-                    data["hints"] = ["model_access", "try_another_model"]
+                    hints = ["model_access", "try_another_model"]
+                elif status in _REQUEST_REFUSED_STATUSES:
+                    hints = ["try_another_model"]
                 elif status == 429 or (isinstance(status, int) and status >= 500):
-                    data["hints"] = ["provider_status", "try_another_model"]
+                    hints = ["provider_status", "try_another_model"]
                 else:
                     # No status (network error) — could be anything; show all.
-                    data["hints"] = [
+                    hints = [
                         "api_key",
                         "model_access",
                         "provider_status",
                         "try_another_model",
                     ]
+                # The status says what failed; the credential says who can act
+                # on it. Drop the hints that would send a user to fix a key
+                # they do not hold. Every branch above keeps
+                # "try_another_model", so the list never empties.
+                if not user_owns_credential(
+                    getattr(self.agent_config, "credential_source", None)
+                ):
+                    hints = [h for h in hints if h not in _CREDENTIAL_HINTS]
+                data["hints"] = hints
             if trace is not None:
                 primary_model = trace.get("model")
                 if isinstance(primary_model, str) and primary_model:
