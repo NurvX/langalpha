@@ -3,6 +3,7 @@ CRUD (`crud.py`) and serving (`serve.py`) routers."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from urllib.parse import unquote
@@ -25,6 +26,11 @@ from ptc_agent.core.paths import (
     USER_PROFILE_PORTFOLIO_FILE,
     USER_PROFILE_PREFERENCE_FILE,
     USER_PROFILE_WATCHLIST_FILE,
+)
+from src.server.database.blob_keys import RELAY_MAX_BYTES
+from src.server.services.persistence.transfer import (
+    INPROCESS_MAX_INFLIGHT_BYTES,
+    ByteBudget,
 )
 from src.server.services.workspace_manager import WorkspaceManager
 from src.server.services.workspace_layout import (
@@ -145,7 +151,37 @@ _ALWAYS_HIDDEN_DIR_SEGMENTS = tuple(f"/{d}/" for d in ALWAYS_HIDDEN_DIR_NAMES)
 
 # Generous but bounded defaults.
 DEFAULT_READ_LIMIT_LINES = 20_000
-MAX_UPLOAD_BYTES = 250 * 1024 * 1024  # 250MB
+
+# This route buffers the whole body in the server before handing it to the
+# sandbox, which is the same constraint the relay transfer path has, so it
+# takes the same number rather than restating one. It is a ceiling, not the
+# limit: the route also asks what the next backup could store and takes
+# whichever is tighter, so an upload is never accepted only to be dropped.
+MAX_UPLOAD_BYTES = RELAY_MAX_BYTES
+
+_FILES_HELD_AT_ONCE = 8
+_held_budgets: dict[asyncio.AbstractEventLoop, ByteBudget] = {}
+
+
+def held_bytes_budget() -> ByteBudget:
+    """This worker's allowance for whole files held in memory at once.
+
+    Upload bodies and large downloads read through the provider draw on the
+    same allowance, since both spend the same memory.
+
+    Memory is the one thing a worker owns alone, so the bound is per process
+    by design. Keyed by loop because an asyncio primitive belongs to the loop
+    that first waits on it.
+    """
+    loop = asyncio.get_running_loop()
+    budget = _held_budgets.get(loop)
+    if budget is None:
+        _held_budgets.clear()
+        budget = _held_budgets[loop] = ByteBudget(
+            INPROCESS_MAX_INFLIGHT_BYTES, _FILES_HELD_AT_ONCE
+        )
+    return budget
+
 
 # Known binary file extensions that cannot be read as text
 _BINARY_EXTENSIONS = frozenset(

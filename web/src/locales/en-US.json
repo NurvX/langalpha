@@ -1255,7 +1255,7 @@
     "descModeAgent": "Agent fills",
     "descModeManual": "Manual",
     "descModeAgentHint": "The agent will set up the workspace description from your first conversation",
-    "fileTooLarge": "{{name}} is too large ({{size}} MB). Maximum upload size is 250 MB."
+    "fileTooLarge": "{{name}} is too large to upload ({{size}} MB)."
   },
   "computer": {
     "computers": "Computers",

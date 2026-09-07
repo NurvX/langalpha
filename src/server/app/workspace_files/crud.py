@@ -14,6 +14,9 @@ from fastapi import APIRouter, Body, File, HTTPException, Query, Request, Upload
 from pydantic import BaseModel, Field
 
 from src.server.utils.api import CurrentUserId, require_workspace_owner
+from src.server.services.persistence.transfer import scan_cap_bytes
+from src.server.utils.uploads import read_capped
+from src.utils.storage import is_storage_enabled
 from src.server.utils.error_sanitization import (
     sandbox_unreachable_detail,
     single_line,
@@ -49,6 +52,7 @@ from ._containment import (
     read_contained_sandbox_file,
 )
 from ._shared import (
+    held_bytes_budget,
     DEFAULT_READ_LIMIT_LINES,
     _USER_PROFILE_FILES,
     _is_text_content_type,
@@ -689,17 +693,23 @@ async def upload_workspace_file(
 
     normalized = await _contained_target(sandbox, dest, work_dir)
 
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_BYTES:
-        size_mb = len(content) / (1024 * 1024)
-        limit_mb = MAX_UPLOAD_BYTES // (1024 * 1024)
-        raise HTTPException(
-            status_code=413,
-            detail=f"File is too large ({size_mb:.1f} MB). Maximum upload size is {limit_mb} MB.",
-        )
+    # Accept only what the next backup could actually store. This route
+    # buffers the body, so its own ceiling applies too, and whichever is
+    # tighter wins; taking the relay ceiling alone would accept an upload that
+    # a deployment writing bytes inline then drops on the next sync.
+    scan_cap = scan_cap_bytes(sandbox, blobs_on=is_storage_enabled())
+    upload_cap = (
+        MAX_UPLOAD_BYTES if scan_cap is None else min(MAX_UPLOAD_BYTES, scan_cap)
+    )
+    if file.size is not None and file.size > upload_cap:
+        await read_capped(file, upload_cap)  # raises the 413 before queueing
 
-    # ``aupload_file_bytes`` takes this path's write lock for the write itself.
-    ok = await sandbox.aupload_file_bytes(normalized, content)
+    # The cap bounds one request; the budget bounds how many this worker
+    # holds at once, the way the relay bounds its own.
+    async with held_bytes_budget().hold(file.size):
+        content = await read_capped(file, upload_cap)
+        # ``aupload_file_bytes`` takes this path's write lock for the write itself.
+        ok = await sandbox.aupload_file_bytes(normalized, content)
     if not ok:
         raise HTTPException(status_code=500, detail="Upload failed")
 
