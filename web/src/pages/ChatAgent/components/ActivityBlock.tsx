@@ -13,6 +13,7 @@ import {
   type ToolCategory,
 } from './toolDisplayConfig';
 import { classifyAgentPath, isUserProfileReadmePath } from '../utils/agentPaths';
+import { ToolIcon } from './ToolIcon';
 import { TextShimmer } from '@/components/ui/text-shimmer';
 import { DotLoader } from '@/components/ui/dot-loader';
 import { useAnimatedText } from '@/components/ui/animated-text';
@@ -562,7 +563,6 @@ const ToolCallLiveRow = memo(function ToolCallLiveRow({ tc, liveState }: ToolCal
   const { t } = useTranslation();
   const toolName = tc.toolName || '';
   const args = tc.toolCall?.args;
-  const IconComponent = getToolIcon(toolName, args);
   const isInProgress = liveState === 'active' && !tc.isComplete && !tc._recentlyCompleted;
   // Only `state-active` has a CSS treatment (left-rule shimmer in
   // ActivityBlock.css). Completing and failed states get their visual cue
@@ -587,7 +587,7 @@ const ToolCallLiveRow = memo(function ToolCallLiveRow({ tc, liveState }: ToolCal
           transition={isInProgress ? { duration: 1.5, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }}
           style={{ display: 'inline-flex' }}
         >
-          <IconComponent className="h-4 w-4" />
+          <ToolIcon toolName={toolName} args={args} className="h-4 w-4" />
         </motion.span>
         <AnimatePresence>
           {liveState === 'failed' && (
@@ -776,7 +776,6 @@ const ToolCallRow = memo(function ToolCallRow({ item, onClick }: ToolCallRowProp
   const toolName = item.toolName || '';
   const args = item.toolCall?.args;
   const title = getCompletedRowTitle(toolName, item.toolCall, t);
-  const IconComponent = getToolIcon(toolName, args);
   const summary = getCompletedSummary(toolName, item.toolCall, t);
   const isFailed = item.isFailed === true;
   const failedLabel = t('toolArtifact.a11y.toolCallFailed');
@@ -810,7 +809,7 @@ const ToolCallRow = memo(function ToolCallRow({ item, onClick }: ToolCallRowProp
   return (
     <div className={`titem${isFailed ? ' failed' : ''}`}>
       <div className="titem-icon" title={isFailed ? failedLabel : undefined}>
-        <IconComponent className="h-4 w-4" style={{ color: 'var(--Labels-Secondary)' }} />
+        <ToolIcon toolName={toolName} args={args} className="h-4 w-4" style={{ color: 'var(--Labels-Secondary)' }} />
         {isFailed && <FailedIconBadge label={failedLabel} />}
       </div>
       <div className="titem-body">

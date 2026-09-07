@@ -135,6 +135,13 @@ export interface CreditPauseSegment {
   order: number;
 }
 
+/** A direct MCP tool call (`mcp__<server>__<tool>`) stopped for approval. */
+export interface ToolApprovalSegment {
+  type: 'tool_approval';
+  proposalId: string;
+  order: number;
+}
+
 export type ContentSegment =
   | ReasoningSegment
   | TextSegment
@@ -150,7 +157,8 @@ export type ContentSegment =
   | StopWorkspaceSegment
   | DeleteThreadSegment
   | PlanApprovalSegment
-  | CreditPauseSegment;
+  | CreditPauseSegment
+  | ToolApprovalSegment;
 
 // --- Process Records ---
 
@@ -294,6 +302,32 @@ export interface PlanApprovalState {
   interruptId?: string;
 }
 
+/** Where one approval card sits among the action requests its interrupt raised.
+ *  The resume answers all of them in order, so the card carries its own slot. */
+export interface ToolApprovalPosition {
+  index: number;
+  count: number;
+}
+
+export interface ToolApprovalState {
+  status: 'pending' | 'approved' | 'rejected';
+  /** The full `mcp__<server>__<tool>` name the interrupt named. */
+  toolName: string;
+  server: string;
+  tool: string;
+  args: Record<string, unknown>;
+  interruptId?: string;
+  /**
+   * Where this call sits in its interrupt's action requests. One interrupt can
+   * stop several calls at once, and the resume has to answer them in the order
+   * it raised them, so each card carries its slot and the width of the batch.
+   */
+  actionIndex: number;
+  actionCount: number;
+  /** The reason typed on Reject, if any. */
+  reason?: string | null;
+}
+
 export interface UserQuestionState {
   questionId?: string;
   question?: string;
@@ -421,6 +455,7 @@ export interface AssistantMessage {
   ptcAgentProposals?: Record<string, PTCAgentProposalState>;
   secretaryActionProposals?: Record<string, SecretaryActionProposalState>;
   creditPauses?: Record<string, CreditPauseState>;
+  toolApprovals?: Record<string, ToolApprovalState>;
   // Runtime flags
   steering?: boolean;
   steeringDelivered?: boolean;

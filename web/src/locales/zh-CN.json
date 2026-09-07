@@ -2177,6 +2177,7 @@
       "updated_preference": "已更新偏好"
     },
     "inProgress": {
+      "callingServer": "正在调用 {{server}}...",
       "activatingSkill": "激活技能中...",
       "activatingSkillName": "激活技能 {{name}}...",
       "readingMemory": "读取记忆中...",
@@ -2272,6 +2273,18 @@
       "openInTab": "在 {{tab}} 中打开",
       "collapseDiff": "折叠差异",
       "expandDiff": "展开差异"
+    },
+    "directTool": {
+      "approvalTitle": "是否批准此操作？",
+      "unansweredTitle": "曾等待批准，未获回应",
+      "approve": "批准",
+      "reject": "拒绝",
+      "reasonPlaceholder": "原因（可选）",
+      "approvedAction": "已批准 {{vendor}} {{tool}}",
+      "rejectedAction": "已拒绝 {{vendor}} {{tool}}",
+      "refused": "连接器拒绝了此调用",
+      "rejected": "你拒绝了此调用",
+      "noArguments": "无参数"
     }
   },
   "setup": {
@@ -2826,7 +2839,7 @@
         },
         "trading": {
           "label": "实盘下单",
-          "desc": "使用账户中的真实资金买入、卖出、改单和撤单，且无需再次征询你的同意。"
+          "desc": "使用账户中的真实资金买入、卖出、改单和撤单。"
         }
       },
       "consent": {
@@ -2964,6 +2977,8 @@
       "allExcept": "所有工作区（除 {{count}} 个外）",
       "activeIn": "生效于",
       "futureHint": "新建工作区默认启用",
+      "flash": "Flash",
+      "flashNote": "Flash 仅能使用绑定为直接调用的工具；PTC 工具需要 PTC 智能体。",
       "moveToWorkspace": "移至工作区",
       "moveToAll": "移至所有工作区",
       "moveToAnother": "移至其他工作区",
@@ -3135,7 +3150,19 @@
       "toolsFailed": "无法加载工具。请求失败，请重试。",
       "toolsUnavailable": "当前服务进程未能获取，重启后通常可恢复。",
       "repository": "代码仓库",
-      "license": "许可证"
+      "license": "许可证",
+      "toolAccess": "工具调用方式",
+      "toolAccessNote": "PTC 工具由智能体在代码中调用；直接工具是应用可展示的单次调用。下方单个工具的设置优先于这些开关。",
+      "groupDefaults": "按工具组默认方式调用",
+      "groupDefaultsDesc": "开启后，由每个工具组决定其工具的调用方式，支持的工具作为应用可展示的单次调用运行；关闭后，该行可切换的工具全部由智能体在代码中调用。",
+      "binding_ptc": "PTC",
+      "binding_direct": "直接",
+      "binding_both": "两者",
+      "bindingAria": "智能体调用 {{name}} 的方式",
+      "bindingCustom": "自定义",
+      "bindingReset": "重置",
+      "bindingResetAria": "将 {{name}} 重置为该行默认",
+      "bindingPinned": "实盘下单工具仅作为应用可展示的直接调用运行。"
     }
   }
 }

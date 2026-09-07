@@ -4,7 +4,7 @@
  * `setMessages`; subagent (task-namespace) events never enter this module.
  */
 
-import { isToolResultFailure } from '../subagents/subagentStatus';
+import { isToolResultFailure, toolNameOf } from '../subagents/subagentStatus';
 import { deriveTaskSegment, applyTaskSegment, applyLaunchReply } from '../subagents/taskSegmentBuilder';
 import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload, HtmlWidgetData } from '../../hooks/utils/types';
 import type { ProvenanceEvent } from '@/types/sse';
@@ -360,7 +360,7 @@ export function handleToolCallResult({ assistantMessageId, toolCallId, result, r
 
       const toolCallProcesses = { ...((msg.toolCallProcesses as Record<string, Record<string, unknown>>) || {}) };
 
-      const isFailed = isToolResultFailure(result);
+      const isFailed = isToolResultFailure({ ...result, toolName: toolNameOf(toolCallProcesses, toolCallId) });
 
       // Track subagent task status updates
       const subagentTasks = { ...((msg.subagentTasks as Record<string, SubagentTaskRecord>) || {}) };

@@ -3,9 +3,10 @@ import {
   TrendingUp, Building2, BarChart3, PieChart, Search, Globe,
   FilePlus, FileText, FilePen, FolderSearch, SquareChevronRight, Wrench,
   Newspaper, Brain, User, FileBarChart, Clock, ClipboardList, Zap, Settings, Terminal,
-  Sparkles, BookText, BookMarked, BookPlus, PenLine, Eye,
+  Sparkles, BookText, BookMarked, BookPlus, PenLine, Eye, Plug,
 } from 'lucide-react';
 import { classifyAgentPath, topicFromMemoryKey, type AgentPathInfo } from '../utils/agentPaths';
+import { directToolDisplayName, parseDirectToolName, summarizeDirectToolArgs } from '../utils/directTools';
 import { INTERVAL_LABEL } from '@/lib/bars';
 
 /** Translation function signature compatible with i18next's t() */
@@ -138,6 +139,8 @@ export function getDisplayName(rawToolName: string, t?: TFn, args?: ToolCallArgs
       return t ? t(`toolArtifact.tool.${info.entity}`) : entityLabel(info.entity);
     }
   }
+  const direct = directToolDisplayName(rawToolName);
+  if (direct) return direct;
   const config = TOOL_DISPLAY_CONFIG[rawToolName];
   if (t && config?.i18nKey) return t(`toolArtifact.tool.${config.i18nKey}`);
   return config?.displayName || rawToolName;
@@ -163,6 +166,7 @@ export function getToolIcon(rawToolName: string, args?: ToolCallArgs): LucideIco
     }
     if (info.kind === 'user-profile') return User;
   }
+  if (parseDirectToolName(rawToolName)) return Plug;
   return TOOL_DISPLAY_CONFIG[rawToolName]?.icon || Wrench;
 }
 
@@ -239,6 +243,13 @@ export function getInProgressText(rawToolName: string, toolCall: ToolCall | unde
       }
       return tr?.(`updating_${entity}`) ?? `updating ${entity}...`;
     }
+  }
+
+  const direct = parseDirectToolName(rawToolName);
+  if (direct) {
+    return direct.server
+      ? (tr?.('callingServer', { server: direct.server }) ?? `calling ${direct.server}...`)
+      : (tr?.('processing') ?? 'processing...');
   }
 
   switch (rawToolName) {
@@ -389,6 +400,8 @@ export function getCompletedSummary(toolName: string, toolCall: ToolCall | undef
     const tf = (args.timeframe as string) || '1day';
     return `${String(args.symbol).toUpperCase()} · ${INTERVAL_LABEL[tf] ?? tf}`;
   }
+  // Direct MCP tools: the collapsed line masks account ids; the detail view does not.
+  if (parseDirectToolName(toolName)) return summarizeDirectToolArgs(args);
   if (args.description) return args.description;
   if (args.symbol) return args.symbol;
   if (args.query) return args.query;

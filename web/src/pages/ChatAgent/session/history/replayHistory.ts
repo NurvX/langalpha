@@ -33,9 +33,16 @@ import {
 import type {
   TokenUsage, SSEEvent, HistoryInterruptInfo, SubagentHistoryData, PairState,
 } from '../types';
-import { PROPOSAL_INTERRUPT_TYPES, PROPOSAL_DATA_KEY_MAP, resolvePendingHistoryInterrupt, setCardStatus } from '../interrupts/buckets';
+import { PROPOSAL_INTERRUPT_TYPES, PROPOSAL_DATA_KEY_MAP, resolvePendingHistoryInterrupt, setCardStatus, setCardFields } from '../interrupts/buckets';
 import { recordInterruptClaims, type HistoryInterruptClaim } from '../interrupts/claims';
 import { projectHistoryInterrupt } from '../interrupts/fromHistoryEvent';
+import {
+  batchToolApprovalFields,
+  readHitlDecisions,
+  toolApprovalActionIndex,
+  toolApprovalDecisionFields,
+  type HitlDecision,
+} from '../interrupts/toolApprovalCard';
 import type { HistoryRuntime } from '../runtime';
 
 export interface ReplayHistoryDeps {
@@ -121,6 +128,9 @@ export async function loadConversationHistory(
     // replays it last — after the stamp that already answered it. See
     // interrupts/claims.ts for why only a live resume records one.
     const claimedInterrupts = new Map<string, HistoryInterruptClaim>();
+    // The decision list behind each of those claims, kept for the same reason
+    // and separately because it settles a batch card by card, not by interrupt.
+    const claimedToolDecisions = new Map<string, HitlDecision[]>();
 
     // Track subagent events by task ID for this history load
     // Map<taskId, { messages: Array, events: Array, description?: string, type?: string }>
@@ -321,6 +331,11 @@ export async function loadConversationHistory(
         // The resolvers below settle the cards already on screen; this keeps
         // the same evidence for the interrupts still ahead of us.
         recordInterruptClaims(claimedInterrupts, event);
+        if (!event.run_id) {
+          for (const [id, list] of Object.entries(readHitlDecisions(event.metadata) || {})) {
+            if (Array.isArray(list)) claimedToolDecisions.set(id, list);
+          }
+        }
 
         // Resolve pending plan_approval interrupt from content (empty = approved, non-empty = rejected).
         resolvePendingHistoryInterrupt(
@@ -335,6 +350,63 @@ export async function loadConversationHistory(
           }),
           rt.setMessages,
         );
+
+        // Resolve tool_approval interrupts the way the plan resolver does, with
+        // one more signal: a reject that carried no reason leaves the content
+        // empty, so it is told apart from an approve by its null `hitl_answers`
+        // entry (the only reject shape the server records there).
+        {
+          const hitlAnswers = event.metadata?.hitl_answers as Record<string, unknown> | undefined;
+          const hitlDecisions = readHitlDecisions(event.metadata);
+          const content = typeof event.content === 'string' ? event.content.trim() : '';
+          const resumedIds = event.metadata?.hitl_interrupt_ids as string[] | undefined;
+          // One call per resumed id, and one per card behind it: an interrupt
+          // that stopped several calls raised several cards, and a single
+          // resolve would leave the rest pending with live controls on a batch
+          // already answered. Every HITL resume stamps the ids, so an ordinary
+          // message settles nothing here.
+          for (const interruptId of Array.isArray(resumedIds) ? resumedIds : []) {
+            const answer = hitlAnswers ? hitlAnswers[interruptId] : undefined;
+            const rejected = answer === null || (answer === undefined && !!content);
+            // Content is attributable only when this resume answered one card;
+            // in a batch it is the joined text of every reject in it.
+            const batched = (resumedIds?.length || 0) > 1;
+            const batchFields = batchToolApprovalFields(
+              pendingHistoryInterrupts.filter(
+                (p) => p.type === 'tool_approval' && p.interruptId === interruptId,
+              ).length,
+            );
+            for (;;) {
+              const idx = pendingHistoryInterrupts.findIndex(
+                (p) => p.type === 'tool_approval' && p.interruptId === interruptId,
+              );
+              if (idx === -1) break;
+              const [matched] = pendingHistoryInterrupts.splice(idx, 1);
+              // By card id, not by bubble: a batch re-raised on a resume that
+              // never consumed it is re-queued against that resume's bubble, so
+              // a later attempt patching through updateMessage would flip an
+              // invisible copy and leave the visible cards pending, with the
+              // pending set already dropped so nothing could answer them. The
+              // credit pause settles by id for the same reason.
+              const decided = toolApprovalDecisionFields(
+                hitlDecisions?.[interruptId],
+                toolApprovalActionIndex(matched.proposalId!, interruptId),
+              );
+              rt.setMessages((prev) =>
+                setCardFields(
+                  prev,
+                  'toolApprovals',
+                  matched.proposalId!,
+                  decided ??
+                    batchFields ?? {
+                      status: rejected ? 'rejected' : 'approved',
+                      reason: rejected && content && !batched ? content : null,
+                    },
+                ),
+              );
+            }
+          }
+        }
 
         // Resolve ask_user_question interrupts from resume query metadata (hitl_answers).
         // Persisted immediately by persist_query_start(), keyed by interrupt_id.
@@ -773,6 +845,7 @@ export async function loadConversationHistory(
             content_type: event.content_type,
             tool_call_id: event.tool_call_id,
             artifact: event.artifact,
+            status: event.status,
           },
           pairState,
           setMessages: setMessagesForHandlers,
@@ -839,6 +912,7 @@ export async function loadConversationHistory(
       if (eventType === 'interrupt') {
         projectHistoryInterrupt(rt, event, {
           currentActivePairIndex, assistantMessagesByPair, pairStateByPair, pendingHistoryInterrupts, claimedInterrupts,
+          claimedToolDecisions,
         });
         return;
       }

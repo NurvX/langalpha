@@ -79,6 +79,9 @@ export interface ToolCallResultData {
   content_type: string;
   tool_call_id: string;
   artifact?: unknown;
+  /** The ToolMessage status the backend stamped, 'success' or 'error'. Absent
+   *  only on turns persisted before the field rode the wire. */
+  status?: string;
 }
 
 export interface ToolCallResultEvent extends BaseSSEEvent {
@@ -87,6 +90,7 @@ export interface ToolCallResultEvent extends BaseSSEEvent {
   content: string | unknown;
   content_type?: string;
   artifact?: unknown;
+  status?: string;
 }
 
 export interface ToolCallChunksEvent extends BaseSSEEvent {

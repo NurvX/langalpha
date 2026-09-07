@@ -266,6 +266,7 @@ export default function SharedChatView() {
                 content_type: event.content_type as string,
                 tool_call_id: event.tool_call_id as string,
                 artifact: event.artifact,
+                status: event.status,
               },
               pairState,
               setMessages: setMessagesCompat,

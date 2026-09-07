@@ -11,9 +11,10 @@ import StartQuestionCard from '../StartQuestionCard';
 import PTCAgentCard from '../PTCAgentCard';
 import SecretaryConfirmCard from '../SecretaryConfirmCard';
 import CreditPauseCard from '../CreditPauseCard';
+import ToolApprovalCard from '../ToolApprovalCard';
 import TaskSegmentCard from './TaskSegmentCard';
 import { SubagentStopNotice } from '../SubagentTaskMessageContent';
-import type { CreditPauseState, SubagentTaskRecord } from '@/types/chat';
+import type { CreditPauseState, SubagentTaskRecord, ToolApprovalState } from '@/types/chat';
 import TextMessageContent from '../TextMessageContent';
 import InlineWidget from '../viewers/InlineWidget';
 import ToolCallMessageContent from '../ToolCallMessageContent';
@@ -39,6 +40,7 @@ import {
   type StartQuestionRenderBlock,
   type SubagentTaskRenderBlock,
   type TextRenderBlock,
+  type ToolApprovalRenderBlock,
   type UserQuestionRenderBlock,
 } from './buildRenderBlocks';
 
@@ -68,6 +70,7 @@ interface MessageContentSegmentsProps {
   ptcAgentProposals?: Record<string, Record<string, unknown>>;
   secretaryActionProposals?: Record<string, Record<string, unknown>>;
   creditPauses?: Record<string, CreditPauseState>;
+  toolApprovals?: Record<string, ToolApprovalState>;
   htmlWidgetProcesses?: Record<string, Record<string, unknown>>;
   flashContext?: { threadId: string; workspaceId: string } | null;
 }
@@ -118,7 +121,7 @@ function TextBlock({ block, isFirst, isStreaming, hasError, structuredError, isS
   return isReplyStart && textContent ? <div data-reply-start="">{el}</div> : el;
 }
 
-export const MessageContentSegments = memo(function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesses, todoListProcesses: _todoListProcesses, subagentTasks, planApprovals = EMPTY_OBJ, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, hasError, structuredError, isAssistant = false, compactToolCalls = false, isSubagentView = false, readOnly = false, allowFiles = false, ptcAgentProposals = EMPTY_OBJ, secretaryActionProposals = EMPTY_OBJ, creditPauses = EMPTY_OBJ, htmlWidgetProcesses = EMPTY_OBJ, flashContext }: MessageContentSegmentsProps): React.ReactElement {
+export const MessageContentSegments = memo(function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesses, todoListProcesses: _todoListProcesses, subagentTasks, planApprovals = EMPTY_OBJ, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, hasError, structuredError, isAssistant = false, compactToolCalls = false, isSubagentView = false, readOnly = false, allowFiles = false, ptcAgentProposals = EMPTY_OBJ, secretaryActionProposals = EMPTY_OBJ, creditPauses = EMPTY_OBJ, toolApprovals = EMPTY_OBJ, htmlWidgetProcesses = EMPTY_OBJ, flashContext }: MessageContentSegmentsProps): React.ReactElement {
   const {
     onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick,
     onApprovePlan, onRejectPlan, onPlanDetailClick,
@@ -420,6 +423,25 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
               key={block.key}
               pauseData={cpd}
               onResume={!readOnly && onResumeCreditPause ? () => onResumeCreditPause(pauseId, cpd.interruptId) : undefined}
+            />
+          );
+        }
+
+        if (block.type === 'tool_approval') {
+          const approvalId = (block as ToolApprovalRenderBlock).segment.proposalId!;
+          const ta = toolApprovals[approvalId];
+          if (!ta) return null;
+          // Nothing raises a tool approval any more and nothing answers one,
+          // so every card here is a record of a thread that stopped on one
+          // before that: settled or not, it renders read-only. An unanswered
+          // one is not armed either (useChatMessages leaves it out of the
+          // interactive set), so the composer stays open beside it.
+          return (
+            <ToolApprovalCard
+              key={block.key}
+              data={ta}
+              onApprove={undefined}
+              onReject={undefined}
             />
           );
         }

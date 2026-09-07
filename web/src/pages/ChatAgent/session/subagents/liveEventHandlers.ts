@@ -4,7 +4,7 @@
  * none touches the main transcript's `setMessages`.
  */
 
-import { isToolResultFailure } from './subagentStatus';
+import { isToolResultFailure, toolNameOf } from './subagentStatus';
 import {
   WORKFLOW_TASK_TYPE, applyWorkflowLifecycle, isWorkflowRunTerminal, workflowRunDisplayStatus,
   workflowRunStatusFromLedger,
@@ -528,7 +528,7 @@ export function handleSubagentToolCallResult({ taskId, assistantMessageId, toolC
     const msg = updatedMessages[messageIndex];
     const toolCallProcesses = { ...((msg.toolCallProcesses as Record<string, Record<string, unknown>>) || {}) };
 
-    const isFailed = isToolResultFailure(result);
+    const isFailed = isToolResultFailure({ ...result, toolName: toolNameOf(toolCallProcesses, toolCallId) });
 
     if (toolCallProcesses[toolCallId]) {
       toolCallProcesses[toolCallId] = {
