@@ -192,6 +192,9 @@ def scan(spec: dict[str, Any]) -> dict[str, Any]:
     exclude_suffixes = tuple(spec.get("exclude_suffixes") or ())
     max_file_bytes = spec.get("max_file_bytes")
     prior = spec.get("prior") or {}
+    # A listing that only compares sizes and mtimes has no use for digests,
+    # and hashing a new multi-GiB file on every status poll is the whole cost.
+    hash_files = spec.get("hash", True)
 
     entries: list[dict[str, Any]] = []
     oversized: list[dict[str, Any]] = []
@@ -227,6 +230,8 @@ def scan(spec: dict[str, Any]) -> dict[str, Any]:
         ):
             digest, is_binary = known[2], None
             counts["reused"] += 1
+        elif not hash_files:
+            digest, is_binary = None, None
         else:
             digest, is_binary, size = _hash_file(abs_path)
             counts["hashed"] += 1

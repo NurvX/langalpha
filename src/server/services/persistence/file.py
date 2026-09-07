@@ -16,7 +16,6 @@ holds the row shape they share. This module is the facade over them.
 
 from typing import Any
 
-from src.server.database.blob_keys import MAX_BLOB_BYTES
 from src.server.database.workspace_file import (
     get_file as db_get_file,
     get_files_for_workspace,
@@ -72,10 +71,6 @@ class FilePersistenceService:
     naming the project folder to mirror; see ``services.workspace_layout`` for
     how a caller resolves one.
     """
-
-    # Same number as the per-blob storage cap, and derived from it rather than
-    # restated: a file this path accepts must be storable.
-    MAX_FILE_SIZE = MAX_BLOB_BYTES
 
     sync_to_db = staticmethod(backup.sync_to_db)
     list_sandbox_files = staticmethod(backup.list_sandbox_files)

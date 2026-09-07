@@ -255,6 +255,15 @@ def test_scan_prior_reuse_vs_rehash(tmp_path):
     assert out["reused"] == 0 and out["hashed"] == 1
 
 
+
+def test_scan_without_hashing_reads_no_file(tmp_path, monkeypatch):
+    _write(tmp_path, "big.bin", b"abc")
+    monkeypatch.setattr(rt, "_hash_file", lambda _p: pytest.fail("a listing hashed a file"))
+    out = rt.scan({"root": str(tmp_path), "hash": False})
+    entry = out["entries"][0]
+    assert (entry["path"], entry["size"], entry["sha256"]) == ("big.bin", 3, None)
+    assert out["hashed"] == 0
+
 def test_scan_size_describes_the_hashed_bytes(tmp_path, monkeypatch):
     """A file that grows between the stat and the hash is reported with the
     length the digest covers; the stale stat size would fail every later

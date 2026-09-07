@@ -832,12 +832,9 @@ async def get_backup_status(
             "files_restore_incomplete": restore_incomplete,
         }
 
-    # The sandbox lists itself; known rows let it skip re-hashing.
     try:
         sandbox_meta = await FilePersistenceService.list_sandbox_files(
-            sandbox,
-            prior=FilePersistenceService.prior_from_meta(db_meta),
-            layout=owner_layout(workspace),
+            sandbox, layout=owner_layout(workspace)
         )
     except Exception:
         total_size = await get_workspace_total_size(workspace_id)

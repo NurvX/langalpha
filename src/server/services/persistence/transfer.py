@@ -36,6 +36,8 @@ from ptc_agent.core.sandbox._shared import (
 )
 from ptc_agent.core.sandbox.wsfiles_transfer_runtime import RESULT_MARKER
 from ptc_agent.core.sandbox.retry import RetryPolicy
+from src.server.database.blob_keys import INLINE_MAX_BYTES, RELAY_MAX_BYTES
+from src.utils.storage import get_blob_transfer_mode
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,9 @@ EXCLUDE_BASENAMES: frozenset[str] = frozenset({".DS_Store", "Thumbs.db"})
 
 SYNC_MARKER_NAME = ".file_sync_marker"
 
+# Bounded by the disk rather than the workspace's history: a scan hashes only
+# what changed, the sandbox hashes at ~1.5 GB/s, and a tier's writable layer
+# is the most it can ever hold, so even a cold tenth of that rate fits.
 SCAN_TIMEOUT_S = 300
 # Transfer timeouts scale with bytes at a floor bandwidth so a large workspace
 # on a slow link is not cut off, while an idle exchange still ends.
@@ -99,6 +104,35 @@ PULL_CONCURRENCY = 32
 PACK_CUTOFF = 256 * 1024
 PACK_MAX_BYTES = 32 * 1024 * 1024
 PACK_DIR = SandboxLayout.PACKS_DIR
+
+
+def transfer_mode(sandbox: Any) -> str:
+    # PTCSandbox holds the whole CoreConfig; the provider name is on its
+    # sandbox section. Anything else (a mock, a foreign runtime) reads as
+    # an unknown provider and relays.
+    config = getattr(sandbox, "config", None)
+    section = getattr(config, "sandbox", None)
+    provider = getattr(section, "provider", None)
+    if not isinstance(provider, str):
+        provider = None
+    return get_blob_transfer_mode(provider)
+
+
+def scan_cap_bytes(sandbox: Any, *, blobs_on: bool) -> int | None:
+    """Largest file this deployment could store, or ``None`` when nothing bounds it.
+
+    The limit belongs to the route the bytes take, not to the file: direct
+    streams sandbox-to-store and is bounded only by the workspace disk, while
+    the two paths that materialize the file in this process are bounded by
+    whatever holds it. A scan cap is therefore a statement about the current
+    deployment, and a file it rejects can never be stored *here*, which is
+    what separates it from a push that merely failed this pass.
+    """
+    if not blobs_on:
+        return INLINE_MAX_BYTES
+    if transfer_mode(sandbox) == "direct":
+        return None
+    return RELAY_MAX_BYTES
 
 
 class TransferRuntimeError(Exception):
@@ -140,7 +174,7 @@ def transfer_timeout_s(total_bytes: int) -> int:
     return int(min(max(scaled, TRANSFER_MIN_TIMEOUT_S), TRANSFER_MAX_TIMEOUT_S))
 
 
-def exclusion_spec(max_file_bytes: int) -> dict[str, Any]:
+def exclusion_spec(max_file_bytes: int | None) -> dict[str, Any]:
     return {
         "exclude_dir_names": sorted(EXCLUDE_DIR_NAMES),
         "exclude_rel_dirs": list(EXCLUDE_REL_DIRS),
@@ -272,10 +306,14 @@ async def scan_workspace(
     sandbox: Any,
     prior: dict[str, tuple[int, int, str]],
     *,
-    max_file_bytes: int,
+    max_file_bytes: int | None,
     layout: WorkspaceLayout,
+    hash_files: bool = True,
 ) -> ScanResult:
     """Walk and hash one project folder. ``prior`` lets unchanged files skip hashing.
+
+    ``hash_files=False`` lists without reading contents: a changed file then
+    carries no digest, which suits only a caller that never stores the entry.
 
     The walk root is the project's folder rather than the machine: several
     projects share the root, each syncs under its own advisory lock, and a walk
@@ -285,6 +323,8 @@ async def scan_workspace(
     spec = exclusion_spec(max_file_bytes)
     spec["root"] = layout.workspace
     spec["prior"] = {p: list(v) for p, v in prior.items()}
+    if not hash_files:
+        spec["hash"] = False
     out = await run_transfer_op(sandbox, "scan", spec, timeout_s=SCAN_TIMEOUT_S)
     # A runtime that predates the exact-name key reports the marker as a
     # file; a manifest row for it would restore a "populated" claim into a

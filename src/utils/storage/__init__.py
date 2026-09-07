@@ -84,10 +84,12 @@ def get_blob_transfer_mode(sandbox_provider: str | None) -> str:
             f"Unknown storage.blob_transfer {mode!r}; using auto"
         )
         mode = "auto"
-    if mode != "auto":
-        return mode
+    # Checked before an explicit mode: OSS cannot sign a SHA-256-bound upload,
+    # so "direct" there would size scans for a path every push falls off.
     if STORAGE_PROVIDER in ("none", "oss"):
         return "relay"
+    if mode != "auto":
+        return mode
     return "direct" if sandbox_provider == "daytona" else "relay"
 
 

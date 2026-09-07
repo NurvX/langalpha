@@ -30,7 +30,6 @@ from src.server.database.workspace_file_blobs import fetch_blob
 from src.server.services.persistence._rows import (
     _has_inline_bytes,
     _mode_int,
-    _transfer_mode,
 )
 from src.server.services.persistence.resolve import (
     FileBytesUnavailable,
@@ -38,6 +37,7 @@ from src.server.services.persistence.resolve import (
 )
 from src.server.services.persistence.transfer import (
     SYNC_MARKER_NAME,
+    transfer_mode,
     all_unreachable,
     pull_direct,
     transfer_timeout_s,
@@ -190,7 +190,7 @@ async def _restore_locked(
     # Object keys are scoped to the owner; read once for the whole restore.
     user_id = await workspace_owner(workspace_id, conn=conn)
 
-    mode = _transfer_mode(sandbox)
+    mode = transfer_mode(sandbox)
     structural: list[dict[str, Any]] = []
     direct: list[dict[str, Any]] = []
     packs: dict[str, list[dict[str, Any]]] = {}

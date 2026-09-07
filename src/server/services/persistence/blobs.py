@@ -13,7 +13,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from ptc_agent.core.paths import WorkspaceLayout
-from src.server.database.blob_keys import BLOB_CONTENT_TYPE, blob_key
+from src.server.database.blob_keys import (
+    BLOB_CONTENT_TYPE,
+    RELAY_MAX_BYTES,
+    blob_key,
+)
 from src.server.database.workspace_file_blobs import (
     BlobUploadError,
     register_blobs,
@@ -27,9 +31,9 @@ from src.server.services.persistence._rows import (
     _pack_row,
     _row_base,
     _stamp_matches,
-    _transfer_mode,
 )
 from src.server.services.persistence.transfer import (
+    transfer_mode,
     pack_direct,
     unlink_direct,
     ScanEntry,
@@ -93,7 +97,7 @@ async def _persist_blobs(
     wanted = {e.sha256 for e in entries if e.sha256}
     have = await registered_blobs(user_id, list(wanted))
     need = wanted - have
-    mode = _transfer_mode(sandbox)
+    mode = transfer_mode(sandbox)
     if unlink_after and have:
         # A chunk the registry already holds is never pushed, so nothing
         # downstream would remove it; it would sit until the age sweep.
@@ -282,6 +286,21 @@ async def _relay_blobs(
 
     async def _one(sha: str, entry: ScanEntry) -> None:
         async with sem:
+            if entry.size > RELAY_MAX_BYTES:
+                # The direct path caps nothing, so a file this large is normal
+                # until the store turns out to be unreachable and the push
+                # lands here instead. Downloading it would pull the whole
+                # thing into this process. Left unregistered, so the caller
+                # counts an error, keeps the previous row, and the next sync
+                # retries: unlike a scan-time rejection this is a passing
+                # condition, not a limit the file will always exceed.
+                logger.error(
+                    f"Cannot relay {entry.path} for workspace {workspace_id}: "
+                    f"{entry.size} bytes exceeds the {RELAY_MAX_BYTES} byte "
+                    f"relay limit, and object storage was unreachable from "
+                    f"the sandbox. Keeping the previous manifest row"
+                )
+                return
             try:
                 content = await sandbox.adownload_file_bytes(
                     _entry_abs_path(entry, layout)

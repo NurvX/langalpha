@@ -24,7 +24,6 @@ from src.server.database.workspace_file import (
     workspace_sync_lock,
 )
 from src.server.database.workspace import files_restore_incomplete, workspace_owner
-from src.server.database.blob_keys import MAX_BLOB_BYTES
 from src.server.services.persistence._rows import (
     _blob_row,
     _content_matches,
@@ -39,16 +38,12 @@ from src.server.services.persistence.blobs import (
     _persist_packed,
 )
 from src.server.services.persistence.transfer import (
+    scan_cap_bytes,
     PACK_CUTOFF,
     ScanEntry,
     scan_workspace,
 )
 from src.utils.storage import is_storage_enabled
-
-# Same number as the per-blob storage cap, and derived from it rather than
-# restated: a file this path accepts must be storable.
-MAX_FILE_SIZE = MAX_BLOB_BYTES
-MAX_WORKSPACE_SIZE = 1024 * 1024 * 1024  # 1GB total per workspace
 
 logger = logging.getLogger(__name__)
 
@@ -56,16 +51,17 @@ logger = logging.getLogger(__name__)
 async def list_sandbox_files(
     sandbox: Any,
     *,
-    prior: dict[str, tuple[int, int, str]] | None = None,
     layout: WorkspaceLayout,
 ) -> dict[str, dict[str, Any]]:
-    """Listing of regular files for the backup-status route.
+    """Listing of regular files for the backup-status route, by size and mtime.
 
-    ``prior`` (path -> (size, mtime_ns, sha256)) lets the scan reuse
-    hashes for unchanged files instead of re-reading the whole tree.
+    Nothing is hashed: the route compares against the manifest by size and
+    mtime, and it runs on every file-list refresh.
     """
+    # A listing reports what is in the sandbox; whether a file is storable
+    # is the sync's question, so nothing is withheld here.
     scan = await scan_workspace(
-        sandbox, prior or {}, max_file_bytes=MAX_FILE_SIZE, layout=layout
+        sandbox, {}, max_file_bytes=None, layout=layout, hash_files=False
     )
     work_dir = layout.workspace
     return {
@@ -74,7 +70,6 @@ async def list_sandbox_files(
             "file_name": os.path.basename(e.path),
             "file_size": e.size,
             "mtime": e.mtime_ns / 1e9,
-            "content_hash": e.sha256,
         }
         for e in scan.entries
         if e.kind == "file"
@@ -152,18 +147,28 @@ async def _sync_locked(
     # anyone after this instant are newer than what this pass saw.
     started_at = await manifest_clock(conn=conn)
     existing = await get_file_metadata_for_sync(workspace_id, conn=conn)
+    blobs_on = is_storage_enabled()
+    scan_cap = scan_cap_bytes(sandbox, blobs_on=blobs_on)
     scan = await scan_workspace(
         sandbox,
         prior_from_meta(existing),
-        max_file_bytes=MAX_FILE_SIZE,
+        max_file_bytes=scan_cap,
         layout=layout,
     )
+    # Paths this deployment can never store. They are not entries, so nothing
+    # downstream builds a row for them, but they are still present in the
+    # sandbox: the prune has to see them or it reads the gap as a deletion
+    # and removes the last good row the file had.
+    oversized_paths = {
+        str(item.get("path")) for item in scan.oversized if item.get("path")
+    }
     result["oversized"] = len(scan.oversized)
     for item in scan.oversized:
         logger.warning(
-            f"Skipping {item.get('path')} in workspace {workspace_id}: "
-            f"{item.get('size')} bytes exceeds the {MAX_FILE_SIZE} "
-            f"per-file limit"
+            f"Cannot store {item.get('path')} in workspace {workspace_id}: "
+            f"{item.get('size')} bytes exceeds this transfer path's "
+            f"{scan_cap} byte limit. Its existing manifest row is kept; the "
+            f"file itself is not backed up."
         )
     read_errors = 0
     for item in scan.errors:
@@ -240,7 +245,7 @@ async def _sync_locked(
             return result
         deleted = await delete_removed_files(
             workspace_id,
-            set(),
+            oversized_paths,
             walked_dir_name=layout.dir_name,
             untouched_since=started_at,
             conn=conn,
@@ -248,19 +253,11 @@ async def _sync_locked(
         result["deleted"] = deleted
         return result
 
-    total_size = sum(e.size for e in scan.entries if e.kind == "file")
-    if total_size > MAX_WORKSPACE_SIZE:
-        logger.warning(
-            f"Workspace {workspace_id} total size ({total_size}) exceeds limit "
-            f"({MAX_WORKSPACE_SIZE}). Syncing anyway but this may be slow."
-        )
-
-    active_paths: set[str] = set()
+    active_paths: set[str] = set(oversized_paths)
     rows: list[dict[str, Any]] = []
     stamp_updates: list[tuple[str, datetime, str | None]] = []
     needs_bytes: list[ScanEntry] = []
     pack_members: list[ScanEntry] = []
-    blobs_on = is_storage_enabled()
     # Object keys are scoped to the owner; read once for the whole pass.
     user_id = await workspace_owner(workspace_id, conn=conn) if blobs_on else None
 
@@ -278,7 +275,7 @@ async def _sync_locked(
     # create a directory where the symlink or file has to land. Keyed on
     # the scan alone: a manifest written before directories had rows of
     # their own holds the children with no parent row to compare against.
-    non_dir_paths: set[str] = set()
+    non_dir_paths: set[str] = set(oversized_paths)
 
     for entry in scan.entries:
         active_paths.add(entry.path)
