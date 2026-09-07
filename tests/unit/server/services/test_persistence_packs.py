@@ -18,7 +18,7 @@ import pytest
 from ptc_agent.core.paths import SandboxLayout
 from src.server.services.persistence import backup, blobs, resolve, restore
 from src.server.services.persistence.resolve import resolve_file_bytes
-from src.server.services.persistence.transfer import PACK_CUTOFF, ScanEntry, ScanResult
+from src.server.services.persistence.transfer import PACK_CUTOFF, PACK_MAX_BYTES, ScanEntry, ScanResult
 from src.server.database.workspace_file import micros_to_datetime
 
 
@@ -327,7 +327,7 @@ async def test_restore_pulls_a_pack_as_one_item_with_its_members(restore_db):
     packs = [i for i in items if i.get("kind") == "pack"]
     assert len(packs) == 1 and len(items) == 2
     pack = packs[0]
-    assert pack["sha256"] == CHUNK and pack["url"] == f"https://get/blobs/{USER}/{CHUNK}" and pack["size"] == 8
+    assert pack["sha256"] == CHUNK and pack["url"] == f"https://get/blobs/{USER}/{CHUNK}" and pack["size"] == PACK_MAX_BYTES
     by_path = {m["path"]: m for m in pack["members"]}
     assert by_path["a.txt"] == {"path": "a.txt", "offset": 0, "size": 3, "sha256": _sha(A), "mode": 0o600, "mtime_ns": (NS // 1000) * 1000}
     assert by_path["b.txt"]["offset"] == 3

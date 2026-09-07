@@ -622,6 +622,25 @@ def test_pull_ok_applies_mode_and_mtime(tmp_path, bucket):
 
 
 @pytest.mark.enable_socket
+def test_pull_onto_the_same_bytes_fetches_nothing(tmp_path, bucket):
+    data = os.urandom(64 * 1024)
+    _write(tmp_path, "kept.bin", data)
+    _write(tmp_path, "stale.bin", os.urandom(len(data)))
+    kept = _file_item(bucket, "kept.bin", data, mode=0o600, mtime_ns=1_600_000_000_000_000_000)
+    stale_bytes = os.urandom(len(data))
+    stale = _file_item(bucket, "stale.bin", stale_bytes)
+    out = rt.pull({"root": str(tmp_path), "timeout_s": 10, "items": [kept, stale]})
+    assert out["results"]["kept.bin"]["status"] == "ok"
+    assert out["results"]["stale.bin"]["status"] == "ok"
+    assert bucket.hits.get(f"/{_sha(data)}") is None
+    assert bucket.hits[f"/{_sha(stale_bytes)}"] == 1
+    st = os.stat(tmp_path / "kept.bin")
+    assert stat.S_IMODE(st.st_mode) == 0o600
+    assert st.st_mtime_ns == 1_600_000_000_000_000_000
+    assert (tmp_path / "stale.bin").read_bytes() == stale_bytes
+
+
+@pytest.mark.enable_socket
 def test_pull_mismatch_leaves_no_file(tmp_path, bucket):
     item = _file_item(bucket, "a.bin", b"served", sha256=_sha(b"expected"))
     out = rt.pull({"root": str(tmp_path), "items": [item]})
@@ -1204,6 +1223,19 @@ def test_pull_pack_member_mismatch_is_confined_to_that_member(tmp_path, bucket):
     out = _pull(tmp_path, item)
     assert {p: r["status"] for p, r in out["results"].items()} == {"a.txt": "ok", "b.txt": "mismatch"}
     assert (tmp_path / "a.txt").read_bytes() == b"aaa" and not (tmp_path / "b.txt").exists()
+
+
+@pytest.mark.enable_socket
+def test_pull_pack_restores_a_chunk_its_manifest_names_only_part_of(tmp_path, bucket):
+    """A member that changed while its chunk was repacked keeps its row on the
+    old chunk while its sibling moves on, and restore weighs the item by the
+    rows that remain. The chunk is still whole and its digest still matches."""
+    item = _pack_item(bucket, {"a.txt": b"aaa", "b.txt": b"bbb"})
+    item["members"] = item["members"][1:]
+    item["size"] = 3
+    out = _pull(tmp_path, item)
+    assert {p: r["status"] for p, r in out["results"].items()} == {"b.txt": "ok"}
+    assert (tmp_path / "b.txt").read_bytes() == b"bbb" and not (tmp_path / "a.txt").exists()
 
 
 @pytest.mark.enable_socket

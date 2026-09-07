@@ -101,6 +101,12 @@ TRANSFER_MAX_TIMEOUT_S = 7200
 # These are the measured knees; wider pools throttle, and the tail grows.
 PUSH_CONCURRENCY = 16
 PULL_CONCURRENCY = 32
+# What a pull may hold in temp files at once inside the sandbox. Every
+# download lands beside its target and is renamed in only once it verifies,
+# so a restore's transient disk cost is what is in flight, not what it
+# finally places. The count alone bounded that at concurrency x file size,
+# which no longer bounds anything now that the file size does not.
+PULL_MAX_INFLIGHT_BYTES = 512 * 1024 * 1024
 
 # Files at or below the cutoff travel as members of a pack: one object per
 # chunk of the workspace instead of one per file. The transfer cost is per
@@ -477,6 +483,7 @@ async def pull_direct(
     spec = {
         **_transfer_roots(layout),
         "concurrency": PULL_CONCURRENCY,
+        "max_inflight_bytes": PULL_MAX_INFLIGHT_BYTES,
         "timeout_s": TRANSFER_MIN_TIMEOUT_S,
         "items": items,
     }

@@ -656,3 +656,11 @@ async def test_a_file_too_large_for_one_put_is_withheld_when_the_store_will_not_
     assert [i["sha256"] for i in items] == ["d" * 64]
     assert uploads == {}
     assert withheld["c" * 64]["status"] == "failed"
+
+
+def test_a_row_of_unknown_size_is_pulled_as_unknown_not_as_empty():
+    """Zero would admit it free of the runtime's byte budget and then fail its
+    real bytes as a size mismatch; unknown is charged whole and checked by digest."""
+    row = {"file_path": "old.bin", "kind": "file", "blob_sha256": "e" * 64, "file_size": None}
+    assert restore._pull_item(row, url="https://store/x")["size"] is None
+    assert restore._pull_item({**row, "file_size": 0}, url=None)["size"] == 0

@@ -39,6 +39,7 @@ from src.server.services.persistence.transfer import (
     SYNC_MARKER_NAME,
     transfer_mode,
     INPROCESS_MAX_INFLIGHT_BYTES,
+    PACK_MAX_BYTES,
     ByteBudget,
     all_unreachable,
     pull_direct,
@@ -343,7 +344,10 @@ async def _signed_pull_items(
             {
                 "kind": "pack",
                 "sha256": pack_sha256,
-                "size": sum(int(m.get("file_size") or 0) for m in members),
+                # The whole chunk lands on disk, and the rows still naming it
+                # can be a sliver of it once siblings were repacked, so it is
+                # weighed at the most a chunk can hold.
+                "size": PACK_MAX_BYTES,
                 "url": url,
                 "members": [_pack_member_item(m) for m in members],
             }
@@ -361,7 +365,10 @@ def _pull_item(row: dict[str, Any], *, url: str | None) -> dict[str, Any]:
         "path": row["file_path"],
         "kind": row.get("kind", "file"),
         "sha256": row.get("blob_sha256"),
-        "size": int(row.get("file_size") or 0),
+        # Unknown stays unknown: the runtime then charges the item its whole
+        # byte budget, as the relay does, and verifies it by digest alone. A
+        # zero would admit it free and then reject its real bytes as a mismatch.
+        "size": None if row.get("file_size") is None else int(row["file_size"]),
         "url": url,
         "mode": _mode_int(row.get("permissions"), row.get("kind", "file")),
         "mtime_ns": mtime_ns,
@@ -374,7 +381,7 @@ def _pack_member_item(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "path": item["path"],
         "offset": int(row.get("pack_offset") or 0),
-        "size": item["size"],
+        "size": int(item["size"] or 0),
         "sha256": row.get("content_hash"),
         "mode": item["mode"],
         "mtime_ns": item["mtime_ns"],

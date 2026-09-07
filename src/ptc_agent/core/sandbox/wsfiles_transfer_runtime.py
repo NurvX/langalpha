@@ -13,6 +13,7 @@ failure; exit 2 is reserved for unreadable or invalid input.
 
 import base64
 import codecs
+import contextlib
 import hashlib
 import http.client
 import json
@@ -37,6 +38,12 @@ _CHUNK = 1024 * 1024
 # measured knees, so a runtime driven by hand behaves like the server's.
 _PUSH_CONCURRENCY = 16
 _PULL_CONCURRENCY = 32
+# What a pull may hold in temp files at once. Every download lands beside its
+# target and is renamed into place only once it verifies, so the transient
+# disk cost is what is in flight rather than what the restore finally places.
+# The thread pool bounds the file count; nothing bounded the bytes, and with
+# no per-file cap that product is unbounded on a disk of a few GiB.
+_PULL_MAX_INFLIGHT_BYTES = 512 * 1024 * 1024
 # SandboxLayout.PACKS_DIR, spelled out because this runtime ships into the
 # sandbox stdlib-only; a unit test holds the two equal.
 _PACK_DIR = "_internal/packs"
@@ -94,6 +101,44 @@ def _hash_file(path: str) -> tuple[str, bool, int]:
         except UnicodeDecodeError:
             decoder = None
     return h.hexdigest(), decoder is None, size
+
+
+class _ByteBudget:
+    """Weighted admission for work that materializes bytes on disk at once.
+
+    The sandbox-side twin of the server's ``ByteBudget``; this script ships
+    stdlib-only and cannot import it, so the shape is kept by hand.
+    """
+
+    def __init__(self, max_bytes: int) -> None:
+        self._max = max(1, int(max_bytes))
+        self._held = 0
+        self._bytes = 0
+        self._cv = threading.Condition()
+
+    @contextlib.contextmanager
+    def hold(self, size: Any) -> Any:
+        # An unknown weight is charged the whole budget rather than nothing:
+        # a bound that admits freely whenever it cannot measure an item is
+        # not a bound. A measured zero still costs zero.
+        want = self._max if size is None else min(max(int(size), 0), self._max)
+        with self._cv:
+            # Admit when there is room, or when nothing is running at all.
+            # The second clause is what lets an item bigger than the whole
+            # budget through instead of waiting for room that can never
+            # exist, and is why it then runs alone. Holders are counted
+            # rather than bytes, so a zero-weight item still occupies it.
+            while self._held and self._bytes + want > self._max:
+                self._cv.wait()
+            self._held += 1
+            self._bytes += want
+        try:
+            yield
+        finally:
+            with self._cv:
+                self._held -= 1
+                self._bytes -= want
+                self._cv.notify_all()
 
 
 def _resolve_under_root(root: str, rel: str) -> str | None:
@@ -848,56 +893,116 @@ def _yield_empty_directory(final: str) -> None:
         os.rmdir(final)
 
 
-def _pull_file(root: str, item: dict[str, Any], timeout_s: float) -> dict[str, Any]:
+def _verify(digest: str, n: int, item: dict[str, Any]) -> str | None:
+    """Describe how the bytes differ from the item's, or None when they are it.
+
+    Both halves are optional because a manifest may name neither, and one
+    spelling of the question keeps a path from checking less than its
+    neighbours without anyone being able to tell whether that was meant.
+    """
+    expected_sha, expected_size = item.get("sha256"), item.get("size")
+    if (expected_sha is not None and digest != expected_sha) or (
+        expected_size is not None and n != int(expected_size)
+    ):
+        return f"got sha256={digest} bytes={n}"
+    return None
+
+
+def _place(
+    tmp: str, final: str, item: dict[str, Any], http: int | None = None
+) -> dict[str, Any]:
+    """Rename verified bytes over ``final`` and stamp the item's mode and mtime.
+
+    The temp is removed when placement fails, so a failed item never leaves
+    bytes under the transient prefix for the next sweep to find.
+    """
+    try:
+        _yield_empty_directory(final)
+        os.replace(tmp, final)
+        mode = item.get("mode")
+        if mode is not None:
+            os.chmod(final, int(mode))
+        mtime_ns = item.get("mtime_ns")
+        if mtime_ns is not None:
+            os.utime(final, ns=(int(mtime_ns), int(mtime_ns)))
+    except OSError as exc:
+        _unlink_quiet(tmp)
+        return _result("failed", http, str(exc))
+    return _result("ok", http)
+
+
+def _holds_item_bytes(final: str, item: dict[str, Any]) -> bool:
+    """Whether ``final`` is already a regular file with exactly the item's bytes."""
+    expected_sha, expected_size = item.get("sha256"), item.get("size")
+    if expected_sha is None or expected_size is None:
+        return False
+    try:
+        st = os.stat(final, follow_symlinks=False)
+        if not stat.S_ISREG(st.st_mode) or st.st_size != int(expected_size):
+            return False
+        digest, _, n = _hash_file(final)
+    except OSError:
+        return False
+    return _verify(digest, n, item) is None
+
+
+def _place_in_situ(final: str, item: dict[str, Any]) -> dict[str, Any]:
+    """Stamp the item's mode and mtime on a file that already holds its bytes."""
+    try:
+        mode = item.get("mode")
+        if mode is not None:
+            os.chmod(final, int(mode))
+        mtime_ns = item.get("mtime_ns")
+        if mtime_ns is not None:
+            os.utime(final, ns=(int(mtime_ns), int(mtime_ns)))
+    except OSError as exc:
+        return _result("failed", error=str(exc))
+    return _result("ok")
+
+
+def _pull_file(
+    root: str, item: dict[str, Any], timeout_s: float, budget: _ByteBudget
+) -> dict[str, Any]:
     final = _resolve_under_root(root, item.get("path", ""))
     if final is None:
         return _result("failed", error="path escapes root")
     if _populated_directory(final):
         return _result("failed", error="target is a populated directory")
     url = item.get("url")
-    expected_sha = item.get("sha256")
     expected_size = item.get("size")
     if item.get("file"):
         return _place_staged(root, final, item)
     if not url:
         return _result("failed", error="missing url")
+    if _holds_item_bytes(final, item):
+        # Reading the file here costs a hash; fetching it again costs the
+        # same hash plus the transfer and a second copy on disk until the
+        # rename, which is what a restore onto a disk that kept its files
+        # would otherwise spend on every large one.
+        return _place_in_situ(final, item)
 
-    last: dict[str, Any] | None = None
-    for attempt in range(_MAX_ATTEMPTS):
-        if attempt:
-            time.sleep(_BACKOFF_S[min(attempt - 1, len(_BACKOFF_S) - 1)])
-        try:
-            tmp, digest, n, status = _download_to_temp(url, root, timeout_s)
-        except _HttpStatusError as exc:
-            last = _result("failed", exc.status, f"HTTP {exc.status}")
-            if exc.status < 500:
-                return last
-            continue
-        except Exception as exc:
-            if not _is_connection_error(exc):
-                return _result("failed", error=f"{type(exc).__name__}: {exc}")
-            last = _result("unreachable", error=f"{type(exc).__name__}: {exc}")
-            continue
+    # Held until the verified bytes are renamed into place: until then the
+    # temp and whatever it is replacing are both on disk. The temp goes at
+    # the workspace root, the one place the scan skips the prefix.
+    with budget.hold(expected_size):
+        last: dict[str, Any] | None = None
+        for attempt in range(_MAX_ATTEMPTS):
+            if attempt:
+                time.sleep(_BACKOFF_S[min(attempt - 1, len(_BACKOFF_S) - 1)])
+            try:
+                tmp, digest, n, status = _download_to_temp(url, root, timeout_s)
+            except Exception as exc:
+                last, retry = _classify(exc)
+                if not retry:
+                    return last
+                continue
 
-        if (expected_sha is not None and digest != expected_sha) or (
-            expected_size is not None and n != int(expected_size)
-        ):
-            _unlink_quiet(tmp)
-            return _result("mismatch", status, f"got sha256={digest} bytes={n}")
-        try:
-            _yield_empty_directory(final)
-            os.replace(tmp, final)
-            mode = item.get("mode")
-            if mode is not None:
-                os.chmod(final, int(mode))
-            mtime_ns = item.get("mtime_ns")
-            if mtime_ns is not None:
-                os.utime(final, ns=(int(mtime_ns), int(mtime_ns)))
-        except OSError as exc:
-            _unlink_quiet(tmp)
-            return _result("failed", status, str(exc))
-        return _result("ok", status)
-    return last or _result("failed", error="exhausted retries")
+            mismatch = _verify(digest, n, item)
+            if mismatch:
+                _unlink_quiet(tmp)
+                return _result("mismatch", status, mismatch)
+            return _place(tmp, final, item, status)
+        return last or _result("failed", error="exhausted retries")
 
 
 def _sweep_orphan_staging(root: str, items: list[dict[str, Any]]) -> None:
@@ -934,25 +1039,11 @@ def _place_staged(root: str, final: str, item: dict[str, Any]) -> dict[str, Any]
         digest, _, n = _hash_file(staged)
     except OSError as exc:
         return _result("failed", error=str(exc))
-    expected_sha, expected_size = item.get("sha256"), item.get("size")
-    if (expected_sha is not None and digest != expected_sha) or (
-        expected_size is not None and n != int(expected_size)
-    ):
+    mismatch = _verify(digest, n, item)
+    if mismatch:
         _unlink_quiet(staged)
-        return _result("mismatch", None, f"got sha256={digest} bytes={n}")
-    try:
-        _yield_empty_directory(final)
-        os.replace(staged, final)
-        mode = item.get("mode")
-        if mode is not None:
-            os.chmod(final, int(mode))
-        mtime_ns = item.get("mtime_ns")
-        if mtime_ns is not None:
-            os.utime(final, ns=(int(mtime_ns), int(mtime_ns)))
-    except OSError as exc:
-        _unlink_quiet(staged)
-        return _result("failed", error=str(exc))
-    return _result("ok")
+        return _result("mismatch", None, mismatch)
+    return _place(staged, final, item)
 
 
 def _reopen_dir(path: str) -> None:
@@ -1016,24 +1107,20 @@ def _extract_member(root: str, chunk: Any, member: dict[str, Any], http_status: 
     tmp = tempfile.NamedTemporaryFile(dir=root, prefix=_TEMP_PREFIX, delete=False)
     try:
         tmp.write(data)
-        tmp.close()
-        _yield_empty_directory(final)
-        os.replace(tmp.name, final)
-        mode = member.get("mode")
-        if mode is not None:
-            os.chmod(final, int(mode))
-        mtime_ns = member.get("mtime_ns")
-        if mtime_ns is not None:
-            os.utime(final, ns=(int(mtime_ns), int(mtime_ns)))
     except OSError as exc:
         tmp.close()
         _unlink_quiet(tmp.name)
         return _result("failed", http_status, str(exc))
-    return _result("ok", http_status)
+    tmp.close()
+    return _place(tmp.name, final, member, http_status)
 
 
 def _pull_pack(
-    root: str, pack_base: str, item: dict[str, Any], timeout_s: float
+    root: str,
+    pack_base: str,
+    item: dict[str, Any],
+    timeout_s: float,
+    budget: _ByteBudget,
 ) -> dict[str, dict[str, Any]]:
     """Download one pack chunk, then slice every member out of it.
 
@@ -1045,7 +1132,9 @@ def _pull_pack(
     """
     members = item.get("members") or []
     url = item.get("url")
-    expected_sha = item.get("sha256")
+    # A chunk is known by its digest alone. The item's size is only its weight
+    # in the budget, the most a chunk can hold, not its length.
+    chunk = {"sha256": item.get("sha256")}
 
     def fail_all(res: dict[str, Any]) -> dict[str, dict[str, Any]]:
         return {m.get("path", ""): dict(res) for m in members}
@@ -1059,9 +1148,10 @@ def _pull_pack(
             digest, _, n = _hash_file(tmp)
         except OSError as exc:
             return fail_all(_result("failed", error=str(exc)))
-        if expected_sha is not None and digest != expected_sha:
+        mismatch = _verify(digest, n, chunk)
+        if mismatch:
             _unlink_quiet(tmp)
-            return fail_all(_result("mismatch", None, f"got sha256={digest} bytes={n}"))
+            return fail_all(_result("mismatch", None, mismatch))
         return _extract_all(root, tmp, members, None)
     if not url:
         return fail_all(_result("failed", error="missing url"))
@@ -1073,32 +1163,31 @@ def _pull_pack(
         os.makedirs(scratch, exist_ok=True)
     except OSError as exc:
         return fail_all(_result("failed", error=str(exc)))
-    last: dict[str, Any] | None = None
-    tmp = None
-    status: int | None = None
-    for attempt in range(_MAX_ATTEMPTS):
-        if attempt:
-            time.sleep(_BACKOFF_S[min(attempt - 1, len(_BACKOFF_S) - 1)])
-        try:
-            tmp, digest, n, status = _download_to_temp(url, scratch, timeout_s)
-        except _HttpStatusError as exc:
-            last = _result("failed", exc.status, f"HTTP {exc.status}")
-            if exc.status < 500:
-                return fail_all(last)
-            continue
-        except Exception as exc:
-            if not _is_connection_error(exc):
-                return fail_all(_result("failed", error=f"{type(exc).__name__}: {exc}"))
-            last = _result("unreachable", error=f"{type(exc).__name__}: {exc}")
-            continue
-        if expected_sha is not None and digest != expected_sha:
-            _unlink_quiet(tmp)
-            return fail_all(_result("mismatch", status, f"got sha256={digest} bytes={n}"))
-        break
-    else:
-        return fail_all(last or _result("failed", error="exhausted retries"))
+    # Held until the chunk is sliced and unlinked: the whole chunk sits on
+    # disk for that span, on top of the members it is about to write.
+    with budget.hold(item.get("size")):
+        last: dict[str, Any] | None = None
+        tmp = None
+        status: int | None = None
+        for attempt in range(_MAX_ATTEMPTS):
+            if attempt:
+                time.sleep(_BACKOFF_S[min(attempt - 1, len(_BACKOFF_S) - 1)])
+            try:
+                tmp, digest, n, status = _download_to_temp(url, scratch, timeout_s)
+            except Exception as exc:
+                last, retry = _classify(exc)
+                if not retry:
+                    return fail_all(last)
+                continue
+            mismatch = _verify(digest, n, chunk)
+            if mismatch:
+                _unlink_quiet(tmp)
+                return fail_all(_result("mismatch", status, mismatch))
+            break
+        else:
+            return fail_all(last or _result("failed", error="exhausted retries"))
 
-    return _extract_all(root, tmp, members, status)
+        return _extract_all(root, tmp, members, status)
 
 
 def _extract_all(
@@ -1115,10 +1204,19 @@ def _extract_all(
 
 
 def _timed_pack(
-    root: str, pack_base: str, item: dict[str, Any], timeout_s: float
+    root: str,
+    pack_base: str,
+    item: dict[str, Any],
+    timeout_s: float,
+    budget: _ByteBudget,
 ) -> dict[str, dict[str, Any]]:
     t0 = time.monotonic()
-    out = _pull_pack(root, pack_base, item, timeout_s)
+    try:
+        out = _pull_pack(root, pack_base, item, timeout_s, budget)
+    except Exception as exc:
+        # Scoped to this pack's members rather than the whole op; see _timed.
+        res = _result("failed", error=f"{type(exc).__name__}: {exc}")
+        out = {m.get("path", ""): dict(res) for m in (item.get("members") or [])}
     ms = int((time.monotonic() - t0) * 1000)
     for res in out.values():
         res["ms"] = ms
@@ -1138,6 +1236,9 @@ def pull(spec: dict[str, Any]) -> dict[str, Any]:
     items = spec.get("items") or []
     concurrency = max(1, int(spec.get("concurrency") or _PULL_CONCURRENCY))
     defer_dir_modes = bool(spec.get("defer_dir_modes"))
+    budget = _ByteBudget(
+        int(spec.get("max_inflight_bytes") or _PULL_MAX_INFLIGHT_BYTES)
+    )
     results: dict[str, dict[str, Any]] = {}
     _sweep_orphan_staging(root, items)
 
@@ -1179,9 +1280,10 @@ def pull(spec: dict[str, Any]) -> dict[str, Any]:
     if files or packs:
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             pack_futures = [
-                pool.submit(_timed_pack, root, pack_base, p, timeout_s) for p in packs
+                pool.submit(_timed_pack, root, pack_base, p, timeout_s, budget)
+                for p in packs
             ]
-            for item, res in zip(files, pool.map(lambda i: _timed(_pull_file, root, i, timeout_s), files)):
+            for item, res in zip(files, pool.map(lambda i: _timed(_pull_file, root, i, timeout_s, budget), files)):
                 results[item["path"]] = res
             for fut in pack_futures:
                 results.update(fut.result())
