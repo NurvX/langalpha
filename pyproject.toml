@@ -16,7 +16,7 @@ requires-python = ">=3.13"
 dependencies = [
     "httpx[http2]>=0.28.1",
     # LangChain core packages (v1)
-    "langchain>=1.0.0",
+    "langchain[mcp]>=1.4.0",
     "langchain-core>=1.6.0",
     "langchain-openai>=1.6.0",
     # Declared directly because src/llms/vendor/langchain_zai and libs/ptc-cli
