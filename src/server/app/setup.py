@@ -619,6 +619,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start WorkspaceFileGCService: {e}")
 
+    # A multipart upload the process died holding is never aborted by us;
+    # only the bucket's own expiry rule reclaims its parts. The check only
+    # feeds a warning, so an unresponsive store must not hold up startup.
+    try:
+        from src.utils.storage import has_multipart_cleanup_rule
+
+        if (
+            await asyncio.wait_for(
+                asyncio.to_thread(has_multipart_cleanup_rule), timeout=5
+            )
+            is False
+        ):
+            logger.warning(
+                "Storage bucket has no rule expiring incomplete multipart uploads; "
+                "parts of an upload interrupted mid-transfer will be kept and billed. "
+                "Add an AbortIncompleteMultipartUpload lifecycle rule (e.g. 1 day)."
+            )
+    except Exception as e:
+        logger.info(f"Skipped the multipart cleanup rule check: {e!r}")
+
     # Confirm the runtime credit gate can reach its lease service, and on
     # terms its refresher can work with. Both failures it catches are silent
     # at request time.

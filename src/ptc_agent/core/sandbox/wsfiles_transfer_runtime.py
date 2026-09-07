@@ -40,7 +40,9 @@ _PULL_CONCURRENCY = 32
 # SandboxLayout.PACKS_DIR, spelled out because this runtime ships into the
 # sandbox stdlib-only; a unit test holds the two equal.
 _PACK_DIR = "_internal/packs"
-_PACK_STALE_S = 3600.0
+# Longer than the server lets a transfer take (TRANSFER_MAX_TIMEOUT_S), so a
+# sibling project's pack op never sweeps a chunk that is still being pushed.
+_PACK_STALE_S = 3 * 3600.0
 # Every transient file this runtime or the server writes into the workspace
 # sits at the root under this prefix, and the scan skips it there and only
 # there: a user's own ``sub/.wsfiles-notes`` is a file like any other.
@@ -511,7 +513,13 @@ def _drop_response_connection(resp: Any) -> None:
 
 def _timed(fn: Any, *args: Any) -> dict[str, Any]:
     t0 = time.monotonic()
-    res = fn(*args)
+    try:
+        res = fn(*args)
+    except Exception as exc:
+        # A malformed item is that item's failure. Letting it out of the pool
+        # would take down the whole op, discarding the results of every item
+        # beside it in the batch, including ones already stored.
+        res = _result("failed", error=f"{type(exc).__name__}: {exc}")
     res["ms"] = int((time.monotonic() - t0) * 1000)
     return res
 
@@ -521,29 +529,38 @@ def _timed(fn: Any, *args: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+class _FileShrank(Exception):
+    """The file ran out before the range being sent did."""
+
+
 class _BoundedBody:
-    """A file wrapper that stops at ``limit`` and remembers if more was there.
+    """A file wrapper that stops at ``limit``.
 
     ``http.client`` streams a file object to EOF whatever Content-Length it
-    was handed, so a file appended to during its own PUT puts the tail on the
-    wire behind the declared body: the store keeps the prefix, which still
+    was handed, so a file appended to during its own PUT would put the tail on
+    the wire behind the declared body: the store keeps the prefix, which still
     matches the signed digest, and the tail arrives at the head of the next
-    request on that pooled connection.
+    request on that pooled connection. Stopping is the whole job; whether the
+    file grew is read from its size afterwards, not from here.
     """
 
-    def __init__(self, fh: Any, limit: int) -> None:
+    def __init__(self, fh: Any, limit: int, digest: Any = None) -> None:
         self._fh = fh
         self._left = limit
-        self.overrun = False
+        self._digest = digest
 
     def read(self, size: int = -1) -> bytes:
         if self._left <= 0:
-            # One byte past the declared body decides; it is never sent.
-            self.overrun = self.overrun or bool(self._fh.read(1))
             return b""
         want = self._left if size is None or size < 0 else min(size, self._left)
         data = self._fh.read(want)
+        if want and not data:
+            # A short body leaves the store waiting for bytes that never come,
+            # so the attempt would end as a timeout and read as unreachable.
+            raise _FileShrank("file shrank during upload")
         self._left -= len(data)
+        if self._digest is not None:
+            self._digest.update(data)
         return data
 
 
@@ -555,6 +572,143 @@ def _size_of(path: str) -> int:
         return -1
 
 
+def _classify(exc: BaseException) -> tuple[dict[str, Any], bool]:
+    """Map a failed attempt to its result and whether another attempt can help.
+
+    Every store answer this runtime understands is named here, so a caller
+    only decides what to do with one it will not retry. A store rejecting the
+    bytes themselves is a PUT-only answer, classified by :func:`_put_range`,
+    which is the only caller that sends any.
+    """
+    if isinstance(exc, _HttpStatusError):
+        return _result("failed", exc.status, f"HTTP {exc.status}"), exc.status >= 500
+    if _is_connection_error(exc):
+        return _result("unreachable", error=f"{type(exc).__name__}: {exc}"), True
+    return _result("failed", error=f"{type(exc).__name__}: {exc}"), False
+
+
+def _put_range(
+    path: str,
+    url: str,
+    headers: dict[str, str],
+    offset: int,
+    size: int,
+    timeout_s: float,
+    digest: Any = None,
+) -> tuple[dict[str, Any], Any]:
+    """PUT ``size`` bytes of ``path`` from ``offset``, retrying transport failures.
+
+    An ``ok`` result carries the store's ETag. The whole file is one
+    range on the single-PUT path and one range per part on the multipart one,
+    so both share this loop and the classification of what a store's answer
+    means. ``digest``, when given, is the running hash of the bytes before
+    this range; the second value is it extended by exactly the bytes the
+    successful attempt sent, so a retried range is never counted twice.
+    """
+    headers = dict(headers)
+    headers["Content-Length"] = str(size)
+    last: dict[str, Any] | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        if attempt:
+            time.sleep(_BACKOFF_S[min(attempt - 1, len(_BACKOFF_S) - 1)])
+        sent = digest.copy() if digest is not None else None
+        try:
+            fh = open(path, "rb")
+        except FileNotFoundError:
+            return _result("changed", error="file removed during upload"), None
+        except OSError as exc:
+            return _result("failed", error=str(exc)), None
+        try:
+            with fh:
+                if offset:
+                    fh.seek(offset)
+                body = _BoundedBody(fh, size, sent)
+                resp = _request("PUT", url, timeout_s, body=body, headers=headers)
+                etag = resp.getheader("ETag") or ""
+                try:
+                    resp.read()
+                except BaseException:
+                    _drop_response_connection(resp)
+                    raise
+                res = _result("ok", resp.status)
+                res["etag"] = etag
+                return res, sent
+        except Exception as exc:
+            # The file, not the link: no retry sends bytes that are not there.
+            if isinstance(exc, _FileShrank):
+                return _result("changed", error=str(exc)), None
+            # The store checked the bytes against the digest the URL was
+            # signed for and they are not those bytes, so the file changed
+            # under us. No retry sends different bytes.
+            if isinstance(exc, _HttpStatusError):
+                if exc.status == 400 and "BadDigest" in exc.body:
+                    return _result("changed", exc.status, "BadDigest"), None
+                if exc.status == 403 and "SignatureDoesNotMatch" in exc.body:
+                    return _result("changed", exc.status, "SignatureDoesNotMatch"), None
+            last, retry = _classify(exc)
+            if not retry:
+                return last, None
+    return last or _result("failed", error="exhausted retries"), None
+
+
+def _push_parts(
+    final: str,
+    parts: list[dict[str, Any]],
+    expected_size: int,
+    timeout_s: float,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Upload one file as a sequence of presigned parts; ``ok`` carries the ETags.
+
+    A part is the unit that survives a failure: only the part is retried, not
+    the file, which is the whole reason a large file goes this way. They run
+    in order on this thread because the parallelism that pays here is across
+    files, and the server assembles or discards the upload from the result.
+
+    With ``expected_sha256`` the bytes are hashed as they are sent. A part is
+    signed for its length only, so the store cannot tell a file rewritten in
+    place at the same size from the one that was scanned; the hash of what
+    actually went out can, and the server completes the upload only when it
+    reports ``sent_sha256`` equal to the digest the object is named by.
+    """
+    etags: list[list[Any]] = []
+    http: int | None = None
+    digest = hashlib.sha256() if expected_sha256 else None
+    parts = sorted(parts, key=lambda p: int(p.get("offset") or 0))
+    for part in parts:
+        # The file has to be the same file across every part, and only the
+        # sandbox can see that it is not. Checking between parts turns a file
+        # rewritten mid-upload into a retry next sync rather than a transport
+        # error on a short read.
+        if _size_of(final) != expected_size:
+            return _result("changed", http, "size changed during upload")
+        res, digest = _put_range(
+            final,
+            part["url"],
+            part.get("headers") or {},
+            int(part.get("offset") or 0),
+            int(part["size"]),
+            timeout_s,
+            digest,
+        )
+        if res.get("status") != "ok":
+            return res
+        http = res.get("http")
+        etags.append([int(part["part_number"]), res.get("etag") or ""])
+    # The store verifies the bytes each part was framed to read, so a file
+    # that grew during its own upload is stored, and matches, as the prefix
+    # it was scanned as. Only the sandbox can see it is no longer those bytes.
+    if _size_of(final) != expected_size:
+        return _result("changed", http, "size changed during upload")
+    if digest is not None and digest.hexdigest() != expected_sha256:
+        return _result("changed", http, "content changed during upload")
+    out = _result("ok", http)
+    out["etags"] = etags
+    if digest is not None:
+        out["sent_sha256"] = digest.hexdigest()
+    return out
+
+
 def _push_one(
     root: str, pack_base: str, item: dict[str, Any], timeout_s: float
 ) -> dict[str, Any]:
@@ -563,48 +717,45 @@ def _push_one(
         return _result("failed", error="path escapes root")
     expected_size = int(item["size"])
     try:
+        # Not the same check as the ones inside the upload: a file that is
+        # gone before the first byte moves is this item's error, and it says
+        # so with the OS's reason rather than as a size that changed.
         if os.stat(final).st_size != expected_size:
             return _result("changed", error="size changed before upload")
     except OSError as exc:
         return _result("failed", error=str(exc))
 
-    headers = dict(item.get("headers") or {})
-    headers["Content-Length"] = str(expected_size)
-    last: dict[str, Any] | None = None
-    for attempt in range(_MAX_ATTEMPTS):
-        if attempt:
-            time.sleep(_BACKOFF_S[min(attempt - 1, len(_BACKOFF_S) - 1)])
-        try:
-            with open(final, "rb") as fh:
-                body = _BoundedBody(fh, expected_size)
-                resp = _request("PUT", item["url"], timeout_s, body=body, headers=headers)
-                try:
-                    resp.read()
-                except BaseException:
-                    _drop_response_connection(resp)
-                    raise
-                # The store verifies the bytes it was framed to read, so a
-                # file that grew during its own PUT is stored, and matches,
-                # as the prefix it was scanned as. Only the sandbox can see
-                # that the file is no longer those bytes.
-                if body.overrun or _size_of(final) != expected_size:
-                    return _result(
-                        "changed", resp.status, "size changed during upload"
-                    )
-                return _result("ok", resp.status)
-        except _HttpStatusError as exc:
-            if exc.status == 400 and "BadDigest" in exc.body:
-                return _result("changed", exc.status, "BadDigest")
-            if exc.status == 403 and "SignatureDoesNotMatch" in exc.body:
-                return _result("changed", exc.status, "SignatureDoesNotMatch")
-            last = _result("failed", exc.status, f"HTTP {exc.status}")
-            if exc.status < 500:
-                return last
-        except Exception as exc:
-            if not _is_connection_error(exc):
-                return _result("failed", error=f"{type(exc).__name__}: {exc}")
-            last = _result("unreachable", error=f"{type(exc).__name__}: {exc}")
-    return last or _result("failed", error="exhausted retries")
+    # A large blob is signed as parts as well as whole, so an item may carry
+    # both; parts win, because a failure then costs one part rather than the
+    # file. An item with no parts is not necessarily small, only unsplit: a
+    # single PUT is the same upload with one part and nothing to assemble.
+    signed_parts = item.get("parts")
+    res = _push_parts(
+        final,
+        signed_parts
+        or [
+            {
+                "part_number": 1,
+                "offset": 0,
+                "size": expected_size,
+                "url": item["url"],
+                "headers": item.get("headers"),
+            }
+        ],
+        expected_size,
+        timeout_s,
+        # Only parts need it: a single PUT is signed for its digest and the
+        # store rejects any other bytes itself.
+        item.get("sha256") if signed_parts else None,
+    )
+    if not signed_parts:
+        res.pop("etags", None)
+    elif res.get("status") == "ok" and not all(etag for _, etag in res["etags"]):
+        # The server completes an upload by naming every part's ETag, so a
+        # store that answered without one has stored a part the upload can
+        # never name; only a whole PUT can be assembled without them.
+        return _result("failed", res.get("http"), "part stored without an ETag")
+    return res
 
 
 def push(spec: dict[str, Any]) -> dict[str, Any]:
@@ -619,14 +770,21 @@ def push(spec: dict[str, Any]) -> dict[str, Any]:
             lambda i: _timed(_push_one, root, pack_base, i, timeout_s), items
         )
         for item, res in zip(items, mapped):
-            results[item["sha256"]] = res
+            results[str(item.get("sha256") or item.get("path"))] = res
             # A pack chunk is a one-shot artifact, but only the store having it
             # makes the local copy expendable: an unreachable store sends the
             # server down the relay path, which reads the chunk back out of the
             # sandbox. What neither path took is left where it is, and the next
             # pack op's stale sweep removes it from a directory the scan
-            # excludes, so it never becomes a user's file.
-            if item.get("unlink") and res.get("status") == "ok":
+            # excludes, so it never becomes a user's file. Only a whole PUT is
+            # stored on ``ok``; parts still have to be assembled, and no chunk
+            # is large enough to be sent as any today (PACK_MAX_BYTES), so the
+            # parts clause guards a future cap rather than a current path.
+            if (
+                item.get("unlink")
+                and res.get("status") == "ok"
+                and not item.get("parts")
+            ):
                 final = _resolve_item(root, pack_base, item.get("path", ""))
                 if final:
                     _unlink_quiet(final)

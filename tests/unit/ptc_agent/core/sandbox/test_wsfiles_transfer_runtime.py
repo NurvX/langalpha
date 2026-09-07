@@ -466,18 +466,57 @@ def test_push_size_changed_before_upload_skips_http(tmp_path):
     assert out["results"][_sha(data)]["status"] == "changed"
 
 
-def test_bounded_body_stops_at_the_declared_length_and_notices_the_rest(tmp_path):
+
+def _parts(bucket, data: bytes, part_size: int):
+    return [
+        {"part_number": i + 1, "offset": off, "size": min(part_size, len(data) - off),
+         "url": f"{bucket.base}/part-{i + 1}"}
+        for i, off in enumerate(range(0, len(data), part_size))
+    ]
+
+
+@pytest.mark.enable_socket
+def test_multipart_digest_counts_a_retried_part_once(tmp_path, bucket, monkeypatch):
+    """The server assembles only when ``sent_sha256`` names the object's digest,
+    so a part retried after sending half its bytes must not hash them twice."""
+    data = os.urandom(300_000)
+    final = _write(tmp_path, "big.bin", data)
+    real_request = rt._request
+    failed = []
+
+    def _drop_part_two_once(method, url, timeout_s, body=None, headers=None):
+        if url.endswith("/part-2") and not failed:
+            failed.append(True)
+            body.read(4096)
+            raise ConnectionResetError("dropped mid-part")
+        return real_request(method, url, timeout_s, body=body, headers=headers)
+
+    monkeypatch.setattr(rt, "_request", _drop_part_two_once)
+    out = rt._push_parts(final, _parts(bucket, data, 100_000), len(data), 10, _sha(data))
+    assert out["status"] == "ok" and failed
+    assert out["sent_sha256"] == _sha(data)
+    assert b"".join(bucket.objects[f"/part-{n}"] for n in (1, 2, 3)) == data
+
+
+@pytest.mark.enable_socket
+def test_multipart_same_size_rewrite_is_changed(tmp_path, bucket):
+    """Parts are signed for length only; the store would take these bytes."""
+    scanned = os.urandom(300_000)
+    final = _write(tmp_path, "big.bin", os.urandom(len(scanned)))
+    out = rt._push_parts(final, _parts(bucket, scanned, 100_000), len(scanned), 10, _sha(scanned))
+    assert out["status"] == "changed"
+    assert "sent_sha256" not in out
+
+def test_bounded_body_stops_at_the_declared_length(tmp_path):
     """http.client streams a file to EOF whatever Content-Length says."""
     p = tmp_path / "a.bin"
     p.write_bytes(b"0123456789")
     with open(p, "rb") as fh:
         body = rt._BoundedBody(fh, 4)
         assert b"".join(iter(lambda: body.read(3), b"")) == b"0123"
-        assert body.overrun is True
     with open(p, "rb") as fh:
         body = rt._BoundedBody(fh, 10)
         assert b"".join(iter(lambda: body.read(4), b"")) == b"0123456789"
-        assert body.overrun is False
 
 
 @pytest.mark.enable_socket
@@ -506,6 +545,27 @@ def test_a_file_that_grows_during_its_own_put_is_reported_changed(tmp_path, buck
     # the pooled connection is not left holding bytes the next request would
     # read as its own status line.
     assert bucket.objects[f"/{_sha(data)}"] == data
+
+
+@pytest.mark.enable_socket
+def test_a_file_that_shrinks_during_its_own_put_is_changed_not_unreachable(tmp_path, bucket, monkeypatch):
+    """A short body would leave the store waiting out the timeout, read as an
+    unreachable link, and send the next sync down the relay for nothing."""
+    data = b"scanned bytes\n" * 100
+    _write(tmp_path, "a.bin", data)
+    item = _push_item(bucket, "a.bin", data)
+    real_request = rt._request
+
+    def _truncate_then_request(*args, **kwargs):
+        with open(tmp_path / "a.bin", "r+b") as f:
+            f.truncate(10)
+        return real_request(*args, **kwargs)
+
+    monkeypatch.setattr(rt, "_request", _truncate_then_request)
+    out = rt.push({"root": str(tmp_path), "timeout_s": 10, "items": [item]})
+    res = out["results"][_sha(data)]
+    assert res["status"] == "changed" and "shrank" in res["error"]
+    assert f"/{_sha(data)}" not in bucket.objects
 
 
 @pytest.mark.enable_socket

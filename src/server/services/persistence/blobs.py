@@ -36,6 +36,8 @@ from src.server.services.persistence._rows import (
 from src.server.services.persistence.transfer import (
     transfer_mode,
     INPROCESS_MAX_INFLIGHT_BYTES,
+    MULTIPART_THRESHOLD_BYTES,
+    SINGLE_PUT_MAX_BYTES,
     ByteBudget,
     pack_direct,
     unlink_direct,
@@ -44,7 +46,14 @@ from src.server.services.persistence.transfer import (
     push_direct,
     transfer_timeout_s,
 )
-from src.utils.storage import get_signed_upload_url
+from src.utils.storage import (
+    abort_multipart_upload,
+    complete_multipart_upload,
+    create_signed_multipart_upload,
+    delete_object,
+    get_signed_upload_url,
+    sha256_object,
+)
 
 # Files moved through this process (inline rows, or blobs when direct
 # transfer is unavailable). The count keeps the gather from fanning out
@@ -166,32 +175,37 @@ async def _persist_blobs(
     return rows, errors
 
 
-async def _push_direct(
+async def _sign_push_items(
     user_id: str,
     workspace_id: str,
-    sandbox: Any,
-    entries: list[ScanEntry],
-    need: set[str],
+    representative: dict[str, ScanEntry],
     *,
-    unlink_after: bool = False,
-    layout: WorkspaceLayout,
-) -> DirectPush | None:
-    """Presign one PUT per missing digest and let the sandbox upload.
+    expires: int,
+    unlink_after: bool,
+) -> (
+    tuple[
+        list[dict[str, Any]], dict[str, tuple[str, int]], dict[str, dict[str, Any]]
+    ]
+    | None
+):
+    """Presign an upload per digest; returns the runtime's items, open uploads,
+    and the results of digests no upload could carry.
 
-    ``None`` means the direct path was not usable at all (no presigning, or
-    the store unreachable from the sandbox); otherwise the digests the store
-    never answered for come back in ``unreachable``. Either way the caller
-    owns the fallback.
+    Each open upload maps its digest to (upload id, part count).
+
+    ``None`` means the store cannot presign at all, so nothing was opened and
+    the caller relays. Signing is local work on a thread each; a large first
+    backup has thousands of digests, and one at a time serializes what has no
+    order.
+
+    A digest large enough that one PUT is a long time to hold a socket open
+    gets a multipart upload *as well as* its single PUT: a failed part costs
+    that part rather than the whole file. Nothing resumes across syncs; the
+    upload id lives for this call only. The two signatures are alternatives,
+    not stages, because a sandbox running a transfer runtime that predates
+    parts ignores them and sends the whole file, and the result says which
+    happened.
     """
-    representative: dict[str, ScanEntry] = {}
-    for entry in entries:
-        if entry.sha256 in need and entry.sha256 not in representative:
-            representative[entry.sha256] = entry
-    total = sum(e.size for e in representative.values())
-    expires = transfer_timeout_s(total) + 60
-
-    # Signing is local work on a thread each; a large first backup has
-    # thousands of digests, and one at a time serializes what has no order.
     signatures = await asyncio.gather(
         *(
             asyncio.to_thread(
@@ -205,28 +219,271 @@ async def _push_direct(
             for sha, entry in representative.items()
         )
     )
-    items: list[dict[str, Any]] = []
-    for (sha, entry), signed in zip(representative.items(), signatures):
-        if signed is None:
-            logger.info(
-                f"Store cannot presign uploads; relaying {len(need)} "
-                f"blob(s) for workspace {workspace_id}"
-            )
-            return None
-        url, headers = signed
-        items.append(
-            {
-                "path": entry.path,
-                "sha256": sha,
-                "size": entry.size,
-                "url": url,
-                "headers": headers,
-                "unlink": unlink_after,
-            }
+    if any(s is None for s in signatures):
+        logger.info(
+            f"Store cannot presign uploads; relaying "
+            f"{len(representative)} blob(s) for workspace {workspace_id}"
         )
+        return None
 
+    large = {
+        sha: entry
+        for sha, entry in representative.items()
+        if entry.size >= MULTIPART_THRESHOLD_BYTES
+    }
+    creating = asyncio.gather(
+        *(
+            asyncio.to_thread(
+                create_signed_multipart_upload,
+                blob_key(user_id, sha),
+                content_length=entry.size,
+                content_type=BLOB_CONTENT_TYPE,
+                expires_in=expires,
+            )
+            for sha, entry in large.items()
+        ),
+        return_exceptions=True,
+    )
+    try:
+        created = await asyncio.shield(creating)
+    except asyncio.CancelledError:
+        # The store calls run on in their threads and open uploads nobody
+        # would hold the ids of, so they are aborted once they return.
+        creating.add_done_callback(
+            lambda done: _abort_orphans(user_id, large, done)
+        )
+        raise
+    uploads, parts, failure = _opened_uploads(large, created)
+    if failure is not None:
+        # The caller never sees uploads from a call that raised, so the ones
+        # that did open are settled here rather than left to the lifecycle rule.
+        await _settle_multipart(user_id, uploads, {})
+        raise failure
+
+    items: list[dict[str, Any]] = []
+    withheld: dict[str, dict[str, Any]] = {}
+    for (sha, entry), signed in zip(representative.items(), signatures):
+        if sha not in parts and entry.size > SINGLE_PUT_MAX_BYTES:
+            # The store refuses a single PUT this size after the whole body
+            # has crossed the link, so sending one spends the transfer to
+            # learn what the size already says. Next sync asks for parts again.
+            withheld[sha] = {
+                "status": "failed",
+                "error": "too large for one upload and the store would not split it",
+            }
+            continue
+        url, headers = signed
+        item: dict[str, Any] = {
+            "path": entry.path,
+            "sha256": sha,
+            "size": entry.size,
+            "url": url,
+            "headers": headers,
+            "unlink": unlink_after,
+        }
+        if sha in parts:
+            item["parts"] = parts[sha]
+        items.append(item)
     items.sort(key=lambda i: int(i.get("size") or 0), reverse=True)
-    results = await push_direct(sandbox, items, layout=layout)
+    return items, uploads, withheld
+
+
+def _opened_uploads(
+    large: dict[str, ScanEntry], created: list[Any]
+) -> tuple[
+    dict[str, tuple[str, int]], dict[str, list[dict[str, Any]]], BaseException | None
+]:
+    uploads: dict[str, tuple[str, int]] = {}
+    parts: dict[str, list[dict[str, Any]]] = {}
+    failure: BaseException | None = None
+    for sha, opened in zip(large, created):
+        if isinstance(opened, BaseException):
+            failure = failure or opened
+        # A store that will not open a multipart upload still takes the
+        # single PUT this digest is already signed for.
+        elif opened is not None:
+            upload_id, parts[sha] = opened
+            uploads[sha] = (upload_id, len(parts[sha]))
+    return uploads, parts, failure
+
+
+_orphan_aborts: set[asyncio.Task[Any]] = set()
+
+
+def _abort_orphans(
+    user_id: str, large: dict[str, ScanEntry], done: asyncio.Future[list[Any]]
+) -> None:
+    if done.cancelled():
+        return
+    uploads, _, _ = _opened_uploads(large, done.result())
+    if uploads:
+        task = asyncio.get_running_loop().create_task(
+            _settle_multipart(user_id, uploads, {})
+        )
+        _orphan_aborts.add(task)
+        task.add_done_callback(_orphan_aborts.discard)
+
+
+def _assembly_refusal(
+    sha: str, part_count: int, result: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Why a multipart result must not be assembled, as the status to record.
+
+    Parts are signed for their length only, so the store would assemble
+    whatever same-sized bytes arrived under the digest's key. The runtime's
+    hash of what it sent catches a file that changed mid-upload before any
+    assembly, and a result without one (a runtime from before the hash) is
+    not trusted. It is the runtime's word, though, so the assembled object is
+    still read back before it counts as stored.
+    """
+    etags = result.get("etags") or []
+    if sorted(int(n) for n, _ in etags) != list(range(1, part_count + 1)):
+        return {**result, "status": "failed", "error": "multipart upload is missing parts"}
+    sent = result.get("sent_sha256")
+    if sent != sha:
+        return {
+            **result,
+            "status": "changed" if sent else "failed",
+            "error": "sent bytes do not match the digest"
+            if sent
+            else "runtime reported no digest for its parts",
+        }
+    return None
+
+
+async def _settle_multipart(
+    user_id: str,
+    uploads: dict[str, tuple[str, int]],
+    results: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Assemble the uploads whose parts landed as the digest's bytes, discard the rest.
+
+    Returns ``results`` with any digest whose object did not make it into the
+    store no longer saying ``ok``, so one status stays the whole truth about
+    a digest. An assembled object counts only once the server has hashed it
+    back: a digest names its bytes for every later sync and download link,
+    and the code that uploaded the parts runs as the workspace's user. Aborting is best effort and this reports when it fails: an
+    upload left open holds its parts as storage nothing lists and no registry
+    row references, which only the bucket's lifecycle rule reaps.
+    """
+    settled = dict(results)
+
+    async def _one(sha: str, upload: tuple[str, int]) -> None:
+        upload_id, part_count = upload
+        key = blob_key(user_id, sha)
+        result = settled.get(sha) or {}
+        etags = result.get("etags") if result.get("status") == "ok" else None
+        refusal = _assembly_refusal(sha, part_count, result) if etags else None
+        if refusal is not None:
+            settled[sha] = refusal
+            etags = None
+        if etags:
+            done = await asyncio.to_thread(
+                complete_multipart_upload,
+                key,
+                upload_id,
+                [(int(number), str(etag)) for number, etag in etags],
+            )
+            if done:
+                held = await asyncio.to_thread(sha256_object, key, transfer_timeout_s)
+                if held == sha:
+                    return
+                if held is not None:
+                    # Wrong bytes under a digest's name are worse than none:
+                    # a missing object is re-sent, a wrong one is trusted.
+                    logger.error(
+                        f"Assembled {key} hashes to {held}, not its digest; deleting it"
+                    )
+                    await asyncio.to_thread(delete_object, key)
+                # Unreadable is left unregistered, so the next sync sends it again.
+                settled[sha] = {
+                    **result,
+                    "status": "failed",
+                    "error": "assembled object does not match its digest"
+                    if held is not None
+                    else "assembled object could not be read back",
+                }
+                return
+            settled[sha] = {
+                **result,
+                "status": "failed",
+                "error": "multipart upload could not be assembled",
+            }
+        if not await asyncio.to_thread(abort_multipart_upload, key, upload_id):
+            logger.error(
+                f"Leaked multipart upload {upload_id} on {key}: its parts are "
+                f"stored and billed, and no listing shows them. The bucket's "
+                f"AbortIncompleteMultipartUpload rule is what will reap it"
+            )
+
+    # An upload whose sibling raised still has to be settled, so a failure
+    # here is reported rather than allowed to cancel the rest.
+    outcomes = await asyncio.gather(
+        *(_one(sha, uid) for sha, uid in uploads.items()),
+        return_exceptions=True,
+    )
+    for (sha, (upload_id, _)), outcome in zip(uploads.items(), outcomes):
+        if isinstance(outcome, BaseException):
+            logger.error(
+                f"Leaked multipart upload {upload_id} on "
+                f"{blob_key(user_id, sha)}: settling it raised {outcome!r}"
+            )
+            settled[sha] = {
+                **(settled.get(sha) or {}),
+                "status": "failed",
+                "error": f"multipart settle failed: {outcome!r}",
+            }
+    return settled
+
+
+async def _push_direct(
+    user_id: str,
+    workspace_id: str,
+    sandbox: Any,
+    entries: list[ScanEntry],
+    need: set[str],
+    *,
+    unlink_after: bool = False,
+    layout: WorkspaceLayout,
+) -> DirectPush | None:
+    """Presign an upload per missing digest and let the sandbox move the bytes.
+
+    ``None`` means the direct path was not usable at all (no presigning, or
+    the store unreachable from the sandbox); otherwise the digests the store
+    never answered for come back in ``unreachable``. Either way the caller
+    owns the fallback.
+    """
+    representative: dict[str, ScanEntry] = {}
+    for entry in entries:
+        if entry.sha256 in need and entry.sha256 not in representative:
+            representative[entry.sha256] = entry
+    total = sum(e.size for e in representative.values())
+    expires = transfer_timeout_s(total) + 60
+
+    # Every upload opened by the signing has to be settled whether the push
+    # returned, raised, or was cancelled, so the settle is the exit path
+    # rather than a step on it, and the signing sits inside it too: a
+    # cancellation landing between the two would otherwise strand them.
+    uploads: dict[str, tuple[str, int]] = {}
+    results: dict[str, dict[str, Any]] = {}
+    try:
+        signed = await _sign_push_items(
+            user_id,
+            workspace_id,
+            representative,
+            expires=expires,
+            unlink_after=unlink_after,
+        )
+        if signed is None:
+            return None
+        items, uploads, withheld = signed
+        results = {
+            **withheld,
+            **(await push_direct(sandbox, items, layout=layout) if items else {}),
+        }
+    finally:
+        results = await _settle_multipart(user_id, uploads, results)
+
     if all_unreachable(results):
         logger.warning(
             f"Sandbox for workspace {workspace_id} could not reach object "
@@ -245,7 +502,6 @@ async def _push_direct(
             f"workspace {workspace_id} could not reach object storage; "
             f"relaying those through the server"
         )
-
     ok = [
         (sha, representative[sha].size)
         for sha, r in results.items()

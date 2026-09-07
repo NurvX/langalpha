@@ -86,10 +86,14 @@ SYNC_MARKER_NAME = ".file_sync_marker"
 # is the most it can ever hold, so even a cold tenth of that rate fits.
 SCAN_TIMEOUT_S = 300
 # Transfer timeouts scale with bytes at a floor bandwidth so a large workspace
-# on a slow link is not cut off, while an idle exchange still ends.
+# on a slow link is not cut off, while an idle exchange still ends. The floor
+# is deliberately pessimistic against a measured ~210 ms per PUT, so the
+# ceiling is what an exchange this side has stopped believing in rather than
+# what a legitimate transfer could need: at the floor it covers 7 GiB, and at
+# the bandwidth actually seen, far more than any workspace holds.
 TRANSFER_FLOOR_BYTES_PER_S = 1024 * 1024
 TRANSFER_MIN_TIMEOUT_S = 300
-TRANSFER_MAX_TIMEOUT_S = 3600
+TRANSFER_MAX_TIMEOUT_S = 7200
 
 # The sandbox runs on a one-CPU quota, and the runtime's CPU per item grows
 # with its thread count (a 300-file pull: 1.0 s of CPU at 16 threads, 3.5 s
@@ -105,6 +109,10 @@ PULL_CONCURRENCY = 32
 # what a restore holds in flight; chunks are written under PACK_DIR, which the
 # scan already excludes, and are removed once pushed.
 PACK_CUTOFF = 256 * 1024
+#: Must stay under MULTIPART_THRESHOLD_BYTES below. A chunk is unlinked in the
+#: sandbox the moment the store has it, and only a whole PUT is stored that
+#: early: raising this past the threshold would drop the sandbox's only copy
+#: of a chunk whose parts the server has yet to assemble.
 PACK_MAX_BYTES = 32 * 1024 * 1024
 PACK_DIR = SandboxLayout.PACKS_DIR
 
@@ -114,6 +122,16 @@ PACK_DIR = SandboxLayout.PACKS_DIR
 # 256 MiB apiece. Each backup or restore takes its own budget, so a worker
 # running several at once may hold a multiple of this.
 INPROCESS_MAX_INFLIGHT_BYTES = 512 * 1024 * 1024
+
+# A file at or above this is uploaded in parts rather than as one PUT.
+# Nothing here is about what the store can hold in one object: a single PUT
+# has no resume, so an interrupted one starts again from zero, and the larger
+# the file the more likely it is interrupted. The store picks the part size
+# against its own limits; this is only the point where splitting starts to
+# pay for itself.
+MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024
+# The S3 API's ceiling on one PUT; above it only a multipart upload stores.
+SINGLE_PUT_MAX_BYTES = 5 * 1024**3
 
 
 def transfer_mode(sandbox: Any) -> str:

@@ -576,3 +576,83 @@ async def test_transfer_op_without_a_result_line_is_a_runtime_error():
     sandbox = _exec_sandbox(("Traceback: boom\n", 1))
     with pytest.raises(transfer.TransferRuntimeError):
         await transfer.run_transfer_op(sandbox, "scan", {"root": "/home/workspace"}, timeout_s=30)
+
+
+# --- multipart assembly -------------------------------------------------------
+
+_SHA = "a" * 64
+
+
+def _multipart_result(sent_sha256, parts=(1, 2, 3)):
+    result = {"status": "ok", "etags": [[n, f"etag-{n}"] for n in parts]}
+    if sent_sha256 is not None:
+        result["sent_sha256"] = sent_sha256
+    return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("result", "status"),
+    [
+        (_multipart_result(_SHA), "ok"),
+        # Parts are signed for length only: same-sized different bytes would
+        # otherwise land under this digest's key.
+        (_multipart_result("b" * 64), "changed"),
+        (_multipart_result(None), "failed"),
+        (_multipart_result(_SHA, parts=(1, 3)), "failed"),
+    ],
+    ids=["digest-matches", "sent-other-bytes", "no-sent-digest", "missing-part"],
+)
+async def test_multipart_assembles_only_the_digests_own_bytes(result, status):
+    with (
+        patch.object(blobs, "complete_multipart_upload", return_value=True) as complete,
+        patch.object(blobs, "abort_multipart_upload", return_value=True) as abort,
+        patch.object(blobs, "sha256_object", return_value=_SHA),
+    ):
+        settled = await blobs._settle_multipart(
+            USER, {_SHA: ("upload-1", 3)}, {_SHA: result}
+        )
+    assert settled[_SHA]["status"] == status
+    assert complete.called is (status == "ok")
+    assert abort.called is (status != "ok")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("held", "deleted", "error"),
+    [
+        ("b" * 64, True, "assembled object does not match its digest"),
+        (None, False, "assembled object could not be read back"),
+    ],
+    ids=["forged-digest", "unreadable"],
+)
+async def test_an_assembled_object_counts_only_once_its_bytes_hash_to_the_digest(held, deleted, error):
+    """The runtime's sent_sha256 is its own word; the store holds the truth."""
+    with (
+        patch.object(blobs, "complete_multipart_upload", return_value=True),
+        patch.object(blobs, "abort_multipart_upload", return_value=True),
+        patch.object(blobs, "sha256_object", return_value=held),
+        patch.object(blobs, "delete_object", return_value=True) as delete,
+    ):
+        settled = await blobs._settle_multipart(
+            USER, {_SHA: ("upload-1", 3)}, {_SHA: _multipart_result(_SHA)}
+        )
+    assert settled[_SHA]["status"] == "failed"
+    assert settled[_SHA]["error"] == error
+    assert delete.called is deleted
+
+
+@pytest.mark.asyncio
+async def test_a_file_too_large_for_one_put_is_withheld_when_the_store_will_not_split_it():
+    huge = ScanEntry("data/huge.bin", "file", blobs.SINGLE_PUT_MAX_BYTES + 1, 1, 0o644, "c" * 64, None, True)
+    small = ScanEntry("data/small.bin", "file", 10, 1, 0o644, "d" * 64, None, True)
+    with (
+        patch.object(blobs, "get_signed_upload_url", return_value=("https://store/x", {})),
+        patch.object(blobs, "create_signed_multipart_upload", return_value=None),
+    ):
+        items, uploads, withheld = await blobs._sign_push_items(
+            USER, WS, {"c" * 64: huge, "d" * 64: small}, expires=60, unlink_after=False
+        )
+    assert [i["sha256"] for i in items] == ["d" * 64]
+    assert uploads == {}
+    assert withheld["c" * 64]["status"] == "failed"
