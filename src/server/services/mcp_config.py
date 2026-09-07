@@ -37,6 +37,11 @@ from urllib.parse import urlsplit
 
 from ptc_agent.config.core import MCPServerConfig
 from src.server.database.mcp_oauth import ConnectionStatus
+from src.server.services.tool_binding import (
+    BindingPlan,
+    inputs_from_row,
+    resolve_plan,
+)
 from src.server.services.brokerage_capabilities import (
     denied_tools,
     group_keys_for,
@@ -137,6 +142,10 @@ class ResolvedServer:
     # shipped brokerage. Empty is a real answer and distinct from None: it
     # means the user granted no group, so the server runs and offers nothing.
     denied_tools: frozenset[str] | None = None
+    # How each granted tool reaches the model (sandbox wrapper, JSON tool, or
+    # both), with the set the sandbox must not wrap. None for a server nothing
+    # binds directly.
+    binding_plan: BindingPlan | None = None
 
     @property
     def name(self) -> str:
@@ -187,6 +196,17 @@ class ResolvedMCP:
     @cached_property
     def shadowed_inherited_names(self) -> frozenset[str]:
         return self._names(Origin.USER, State.SHADOWED)
+
+    @cached_property
+    def binding_plans_by_name(self) -> dict[str, BindingPlan]:
+        """ACTIVE servers with a plan that binds at least one tool directly."""
+        return {
+            e.name: e.binding_plan
+            for e in self.entries
+            if e.state is State.ACTIVE
+            and e.binding_plan is not None
+            and e.binding_plan.direct
+        }
 
     @cached_property
     def denied_tools_by_name(self) -> dict[str, frozenset[str]]:
@@ -483,6 +503,7 @@ async def resolve_mcp_config(
     inherited_servers: list[MCPServerConfig] = []
     tombstoned_inherited: list[MCPServerConfig] = []
     shadowed_inherited: list[MCPServerConfig] = []
+    user_row_by_name = {row["name"]: row for row in user_rows}
     for row in user_rows:
         name = row["name"]
         if name in builtin_name_set:
@@ -582,6 +603,20 @@ async def resolve_mcp_config(
             )
         return denied_tools(vendor, capabilities or ())
 
+    def _binding_plan(cfg: MCPServerConfig) -> BindingPlan | None:
+        """Which path each granted tool takes. Same identity rule as the
+        denial: the consented URL, never the row name. A direct call dials the
+        relay under the connection's grant, so without a connection there is
+        nothing to bind and the plan is None whatever the row asks for."""
+        connection = connection_by_server.get(cfg.name)
+        if connection is None:
+            return None
+        return resolve_plan(
+            vendor_for_url(connection.get("server_url")),
+            connection.get("granted_capabilities") or (),
+            inputs_from_row(user_row_by_name.get(cfg.name)),
+        )
+
     def _user_entry(cfg: MCPServerConfig, state: State) -> ResolvedServer:
         return ResolvedServer(
             config=cfg,
@@ -590,6 +625,7 @@ async def resolve_mcp_config(
             oauth_status=oauth_status_by_name.get(cfg.name),
             plugin_name=plugin_name_by_server.get(cfg.name),
             denied_tools=_denied_tools(cfg),
+            binding_plan=_binding_plan(cfg),
         )
 
     # Entry order IS the API's row order: the running set first (built-ins,
