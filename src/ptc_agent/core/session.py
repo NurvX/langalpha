@@ -5,6 +5,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import TracebackType
+from typing import Any
 
 import structlog
 
@@ -72,6 +73,12 @@ class Session:
         # the composite's tool lists: a server that legitimately advertises
         # zero tools is settled too, and must not re-probe every acquire.
         self.mcp_settled_servers: set[str] = set()
+        # Tools bound to the model directly (server name -> the server's
+        # ``DirectServerTools``), taken out of the composite at install so the
+        # sandbox never gets a wrapper for them. Opaque here: the value is the
+        # server layer's, which this library does not import. Execution
+        # context, like the composite.
+        self.direct_mcp_tools: dict[str, Any] = {}
 
         # Egress-relay binding for OAuth-connected servers: what THIS process
         # last pushed to the sandbox. Execution context only — grant truth is
@@ -332,6 +339,7 @@ class Session:
         self._owns_mcp_registry = False
         self.mcp_tool_summary = None
         self.mcp_config_version = None
+        self.direct_mcp_tools = {}
         # The binding records what the (now gone) sandbox held; keeping it
         # would violate that invariant and read as a teardown trigger on the
         # next sync.
@@ -378,6 +386,7 @@ class Session:
         self._owns_mcp_registry = False
         self.mcp_tool_summary = None
         self.mcp_config_version = None
+        self.direct_mcp_tools = {}
         self.egress_binding = None
         # Restore the pristine server list so a restart re-enters PTCSandbox with
         # the unresolved built-ins, not the stale per-workspace resolution.

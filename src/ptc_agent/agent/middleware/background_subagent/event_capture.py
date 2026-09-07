@@ -69,8 +69,8 @@ def _tool_message_to_event_data(msg: ToolMessage, agent_id: str) -> dict:
     """Build the ``data`` payload for a captured ``tool_call_result`` event.
 
     Shared by the direct-ToolMessage branch and the Command-wrapped branch in
-    ``awrap_tool_call``. Keeps artifact handling and content stringification in
-    one place so the two code paths can't drift.
+    ``awrap_tool_call``. Keeps status/artifact handling and content stringification
+    in one place so the two code paths can't drift.
     """
     content = _visible_text(msg.content)
     data: dict = {
@@ -81,6 +81,11 @@ def _tool_message_to_event_data(msg: ToolMessage, agent_id: str) -> dict:
         "content": _truncate_content(content),
         "content_type": "text",
     }
+    # The whole status travels, not just the failing one. An explicit success
+    # is what stops a client from reading prose that merely looks like a failure.
+    status = getattr(msg, "status", None)
+    if status:
+        data["status"] = status
     if getattr(msg, "artifact", None) is not None:
         data["artifact"] = msg.artifact
     return data

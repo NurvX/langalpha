@@ -63,6 +63,9 @@ print(result)
 ```
 
 **When to use MCP tools**: When you need raw time-series data for calculations, multi-ticker batch analysis, financial modeling, charting with matplotlib/plotly, or any task requiring programmatic data manipulation.
+{% set direct_tools_heading = "Direct tools" %}
+{% set direct_tools_sandbox = true %}
+{% include 'components/direct_tools.md.j2' %}
 {% if guidance | default("detailed") == "detailed" %}
 
 ## Inline vs. file-based execution

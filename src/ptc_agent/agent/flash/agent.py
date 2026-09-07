@@ -27,7 +27,14 @@ from ptc_agent.agent.middleware import (
     ProvenanceMiddleware,
     ReasoningCompatibilityMiddleware,
 )
-from ptc_agent.agent.middleware.openai_prompt_caching import OpenAIPromptCachingMiddleware
+from ptc_agent.agent.middleware.openai_prompt_caching import (
+    OpenAIPromptCachingMiddleware,
+)
+from ptc_agent.agent.middleware.direct_mcp import (
+    DirectMcpPolicyMiddleware,
+    DirectToolSet,
+    direct_tool_summary,
+)
 from ptc_agent.agent.middleware.skills.registry import (
     build_effective_skill_registry,
 )
@@ -157,7 +164,9 @@ class FlashAgent:
 
         return tools
 
-    def _build_system_prompt(self, tools: list[Any], guidance: str) -> str:
+    def _build_system_prompt(
+        self, tools: list[Any], guidance: str, direct_tool_summary: str = ""
+    ) -> str:
         """Build the static system prompt (excludes time/profile for cacheability).
 
         ``guidance`` is resolved for the flash model, not the main one: a
@@ -168,6 +177,7 @@ class FlashAgent:
         return loader.render(
             "flash_system.md.j2",
             tools=tools,
+            direct_tool_summary=direct_tool_summary,
             **guidance_template_vars(guidance),
         )
 
@@ -178,10 +188,16 @@ class FlashAgent:
         user_profile: dict | None = None,
         store: Any | None = None,
         response_format: Any | None = None,
+        direct_mcp: DirectToolSet | None = None,
     ) -> Any:
         """Create a Flash agent with minimal middleware stack.
 
-        Note: No MCP registry, no sandbox - MCP tools require sandbox.
+        No MCP registry and no sandbox. ``direct_mcp`` is the one MCP surface
+        Flash has: tools bound to the model as JSON tools through the relay,
+        checked per call against the connection's current status and consent.
+        That check refuses; it does not ask. The per-call confirmation a live
+        order wants is what ``order_approval`` is reserved for, and it is not
+        built yet, so nothing here stops an order to put it to the user.
 
         Args:
             checkpointer: Optional LangGraph checkpointer for state persistence
@@ -202,9 +218,12 @@ class FlashAgent:
 
         # Build tools
         tools = self._build_tools()
+        direct_tools = list(direct_mcp.tools) if direct_mcp is not None else []
 
         # Build system prompt (time + profile injected by RuntimeContextMiddleware)
-        system_prompt = self._build_system_prompt(tools, turn.guidance)
+        system_prompt = self._build_system_prompt(
+            tools, turn.guidance, direct_tool_summary=direct_tool_summary(direct_tools)
+        )
 
         # Leak detector wired into provenance so web/market/SEC snippets are
         # scrubbed before they're emitted/persisted, mirroring the main agent.
@@ -268,6 +287,12 @@ class FlashAgent:
 
         main_middleware.append(SteeringMiddleware())
 
+        # Consent is re-read per call here, so a tool the connection no longer
+        # covers is refused rather than reaching the vendor.
+        if direct_tools:
+            main_middleware.append(DirectMcpPolicyMiddleware(direct_mcp))
+            tools.extend(direct_tools)
+
         # AskUserQuestion middleware (needed for onboarding and preference updates)
         ask_user_middleware = AskUserMiddleware()
         main_middleware.append(ask_user_middleware)
@@ -282,7 +307,9 @@ class FlashAgent:
             client = resolve_compaction_client(self.config)
             if client is not None:
                 compaction_config["_llm_client"] = client
-        compaction = CompactionMiddleware.from_config(config=compaction_config, backend=None)
+        compaction = CompactionMiddleware.from_config(
+            config=compaction_config, backend=None
+        )
         if compaction is not None:
             main_middleware.append(compaction)
             logger.info(

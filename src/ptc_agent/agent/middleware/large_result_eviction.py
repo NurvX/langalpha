@@ -189,10 +189,15 @@ class LargeResultEvictionMiddleware(AgentMiddleware):
         )
 
         # Preserve artifact from content_and_artifact tools
+        # The eviction rebuilds the message, so anything not copied here is
+        # silently reset to its default. `status` is the one field a consumer
+        # cannot recover from the replacement text: a failure whose result was
+        # too large would land as a success.
         kwargs = dict(
             content=replacement_text,
             tool_call_id=message.tool_call_id,
             name=message.name,
+            status=message.status,
         )
         if hasattr(message, 'artifact') and message.artifact is not None:
             kwargs['artifact'] = message.artifact

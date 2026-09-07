@@ -5,6 +5,12 @@ defaults:
   # Runtime variables (set at render time, these are just documentation)
   # NOTE: date/datetime are auto-injected by PromptLoader - do NOT set here
   tool_summary: ""  # Set at runtime with formatted tool summary
+  direct_tool_summary: ""  # Set at runtime: tools bound to the model directly (empty = section omitted)
+  # Shape of the shared components/direct_tools.md.j2 section. Each template
+  # that includes it sets these; the values here only keep an unset render from
+  # dropping the heading.
+  direct_tools_heading: "Direct tools"
+  direct_tools_sandbox: false
   # Task workflow defaults
   max_concurrent_task_units: 3
 

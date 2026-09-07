@@ -217,6 +217,7 @@ async def build_ptc_graph_with_session(
     on_signed_url: Any | None = None,
     namespace_owner: Any | None = None,
     disable_subagents: bool = False,
+    direct_mcp: Any | None = None,
 ) -> Any:
     """Build a BackgroundSubagentOrchestrator from a pre-acquired session (WorkspaceManager path)."""
     workspace_id = session.conversation_id
@@ -276,6 +277,7 @@ async def build_ptc_graph_with_session(
         # turn create_agent never recomputes it — keeps the prompt-cache prefix
         # byte-stable. None → create_agent computes from the registry.
         tool_summary=getattr(session, "mcp_tool_summary", None),
+        direct_mcp=direct_mcp,
     )
 
     logger.debug(

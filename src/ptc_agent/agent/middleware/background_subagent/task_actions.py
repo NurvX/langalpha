@@ -196,6 +196,7 @@ async def _spawn_writer(
             ),
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
     except SpawnStoppedError:
         return ToolMessage(
@@ -238,6 +239,7 @@ async def _handle_update(
             content=f"Error: Task-{target_task_id} was cancelled and cannot be updated.",
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
 
     if task.terminal_status == "never_started":
@@ -249,6 +251,7 @@ async def _handle_update(
             ),
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
 
     # Validate subagent_type if explicitly provided
@@ -257,6 +260,7 @@ async def _handle_update(
             content=f"Error: Task-{target_task_id} is a '{task.subagent_type}' agent, not '{subagent_type}'.",
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
 
     if not task.is_pending:
@@ -264,6 +268,7 @@ async def _handle_update(
             content=f"Error: Task-{target_task_id} is not running. Use action='resume' to resume a completed or stopped task.",
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
 
     input_id = await mw._queue_followup_to_redis(task, prompt)
@@ -317,11 +322,13 @@ async def _handle_update(
                 ),
                 tool_call_id=tool_call_id,
                 name="Task",
+                status="error",
             )
         return ToolMessage(
             content=f"Error: Could not deliver follow-up to {task.display_id} -- message queue not available.",
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
 
 
@@ -362,6 +369,7 @@ async def _handle_resume(
             content=f"Error: Task-{target_task_id} was cancelled and cannot be resumed.",
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
 
     # Never-started tasks are refused here rather than retried through the
@@ -377,6 +385,7 @@ async def _handle_resume(
             ),
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
 
     # A workflow run's task is a driver entry, not a subagent. Resuming it
@@ -395,6 +404,7 @@ async def _handle_resume(
             ),
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
 
     # Validate subagent_type if explicitly provided
@@ -403,6 +413,7 @@ async def _handle_resume(
             content=f"Error: Task-{target_task_id} is a '{task.subagent_type}' agent, not '{subagent_type}'.",
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
 
     locally_live = (
@@ -413,6 +424,7 @@ async def _handle_resume(
             content=f"Error: Task-{target_task_id} is still running. Use action='update' to send instructions to a running task.",
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
     # Claim the resume before the first await: two parallel resume
     # calls in one model step would otherwise both observe not-live
@@ -423,6 +435,7 @@ async def _handle_resume(
             content=f"Error: Task-{target_task_id} is already being resumed. Use action='update' to send instructions to it.",
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
     mw._resume_claims.add(task.task_id)
     try:
@@ -441,6 +454,7 @@ async def _handle_resume(
                     ),
                     tool_call_id=tool_call_id,
                     name="Task",
+                    status="error",
                 )
         elif task.is_pending:
             # No fence available (single-writer deployment): a pending
@@ -449,6 +463,7 @@ async def _handle_resume(
                 content=f"Error: Task-{target_task_id} is still running. Use action='update' to send instructions to a running task.",
                 tool_call_id=tool_call_id,
                 name="Task",
+                status="error",
             )
 
         logger.info(
@@ -482,6 +497,7 @@ async def _handle_resume(
                 content=f"Error: could not start {task.display_id} — {refusal.reason}.",
                 tool_call_id=tool_call_id,
                 name="Task",
+                status="error",
             )
         task.task_run_id = admitted or None
 
@@ -648,6 +664,7 @@ async def _handle_init(
             content=f"Error: could not start {task.display_id} — {refusal.reason}.",
             tool_call_id=tool_call_id,
             name="Task",
+            status="error",
         )
     task.task_run_id = admitted or None
 
