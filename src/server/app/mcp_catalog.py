@@ -172,6 +172,37 @@ def _decorated(row: dict, conn: dict | None, **extra) -> CatalogServer:
     )
 
 
+def _has_direct_tools(row: dict, conn: dict | None, snapshot: dict | None) -> bool:
+    """Whether any tool on this row binds directly, and so reaches Flash.
+
+    Flash has no sandbox, so a row is reachable from it only through a tool on
+    the direct path. Answered from the snapshot the list already holds rather
+    than by asking per row, which is the observer behind every server the user
+    owns that the rows deliberately do not carry.
+
+    Intersected with what the snapshot actually published, because a plan
+    carries every name the vendor's curation grants whether or not this server
+    published it, while ``build_direct_entries`` can only bind a schema it
+    holds. Reading ``plan.direct`` alone would offer Flash on a connection
+    whose scope toggle saves cleanly and then gives Flash nothing to call.
+    """
+    from src.server.services.brokerage_capabilities import vendor_for_url
+    from src.server.services.egress import folded_contains
+    from src.server.services.tool_binding import inputs_from_row, resolve_plan
+
+    if conn is None or ConnectionStatus(conn["status"]) not in SERVABLE:
+        return False
+    published = (snapshot or {}).get("tools") or []
+    names = [name for t in published if (name := t.get("name"))]
+    plan = resolve_plan(
+        vendor_for_url(conn.get("server_url")),
+        conn.get("granted_capabilities") or (),
+        inputs_from_row(row),
+        candidates=names,
+    )
+    return any(folded_contains(plan.direct, n) for n in names)
+
+
 async def _snapshots_by_server(
     user_id: str, rows: list[dict]
 ) -> dict[str, dict]:
@@ -274,6 +305,7 @@ async def list_servers(
                     len(snapshot.get("tools") or []) if snapshot is not None else None
                 ),
                 icon_url=await _icon_url(meta.get("server_info")),
+                has_direct_tools=_has_direct_tools(r, oauth.get(r["name"]), snapshot),
             )
         )
     workspace_servers: list[WorkspaceScopedServer] = []

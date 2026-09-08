@@ -220,7 +220,7 @@ export function BrokerageRow({
                 scopeWorkspaceId={null}
                 disabledWorkspaceIds={row.disabled_workspace_ids ?? []}
                 checklistLocked={scopeLocked(row)}
-                flashWorkspace={flashWorkspace}
+                flashWorkspace={row.has_direct_tools ? flashWorkspace : undefined}
                 // A brokerage is an account-wide identity, so the only scope
                 // question it has is which workspaces may reach it. Moving one
                 // into a single workspace would strand the OAuth connection,

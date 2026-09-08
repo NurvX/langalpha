@@ -157,7 +157,10 @@ export function McpCatalogRow({
             scopeWorkspaceId={null}
             disabledWorkspaceIds={server.disabled_workspace_ids ?? []}
             checklistLocked={scopeLocked(server)}
-            flashWorkspace={flashWorkspace}
+            // Flash has no sandbox, so it can install only directly bound
+            // tools. The server answers whether this row has any; offering
+            // Flash on a row that has none is a switch that does nothing.
+            flashWorkspace={server.has_direct_tools ? flashWorkspace : undefined}
             busy={scopeBusy}
             moveBlockedReason={
               // OAuth connections exist only at the user tier, so a connected

@@ -1770,3 +1770,90 @@ async def test_tools_carry_the_paths_each_may_take(client):
             "ptc",
             "preset",
         )
+
+
+class TestHasDirectTools:
+    """Whether the row says it can reach Flash.
+
+    Flash has no sandbox, so a row is reachable from it only through a tool on
+    the direct path. The catalog answers it from the snapshot the list already
+    holds, so the page does not have to ask per row.
+    """
+
+    def _snapshot(self, *names):
+        return {"tools": [{"name": n} for n in names]}
+
+    def test_a_row_with_a_directly_bound_tool_says_so(self):
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
+        conn = {
+            "status": "connected",
+            "server_url": "https://example.com/mcp",
+            "granted_capabilities": [],
+        }
+        assert _has_direct_tools(row, conn, self._snapshot("quote_kline")) is True
+
+    def test_a_ptc_only_row_does_not(self):
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "http", "tool_binding": {}}
+        conn = {
+            "status": "connected",
+            "server_url": "https://example.com/mcp",
+            "granted_capabilities": [],
+        }
+        assert _has_direct_tools(row, conn, self._snapshot("quote_kline")) is False
+
+    def test_a_stdio_row_never_does_whatever_the_map_asks(self):
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "stdio", "tool_binding": {"quote_kline": "direct"}}
+        conn = {
+            "status": "connected",
+            "server_url": None,
+            "granted_capabilities": [],
+        }
+        assert _has_direct_tools(row, conn, self._snapshot("quote_kline")) is False
+
+    def test_an_unconnected_row_does_not(self):
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
+        assert _has_direct_tools(row, None, self._snapshot("quote_kline")) is False
+
+    def test_a_revoked_connection_does_not(self):
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
+        conn = {
+            "status": "revoked",
+            "server_url": "https://example.com/mcp",
+            "granted_capabilities": [],
+        }
+        assert _has_direct_tools(row, conn, self._snapshot("quote_kline")) is False
+
+    def test_a_map_naming_a_tool_the_server_never_published_does_not(self):
+        # The plan carries every name curation or the map grants; only a
+        # published schema can actually be bound, so the offer follows the
+        # snapshot rather than the plan.
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
+        conn = {
+            "status": "connected",
+            "server_url": "https://example.com/mcp",
+            "granted_capabilities": [],
+        }
+        assert _has_direct_tools(row, conn, self._snapshot("something_else")) is False
+
+    def test_a_row_with_no_snapshot_yet_does_not(self):
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
+        conn = {
+            "status": "connected",
+            "server_url": "https://example.com/mcp",
+            "granted_capabilities": [],
+        }
+        assert _has_direct_tools(row, conn, None) is False

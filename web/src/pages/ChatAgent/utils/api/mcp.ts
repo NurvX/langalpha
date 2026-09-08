@@ -10,6 +10,7 @@ import {
   isDesktopShell,
   type McpOAuthFlow,
 } from '@/lib/desktop';
+import { foldToolName } from '@/pages/ChatAgent/utils/directTools';
 
 //
 // Per-workspace effective list mixes built-in servers with workspace-added
@@ -258,6 +259,9 @@ export interface CatalogServer {
   remembered_capabilities?: string[] | null;
   /** Per-tool binding overrides; a name here beats the preset and the group. */
   tool_binding?: Record<string, McpToolBinding>;
+  /** Whether any tool on this row binds directly, and so whether the row can
+   * reach Flash at all. */
+  has_direct_tools?: boolean;
   binding_preset?: McpBindingPreset | null;
   /**
    * Retained but inert. The backend keeps the column for a later stage and
