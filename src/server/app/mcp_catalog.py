@@ -573,7 +573,7 @@ def _binding_fields(vendor: str | None, tool: str, inputs) -> dict:
     return {
         "binding": resolved.binding,
         "binding_source": resolved.source,
-        "allowed": sorted(allowed_bindings(vendor, tool)),
+        "allowed": sorted(allowed_bindings(vendor, tool, relayable=inputs.relayable)),
     }
 
 

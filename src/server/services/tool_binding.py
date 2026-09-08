@@ -49,6 +49,7 @@ __all__ = [
     "Resolved",
     "allowed_bindings",
     "inputs_from_row",
+    "merge_overrides",
     "resolve_plan",
     "resolve_tool",
     "strip_disallowed_overrides",
@@ -94,6 +95,10 @@ class BindingInputs:
 
     overrides: Mapping[str, str] = field(default_factory=dict)
     preset: str | None = None
+    #: Whether the relay has an address to dial for this row at all. A stdio
+    #: server has no URL by construction, so the direct path cannot exist for
+    #: it however the row or its group is configured.
+    relayable: bool = True
     folded_overrides: Mapping[str, str] = field(
         init=False, repr=False, compare=False, default_factory=dict
     )
@@ -115,16 +120,24 @@ def inputs_from_row(row: Mapping[str, object] | None) -> BindingInputs:
     return BindingInputs(
         overrides=dict(overrides) if isinstance(overrides, Mapping) else {},
         preset=row.get("binding_preset") or None,  # type: ignore[arg-type]
+        relayable=row.get("transport") != "stdio",
     )
 
 
-def allowed_bindings(vendor: str | None, tool: str) -> frozenset[Binding]:
+def allowed_bindings(
+    vendor: str | None, tool: str, *, relayable: bool = True
+) -> frozenset[Binding]:
     """The paths this tool may take, from its group; every path when it has none.
 
     The one question the resolver, the write path and the tools endpoint all
     ask, so a stored map, a rejected PATCH and the options the page offers
     cannot disagree about what a tool is allowed to be.
+
+    An unrelayable row answers ``ptc`` before the group is consulted: there is
+    no address to dial, so no group policy can put a tool on the direct path.
     """
+    if not relayable:
+        return frozenset({"ptc"})
     group = group_for_tool(vendor, tool)
     return group.allowed_bindings if group is not None else ALL_BINDINGS
 
@@ -144,6 +157,8 @@ def resolve_tool(vendor: str | None, tool: str, inputs: BindingInputs) -> Resolv
     """One tool's binding and where it came from."""
     group = group_for_tool(vendor, tool)
     resolved = _ladder(group, tool, inputs)
+    if not inputs.relayable:
+        return resolved if resolved.binding == "ptc" else Resolved("ptc", "policy")
     if group is not None and resolved.binding not in group.allowed_bindings:
         return Resolved(group.default_binding, "policy")
     return resolved
@@ -188,8 +203,29 @@ _PATH_WORDS: dict[str, str] = {
 }
 
 
-def _disallowed(vendor: str | None, tool: str, binding: str) -> bool:
-    return binding not in allowed_bindings(vendor, tool)
+def _disallowed(
+    vendor: str | None, tool: str, binding: str, relayable: bool = True
+) -> bool:
+    return binding not in allowed_bindings(vendor, tool, relayable=relayable)
+
+
+def merge_overrides(
+    stored: Mapping[str, str],
+    *,
+    set_: Mapping[str, str] | None = None,
+    unset: Iterable[str] | None = None,
+) -> dict[str, str]:
+    """``stored`` with a per-tool delta applied.
+
+    A stored key can be another spelling of the name being written. The
+    resolver reads the map folded, so the delta replaces every key that folds
+    to the one it names instead of leaving a second spelling beside it.
+    """
+    touched = {fold_tool_name(n) for n in (set_ or {})}
+    touched |= {fold_tool_name(n) for n in (unset or ())}
+    merged = {k: v for k, v in stored.items() if fold_tool_name(k) not in touched}
+    merged.update(set_ or {})
+    return merged
 
 
 def validate_overrides(
@@ -197,6 +233,7 @@ def validate_overrides(
     overrides: Mapping[str, str],
     *,
     stored: Mapping[str, str] | None = None,
+    relayable: bool = True,
 ) -> str | None:
     """The reason a set of overrides cannot be stored, or None.
 
@@ -223,8 +260,8 @@ def validate_overrides(
             return f"{tool!r}: binding must be one of {sorted(BINDINGS)}"
         if stored.get(tool) == binding:
             continue
-        if _disallowed(vendor, tool, binding):
-            allowed = sorted(allowed_bindings(vendor, tool))
+        if _disallowed(vendor, tool, binding, relayable):
+            allowed = sorted(allowed_bindings(vendor, tool, relayable=relayable))
             return (
                 f"{tool!r} can only be bound as "
                 + " or ".join(_PATH_WORDS[b] for b in allowed)
@@ -246,7 +283,7 @@ def validate_overrides(
 
 
 def strip_disallowed_overrides(
-    vendor: str | None, overrides: Mapping[str, str]
+    vendor: str | None, overrides: Mapping[str, str], relayable: bool = True
 ) -> dict[str, str]:
     """The map with every entry the clamp would overrule removed.
 
@@ -257,5 +294,5 @@ def strip_disallowed_overrides(
     return {
         tool: binding
         for tool, binding in overrides.items()
-        if not _disallowed(vendor, tool, binding)
+        if not _disallowed(vendor, tool, binding, relayable)
     }

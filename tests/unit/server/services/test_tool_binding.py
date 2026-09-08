@@ -13,11 +13,12 @@ from src.server.services.brokerage_capabilities import (
 )
 from src.server.services.egress import fold_tool_name
 from src.server.services.tool_binding import (
-    PRESET_PTC_ONLY,
     BindingInputs,
+    PRESET_PTC_ONLY,
     Resolved,
     allowed_bindings,
     inputs_from_row,
+    merge_overrides,
     resolve_plan,
     resolve_tool,
     strip_disallowed_overrides,
@@ -248,3 +249,76 @@ def test_a_recased_override_for_a_denied_tool_is_not_reported_as_reachable():
     plan = resolve_plan(MOOMOO, ("market_data",), inputs)
     assert "SIM_TRADE_INPUT_ORDER" not in plan.by_tool
     assert not any(fold_tool_name(t) == "sim_trade_input_order" for t in plan.direct)
+
+
+class TestMergeOverrides:
+    """The delta the binding endpoint applies to the stored map.
+
+    The page names the tool it changed instead of carrying the map, so the
+    reconciliation the client used to do lands here: the resolver reads the
+    map folded, and a stored key can be another spelling of the name being
+    written.
+    """
+
+    def test_set_adds_without_disturbing_the_rest(self):
+        stored = {"quote_stock_quote": "direct"}
+        assert merge_overrides(stored, set_={"quote_kline": "both"}) == {
+            "quote_stock_quote": "direct",
+            "quote_kline": "both",
+        }
+
+    def test_unset_removes_only_the_tool_it_names(self):
+        stored = {"quote_stock_quote": "direct", "quote_kline": "both"}
+        assert merge_overrides(stored, unset=["quote_kline"]) == {
+            "quote_stock_quote": "direct"
+        }
+
+    def test_set_replaces_every_stored_spelling_of_the_tool(self):
+        stored = {" EXISTING_TOOL ": "direct", "quote_kline": "both"}
+        assert merge_overrides(stored, set_={"existing_tool": "ptc"}) == {
+            "quote_kline": "both",
+            "existing_tool": "ptc",
+        }
+
+    def test_unset_removes_every_stored_spelling_of_the_tool(self):
+        stored = {" EXISTING_TOOL ": "direct", "quote_kline": "both"}
+        assert merge_overrides(stored, unset=["existing_tool"]) == {
+            "quote_kline": "both"
+        }
+
+    def test_an_empty_delta_leaves_the_map_alone(self):
+        stored = {"quote_stock_quote": "direct"}
+        assert merge_overrides(stored) == stored
+
+
+class TestStdioIsNeverRelayable:
+    """A stdio server has no URL, so the relay has nothing to dial.
+
+    The direct path is unreachable for it by construction, and the endpoint
+    that offers the choice has to say so rather than accept a binding the
+    resolver will not honour.
+    """
+
+    def test_a_stdio_row_offers_only_ptc(self):
+        assert allowed_bindings(None, "anything", relayable=False) == frozenset({"ptc"})
+
+    def test_an_http_row_is_unrestricted_without_a_group(self):
+        assert allowed_bindings(None, "anything") == ALL_BINDINGS
+
+    def test_an_override_asking_for_direct_resolves_to_ptc_as_policy(self):
+        inputs = BindingInputs(overrides={"anything": "direct"}, relayable=False)
+        resolved = resolve_tool(None, "anything", inputs)
+        assert (resolved.binding, resolved.source) == ("ptc", "policy")
+
+    def test_the_same_override_stands_on_a_relayable_row(self):
+        inputs = BindingInputs(overrides={"anything": "direct"})
+        resolved = resolve_tool(None, "anything", inputs)
+        assert (resolved.binding, resolved.source) == ("direct", "override")
+
+    def test_the_write_path_refuses_direct_on_a_stdio_row(self):
+        reason = validate_overrides(None, {"anything": "direct"}, relayable=False)
+        assert reason and "sandbox wrapper" in reason
+
+    def test_inputs_read_relayable_off_the_row_transport(self):
+        assert inputs_from_row({"transport": "stdio"}).relayable is False
+        assert inputs_from_row({"transport": "http"}).relayable is True
