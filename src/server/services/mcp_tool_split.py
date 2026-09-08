@@ -22,9 +22,16 @@ from src.server.services.tool_binding import BindingPlan
 
 @dataclass(frozen=True)
 class DirectServerTools:
-    """One server's directly bound tools, as the vendor publishes their schemas."""
+    """One server's directly bound tools, as the vendor publishes their schemas.
+
+    ``sandbox_excluded`` is carried alongside because ``both`` and ``direct``
+    are indistinguishable in ``schemas`` alone, and the prompt has to tell the
+    model which of these it may still import: a ``both`` tool that reads as
+    direct-only loses the Python path it was bound ``both`` to keep.
+    """
 
     schemas: tuple[dict, ...]
+    sandbox_excluded: frozenset[str] = frozenset()
 
 
 def split_server_tools(
@@ -45,7 +52,13 @@ def split_server_tools(
     direct_schemas = tuple(
         t for t in tools if folded_contains(plan.direct, t.get("name"))
     )
-    direct = DirectServerTools(schemas=direct_schemas) if direct_schemas else None
+    direct = (
+        DirectServerTools(
+            schemas=direct_schemas, sandbox_excluded=plan.sandbox_excluded
+        )
+        if direct_schemas
+        else None
+    )
     sandbox_tools = [
         t for t in tools if not folded_contains(plan.sandbox_excluded, t.get("name"))
     ]

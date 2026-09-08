@@ -9,6 +9,7 @@ from langchain_core.tools import StructuredTool
 from ptc_agent.agent.middleware.direct_mcp import (
     METADATA_KEY,
     DirectMcpPolicyMiddleware,
+    direct_tool_summary,
 )
 
 
@@ -85,3 +86,42 @@ def test_sync_path_fails_closed_for_direct_tools_only():
         lambda r: ToolMessage(content="ran", tool_call_id="call-1"),
     )
     assert refused.status == "error"
+
+
+class TestDirectToolSummaryImportHint:
+    """A `both` tool's line has to name the symbol the wrapper actually defines."""
+
+    def test_a_direct_only_tool_is_not_offered_an_import(self):
+        line = direct_tool_summary(
+            [
+                _tool(
+                    "mcp__moomoo__place",
+                    stamp={
+                        "server": "moomoo",
+                        "tool": "trading_order_place",
+                        "sandboxed": False,
+                    },
+                )
+            ]
+        )
+        assert "importable" not in line
+
+    def test_the_hint_uses_the_generated_name_not_the_vendor_name(self):
+        # The wrapper is emitted under _safe_func_name, so a vendor name with
+        # illegal characters is a different symbol in the module.
+        line = direct_tool_summary(
+            [
+                _tool(
+                    "mcp__acme__odd",
+                    stamp={"server": "acme", "tool": "weird-name.v2", "sandboxed": True},
+                )
+            ]
+        )
+        assert "`tools.acme.weird_name_v2`" in line
+        assert "weird-name.v2`" not in line
+
+    def test_a_name_with_no_legal_form_loses_the_hint(self):
+        line = direct_tool_summary(
+            [_tool("mcp__acme__bad", stamp={"server": "acme", "tool": "---", "sandboxed": True})]
+        )
+        assert "importable" not in line

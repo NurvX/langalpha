@@ -10,7 +10,7 @@ Three tiers, differing in what they are for and in how you invoke them.
 {% endif %}
 | **MCP (via Python)** | Raw data as an *input to computation*: batch work, models, charts | `ExecuteCode`, or `Write` a `.py` file and run it with `Bash` |
 
-**MCP tools have no tool-call form.** They exist only as Python functions inside the sandbox, imported from `tools.<server_name>`. Every MCP call goes through Python; there is no way to invoke one directly.
+{% if direct_tool_summary %}**Most MCP tools have no tool-call form.**{% else %}**MCP tools have no tool-call form.**{% endif %} They exist only as Python functions inside the sandbox, imported from `tools.<server_name>`; there is no way to invoke one directly.{% if direct_tool_summary %} The Direct tools below are the exception: each is called as a tool, one call each, and only the ones whose line says so are also importable from `tools.<server_name>`.{% endif %}
 
 Routing:
 {% if finance_enabled %}

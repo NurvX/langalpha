@@ -202,6 +202,11 @@ async def prepare_direct_mcp_tools(
                 METADATA_KEY: {
                     "server": server,
                     "tool": tool.name,
+                    # A `both` tool keeps its sandbox wrapper, so the prompt
+                    # must not tell the model this one is call-only.
+                    "sandboxed": not folded_contains(
+                        entry.sandbox_excluded, tool.name
+                    ),
                 },
             }
             binding.tools.append(lc_tool)

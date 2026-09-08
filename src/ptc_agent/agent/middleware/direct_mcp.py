@@ -23,6 +23,8 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
+from ptc_agent.core.mcp_sanitize import sanitize_tool_name
+
 METADATA_KEY = "direct_mcp"
 
 
@@ -44,14 +46,31 @@ def direct_tool_meta(tool: Any) -> dict[str, Any] | None:
 
 
 def direct_tool_summary(tools: list[BaseTool]) -> str:
-    """One prompt line per directly bound tool, so the model knows these are
-    called as tools and not imported from ``tools.<server>``."""
+    """One prompt line per directly bound tool.
+
+    A tool bound ``both`` keeps its sandbox wrapper, so its line says so: the
+    blanket rule in the template is that these are called and not imported,
+    and a ``both`` tool is the exception that the setting exists to buy.
+    """
     lines: list[str] = []
     for tool in tools:
         summary = (tool.description or "").strip().split("\n", 1)[0]
         if len(summary) > 160:
             summary = summary[:157].rstrip() + "..."
-        lines.append(f"- `{tool.name}`: {summary}")
+        stamp = direct_tool_meta(tool) or {}
+        line = f"- `{tool.name}`: {summary}"
+        if stamp.get("sandboxed"):
+            # The wrapper is generated under the sanitized name, so the raw
+            # vendor name would send the model at a symbol its module does not
+            # define. A name that cannot be salvaged has no symbol to point at
+            # at all, so that tool simply loses the hint.
+            func = sanitize_tool_name(str(stamp.get("tool") or ""))
+            if func:
+                line += (
+                    f" (also importable as `tools.{stamp.get('server')}.{func}`"
+                    " for batching in `execute_code`)"
+                )
+        lines.append(line)
     return "\n".join(lines)
 
 
