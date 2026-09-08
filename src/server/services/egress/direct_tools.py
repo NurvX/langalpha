@@ -18,6 +18,7 @@ one session instead of paying a handshake through the relay.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import warnings
@@ -81,6 +82,14 @@ def direct_tool_name(server: str, tool: str) -> str:
     return f"mcp__{safe_server[:1]}_{digest}__{safe_tool}"[:_MAX_TOOL_NAME]
 
 
+# How long a turn waits for one relay session before giving up on opening it
+# ahead of time. Opening early only buys the first call's handshake, so a
+# session that is not ready quickly is worth less than the delay it adds in
+# front of the first token. A server that times out here is treated exactly
+# like one that refused to open: warned about, left closed, and reopened per
+# call by the tools that need it.
+SESSION_OPEN_TIMEOUT_S = 5.0
+
 @dataclass
 class DirectMCPBinding:
     """The tools bound for one turn, the clients behind them, and the policy.
@@ -125,13 +134,29 @@ class DirectMCPBinding:
                 yield event
             return
         async with AsyncExitStack() as stack:
-            for server, client in self._clients:
+
+            async def _open(server: str, client: Any) -> None:
                 try:
-                    await stack.enter_async_context(client)
+                    await asyncio.wait_for(
+                        stack.enter_async_context(client), SESSION_OPEN_TIMEOUT_S
+                    )
+                except TimeoutError:
+                    logger.warning(
+                        "[DIRECT_MCP] %r: relay session did not open within %ss; "
+                        "its tools will open one per call",
+                        server,
+                        SESSION_OPEN_TIMEOUT_S,
+                    )
                 except Exception as e:
                     logger.warning(
                         "[DIRECT_MCP] %r: relay session failed to open: %s", server, e
                     )
+
+            # Concurrently, because these handshakes stand between the user and
+            # the first token: opened in sequence, one slow server delays every
+            # server behind it and the waits add up across the whole set, so a
+            # turn that would never call those tools still looks hung.
+            await asyncio.gather(*(_open(s, c) for s, c in self._clients))
             async for event in stream:
                 yield event
 
