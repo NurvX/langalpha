@@ -797,6 +797,8 @@ async def set_enabled(
             )
         if not is_flash:
             _schedule_proactive_apply(workspace_id, user_id)
+        else:
+            _schedule_flash_grant_sync(workspace_id, user_id)
         return {"name": name, "enabled": body.enabled}
 
     ref = await classify_server_name(workspace_id, user_id, name)
@@ -822,6 +824,8 @@ async def set_enabled(
             raise HTTPException(status_code=404, detail=_NOT_FOUND)
     if not is_flash:
         _schedule_proactive_apply(workspace_id, user_id)
+    else:
+        _schedule_flash_grant_sync(workspace_id, user_id)
     return {"name": name, "enabled": body.enabled}
 
 
@@ -974,6 +978,29 @@ def _schedule_proactive_apply(workspace_id: str, user_id: str) -> None:
             _proactive_apply_pending.pop(workspace_id, None)
 
     task.add_done_callback(_cleanup)
+
+
+def _schedule_flash_grant_sync(workspace_id: str, user_id: str) -> None:
+    """Retire a flash workspace's relay grants the moment its scope narrows.
+
+    The flash workspace has no sandbox, so ``_schedule_proactive_apply`` has
+    nothing to warm and is skipped for it. Its grants still need retiring: a
+    Flash turn already in flight holds the set it bound with, and would keep
+    reaching a server the user has just taken out of scope until the turn ends.
+    Fire-and-forget on the same terms as its sibling.
+    """
+    from src.server.app import setup
+
+    base_config = setup.agent_config
+    if base_config is None:
+        return
+    from src.server.services.egress.flash_binding import sync_flash_grants
+
+    task = asyncio.create_task(
+        sync_flash_grants(base_config, user_id=user_id, workspace_id=workspace_id)
+    )
+    _proactive_apply_tasks.add(task)
+    task.add_done_callback(_proactive_apply_tasks.discard)
 
 
 def _schedule_session_mcp_refresh(workspace_id: str, user_id: str) -> None:

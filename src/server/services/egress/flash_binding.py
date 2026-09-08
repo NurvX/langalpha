@@ -33,6 +33,31 @@ from src.server.services.mcp_tool_split import build_direct_entries
 logger = logging.getLogger(__name__)
 
 
+def _direct_servers(resolved: Any) -> list[Any]:
+    """The resolved servers Flash can bind: a binding plan, and a connection."""
+    plans = resolved.binding_plans_by_name
+    return [s for s in resolved.servers if s.name in plans and s.oauth_connection_id]
+
+
+async def sync_flash_grants(
+    base_config: Any, *, user_id: str, workspace_id: str
+) -> None:
+    """Bring the flash workspace's grants up to its current scope, now.
+
+    Every turn syncs on its way in, which retires a grant before the *next*
+    turn. A turn already running holds the grant it was bound with, so a scope
+    change made mid-turn keeps reaching the vendor until that turn ends unless
+    the change lands here as well.
+    """
+    resolved = await resolve_mcp_config(base_config, user_id, workspace_id)
+    await sync_oauth_grants(
+        user_id=user_id,
+        workspace_id=workspace_id,
+        connection_ids=[s.oauth_connection_id for s in _direct_servers(resolved)],
+        config_version=resolved.version,
+    )
+
+
 async def bind_flash_direct_tools(
     base_config: Any, *, user_id: str | None, workspace_id: str
 ) -> DirectMCPBinding:
@@ -47,7 +72,7 @@ async def bind_flash_direct_tools(
 
     resolved = await resolve_mcp_config(base_config, user_id, workspace_id)
     plans = resolved.binding_plans_by_name
-    servers = [s for s in resolved.servers if s.name in plans and s.oauth_connection_id]
+    servers = _direct_servers(resolved)
     if not servers:
         logger.debug(
             "[DIRECT_MCP] flash: no directly bound server (servers=%s plans=%s)",
