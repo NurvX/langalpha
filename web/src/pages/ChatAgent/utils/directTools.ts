@@ -45,7 +45,9 @@ export function directToolDisplayName(name: string | null | undefined): string |
   return parsed ? humanizeKey(parsed.tool) : null;
 }
 
-const ACCOUNT_KEY = /(^|_)acc(ount)?_id$/i;
+// account_id, acc_id, acct_id and their camelCase spellings: vendors name
+// this field either way, and the collapsed row masks it however it arrives.
+const ACCOUNT_KEY = /(^|_)acc(oun)?t?_?id$/i;
 
 export function isAccountIdKey(key: string): boolean {
   return ACCOUNT_KEY.test(key);
@@ -59,12 +61,26 @@ export function maskAccountId(value: unknown): string {
   return `${MASK}${s.slice(-4)}`;
 }
 
+/** Mask every account id in `value`, at any depth, before it is serialized. */
+function maskDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(maskDeep);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        k,
+        isAccountIdKey(k) ? maskAccountId(v) : maskDeep(v),
+      ]),
+    );
+  }
+  return value;
+}
+
 function shortValue(value: unknown): string {
   if (value == null) return String(value);
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   try {
-    const s = JSON.stringify(value);
+    const s = JSON.stringify(maskDeep(value));
     return s.length > 40 ? `${s.slice(0, 37)}...` : s;
   } catch {
     return String(value);

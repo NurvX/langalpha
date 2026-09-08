@@ -78,6 +78,19 @@ describe('account id masking', () => {
     );
   });
 
+  it('masks a camelCase account id', () => {
+    expect(summarizeDirectToolArgs({ accountId: '2835410' })).toBe('accountId ••••5410');
+  });
+
+  it('masks an account id nested inside an object or array', () => {
+    expect(summarizeDirectToolArgs({ order: { account_id: '2835410', qty: 1 } })).toBe(
+      'order {"account_id":"••••5410","qty":1}',
+    );
+    expect(summarizeDirectToolArgs({ legs: [{ acctId: '2835410' }] })).toBe(
+      'legs [{"acctId":"••••5410"}]',
+    );
+  });
+
   it('caps the summary and counts the rest', () => {
     const args = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6 };
     expect(summarizeDirectToolArgs(args)).toBe('a 1 · b 2 · c 3 · d 4 · +2');
