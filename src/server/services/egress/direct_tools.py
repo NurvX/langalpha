@@ -19,6 +19,7 @@ one session instead of paying a handshake through the relay.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import warnings
@@ -82,6 +83,50 @@ def direct_tool_name(server: str, tool: str) -> str:
     return f"mcp__{safe_server[:1]}_{digest}__{safe_tool}"[:_MAX_TOOL_NAME]
 
 
+# A turn's whole direct budget, across every server it binds. The per-server
+# discovery caps sit at 128 tools and 400,000 schema characters, but those
+# size the cached JSON and the sandbox wrapper module; nothing there bounds
+# what a provider is asked to accept in one request. These do. The agent
+# already carries roughly 25 to 40 tools of its own, so 64 direct ones keep a
+# turn near a hundred definitions, and 120,000 characters of schema is about
+# thirty thousand tokens, which is a large but survivable slice of context.
+MAX_DIRECT_TOOLS = 64
+MAX_DIRECT_SCHEMA_CHARS = 120_000
+
+
+def admit_within_budget(
+    by_server: Mapping[str, Any],
+) -> tuple[dict[str, list[dict]], list[tuple[str, str]]]:
+    """Split each server's schemas into the ones a turn can afford, and the rest.
+
+    Taken one per server in rotation rather than server by server, so a broker
+    publishing eighty tools cannot spend the whole budget before a second
+    connection is reached at all: every server keeps a usable share, and a user
+    who wants more of one narrows the others on the Plugins page.
+    """
+    queues = {name: list(entry.schemas or ()) for name, entry in by_server.items()}
+    admitted: dict[str, list[dict]] = {name: [] for name in queues}
+    dropped: list[tuple[str, str]] = []
+    tools = 0
+    chars = 0
+    while any(queues.values()):
+        for name, queue in queues.items():
+            if not queue:
+                continue
+            schema = queue.pop(0)
+            if tools >= MAX_DIRECT_TOOLS:
+                dropped.append((name, str(schema.get("name") or "")))
+                continue
+            size = len(json.dumps(schema, ensure_ascii=False, default=str))
+            if chars + size > MAX_DIRECT_SCHEMA_CHARS:
+                dropped.append((name, str(schema.get("name") or "")))
+                continue
+            admitted[name].append(schema)
+            tools += 1
+            chars += size
+    return admitted, dropped
+
+
 # How long a turn waits for one relay session before giving up on opening it
 # ahead of time. Opening early only buys the first call's handshake, so a
 # session that is not ready quickly is worth less than the delay it adds in
@@ -89,6 +134,7 @@ def direct_tool_name(server: str, tool: str) -> str:
 # like one that refused to open: warned about, left closed, and reopened per
 # call by the tools that need it.
 SESSION_OPEN_TIMEOUT_S = 5.0
+
 
 @dataclass
 class DirectMCPBinding:
@@ -191,9 +237,25 @@ async def prepare_direct_mcp_tools(
     )
     base = EGRESS_RELAY_LOOPBACK_URL.rstrip("/")
 
+    # Only a granted server can be reached, so only a granted server may spend
+    # the budget: one that lost its grant would otherwise displace tools from a
+    # healthy connection and then be skipped anyway, leaving the capacity spent
+    # on nothing.
+    grantable = {name: entry for name, entry in by_server.items() if grants.get(name)}
+    affordable, dropped = admit_within_budget(grantable)
+    if dropped:
+        logger.warning(
+            "[DIRECT_MCP] over the turn budget of %d tools / %d schema chars: "
+            "dropped %d tool(s): %s",
+            MAX_DIRECT_TOOLS,
+            MAX_DIRECT_SCHEMA_CHARS,
+            len(dropped),
+            ", ".join(f"{s}/{t}" for s, t in dropped[:20]),
+        )
+
     for server, entry in by_server.items():
         grant_id = grants.get(server)
-        schemas = entry.schemas
+        schemas = affordable.get(server) or ()
         if not grant_id or not schemas:
             continue
         client = Client(
