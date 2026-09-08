@@ -938,9 +938,7 @@
     "context": 1000000,
     "input_modalities": [
       "text",
-      "image",
-      "pdf",
-      "video"
+      "image"
     ],
     "reasoning": {
       "efforts": [
@@ -965,9 +963,7 @@
     "context": 1000000,
     "input_modalities": [
       "text",
-      "image",
-      "pdf",
-      "video"
+      "image"
     ],
     "reasoning": {
       "efforts": [
@@ -992,9 +988,7 @@
     "context": 1000000,
     "input_modalities": [
       "text",
-      "image",
-      "pdf",
-      "video"
+      "image"
     ],
     "reasoning": {
       "efforts": [
@@ -1020,9 +1014,7 @@
     "context": 1000000,
     "input_modalities": [
       "text",
-      "image",
-      "pdf",
-      "video"
+      "image"
     ],
     "reasoning": {
       "efforts": [
@@ -1047,9 +1039,7 @@
     "context": 1000000,
     "input_modalities": [
       "text",
-      "image",
-      "pdf",
-      "video"
+      "image"
     ],
     "reasoning": {
       "efforts": [
@@ -1074,9 +1064,7 @@
     "context": 1000000,
     "input_modalities": [
       "text",
-      "image",
-      "pdf",
-      "video"
+      "image"
     ],
     "reasoning": {
       "efforts": [

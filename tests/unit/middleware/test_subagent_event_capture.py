@@ -15,15 +15,27 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import base64
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import redis.exceptions as redis_exceptions
+from langchain_core.messages import ToolMessage
 
 from src.utils.cache import stream_append
 
+from ptc_agent.agent.middleware.background_subagent.event_capture import (
+    _tool_message_to_event_data,
+)
 from ptc_agent.agent.middleware.background_subagent.registry import (
     BackgroundTaskRegistry,
+)
+from ptc_agent.agent.middleware.file_operations.multimodal import (
+    attach_to_tool_result,
+    build_content_blocks,
+)
+from ptc_agent.agent.middleware.file_operations.multimodal_strip import (
+    strip_unsupported_content_blocks,
 )
 
 
@@ -1029,3 +1041,48 @@ async def test_an_ordinary_subagent_refreshes_nobody() -> None:
     await registry.append_captured_event(task.tool_call_id, _text_event(0))
 
     assert other.last_updated_at == 0.0
+
+
+def _attachment_tool_message(payload: bytes) -> ToolMessage:
+    """A visual ``Read`` result, assembled by the two functions that ship it."""
+    blocks = build_content_blocks(
+        base64.b64encode(payload).decode(), "chart.png", "image/png", None
+    )
+    return attach_to_tool_result(
+        ToolMessage(content="Loading image: chart.png", tool_call_id="tc1"), blocks
+    )
+
+
+def test_an_attachment_is_captured_as_its_acknowledgment() -> None:
+    """The bytes stay out of the captured event; the client gets the ack.
+
+    A subagent's ``Read`` result reaches this middleware with the attachment on
+    it, so stringifying the content would fill the whole 256 KiB budget with
+    base64 in place of the one line the user is meant to see.
+    """
+    msg = _attachment_tool_message(b"\x89PNG" + b"\x00" * 300_000)
+
+    data = _tool_message_to_event_data(msg, "task:x")
+
+    assert data["content"] == "Loading image: chart.png\n[Viewing image]"
+    assert "truncated" not in data["content"]
+
+
+def test_a_stripped_attachment_is_captured_as_its_placeholder() -> None:
+    """The strip runs inside the subagent too, and leaves an all-text list."""
+    stripped = strip_unsupported_content_blocks(
+        [_attachment_tool_message(b"\x89PNG")], has_image=False, has_pdf=False
+    )[0]
+
+    data = _tool_message_to_event_data(stripped, "task:x")
+
+    assert "not visible to the current model" in data["content"]
+
+
+def test_an_unrecognized_block_list_still_reaches_the_client() -> None:
+    """``str`` stays the fallback, so an extractor miss cannot blank a result."""
+    msg = ToolMessage(content=[{"rows": [1, 2]}], tool_call_id="tc1")
+
+    data = _tool_message_to_event_data(msg, "task:x")
+
+    assert data["content"] == "[{'rows': [1, 2]}]"

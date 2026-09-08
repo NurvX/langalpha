@@ -36,6 +36,7 @@ from ptc_agent.agent.middleware import (
     PlanModeMiddleware,
     SubagentEventCaptureMiddleware,
     MultimodalMiddleware,
+    MultimodalStripMiddleware,
     create_plan_mode_interrupt_config,
     CodeValidationMiddleware,
     CreditGateMiddleware,
@@ -788,21 +789,26 @@ class PTCAgent:
 
         model_resilience = [build_model_resilience_middleware(self.config, turn)]
 
-        # Inside model_resilience so it strips against the post-fallback model:
-        # a vision primary falling back to a text-only candidate would otherwise
-        # replay image/PDF blocks and earn the 400 the fallback exists to avoid.
-        # In both stacks because a subagent on its own model needs the same
-        # protection; it reads that model off each request, so the two stacks
-        # can share one instance rather than needing one apiece.
-        multimodal = (
-            MultimodalMiddleware(
-                sandbox=sandbox,
-                model_name=self.config.llm.name,
-                custom_modalities=self.config.input_modalities,
-            )
-            if self.config.llm
-            else None
+        # The strip goes inside model_resilience so it judges the post-fallback
+        # model: a vision primary falling back to a text-only candidate would
+        # otherwise replay image/PDF blocks and earn the 400 the fallback exists
+        # to avoid. Both halves go in both stacks because a subagent on its own
+        # model needs the same treatment; the strip reads that model off each
+        # request, so the two stacks share one instance rather than one apiece.
+        #
+        # Unconditional, unlike the read half's old combined form, because the
+        # two halves are no longer switched on together. ``model_name`` only
+        # decides whether the user's per-model override applies; the target is
+        # read off each request, and an unresolvable one is judged text-only. So
+        # a config with no llm gets a strip that removes everything rather than
+        # no strip at all, which is the safe direction: without it the read half
+        # would keep attaching blocks that nothing removes.
+        multimodal_strip = MultimodalStripMiddleware(
+            model_name=self.config.llm.name if self.config.llm else None,
+            custom_modalities=self.config.input_modalities,
+            can_extract=True,
         )
+        multimodal_read = MultimodalMiddleware(sandbox=sandbox)
 
         # Placed before (outer to) model_resilience so sandbox images are
         # captured once, on the final response only — not per retry attempt.
@@ -822,7 +828,8 @@ class PTCAgent:
                 image_capture,
                 compaction,
                 *model_resilience,
-                multimodal,
+                multimodal_strip,
+                multimodal_read,
                 AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
                 OpenAIPromptCachingMiddleware(),
                 EmptyToolCallRetryMiddleware(),
@@ -924,7 +931,8 @@ class PTCAgent:
                 image_capture,
                 compaction,
                 *model_resilience,
-                multimodal,
+                multimodal_strip,
+                multimodal_read,
                 AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
                 OpenAIPromptCachingMiddleware(),
                 # Market watch (main agent only): appends the ephemeral
