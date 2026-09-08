@@ -796,9 +796,10 @@ async def set_enabled(
                 workspace_id, name, source="builtin", enabled=False, config=None
             )
         if not is_flash:
+            await _sync_sandbox_grants_now(workspace_id, user_id)
             _schedule_proactive_apply(workspace_id, user_id)
         else:
-            _schedule_flash_grant_sync(workspace_id, user_id)
+            await _sync_flash_grants_now(workspace_id, user_id)
         return {"name": name, "enabled": body.enabled}
 
     ref = await classify_server_name(workspace_id, user_id, name)
@@ -823,9 +824,10 @@ async def set_enabled(
             # A disable-marker whose built-in no longer exists: nothing to toggle.
             raise HTTPException(status_code=404, detail=_NOT_FOUND)
     if not is_flash:
+        await _sync_sandbox_grants_now(workspace_id, user_id)
         _schedule_proactive_apply(workspace_id, user_id)
     else:
-        _schedule_flash_grant_sync(workspace_id, user_id)
+        await _sync_flash_grants_now(workspace_id, user_id)
     return {"name": name, "enabled": body.enabled}
 
 
@@ -980,14 +982,22 @@ def _schedule_proactive_apply(workspace_id: str, user_id: str) -> None:
     task.add_done_callback(_cleanup)
 
 
-def _schedule_flash_grant_sync(workspace_id: str, user_id: str) -> None:
-    """Retire a flash workspace's relay grants the moment its scope narrows.
+async def _sync_flash_grants_now(workspace_id: str, user_id: str) -> None:
+    """Bring a flash workspace's relay grants to its new scope before replying.
 
     The flash workspace has no sandbox, so ``_schedule_proactive_apply`` has
     nothing to warm and is skipped for it. Its grants still need retiring: a
-    Flash turn already in flight holds the set it bound with, and would keep
-    reaching a server the user has just taken out of scope until the turn ends.
-    Fire-and-forget on the same terms as its sibling.
+    Flash turn already in flight holds the set it bound with, and the per-call
+    ``DirectMCPBinding.check`` rereads connection status and consent but not
+    workspace scope, so the grant is the *only* thing standing between a
+    narrowed scope and a turn that keeps reaching the vendor.
+
+    Awaited rather than scheduled, unlike its sibling: that sibling warms a
+    sandbox and is safe to be late, while this one enforces a revocation, and a
+    200 on the toggle has to mean the revocation happened. It costs a few local
+    reads (``resolve_mcp_config`` reads rows, it does not dial anyone), and a
+    failure surfaces on the request that caused it instead of in a task nobody
+    is waiting on.
     """
     from src.server.app import setup
 
@@ -995,12 +1005,62 @@ def _schedule_flash_grant_sync(workspace_id: str, user_id: str) -> None:
     if base_config is None:
         return
     from src.server.services.egress.flash_binding import sync_flash_grants
+    from src.server.services.egress.grant_resync import GrantSyncSuperseded
 
-    task = asyncio.create_task(
-        sync_flash_grants(base_config, user_id=user_id, workspace_id=workspace_id)
+    try:
+        await sync_flash_grants(
+            base_config, user_id=user_id, workspace_id=workspace_id
+        )
+    except GrantSyncSuperseded:
+        # 503 rather than 500: nothing is broken, a burst of concurrent config
+        # writes simply kept winning the version race. The row change itself
+        # committed already, and repeating the same toggle runs this sync again
+        # (it is driven unconditionally, not off a change in value), so a retry
+        # is what closes it.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not retire this workspace's connector grants while other "
+                "changes were saving. Please try again."
+            ),
+        ) from None
+
+
+async def _sync_sandbox_grants_now(workspace_id: str, user_id: str) -> None:
+    """Retire a sandbox workspace's out-of-scope relay grants before replying.
+
+    ``_schedule_proactive_apply`` converges these too, but it sleeps first and
+    swallows its own failures, so between the 200 and that task a turn already
+    in flight still holds an active grant for a server the workspace no longer
+    resolves. The relay authorizes against the grant row on every request, so
+    retiring the row here is what actually stops the next call; the scheduled
+    apply still runs, because it is what pushes the new credential file into
+    the sandbox.
+
+    The kept set is every OAuth-connected server the workspace resolves, which
+    is the set ``sync_egress_relay`` keeps. Narrowing it to the directly bound
+    ones, as the flash path does, would retire the grants the sandbox wrappers
+    dial through.
+    """
+    from src.server.app import setup
+
+    base_config = setup.agent_config
+    if base_config is None:
+        return
+    from src.server.services.egress.grant_resync import sync_grants_until_current
+
+    # Unlike the flash sibling this one does not raise when the retries are
+    # exhausted: ``_schedule_proactive_apply`` runs behind it and re-resolves,
+    # so the retirement has somewhere else to land, and failing the toggle
+    # would be the harsher answer to a race that fixes itself.
+    await sync_grants_until_current(
+        base_config,
+        user_id=user_id,
+        workspace_id=workspace_id,
+        connection_ids=lambda resolved: [
+            s.oauth_connection_id for s in resolved.servers if s.oauth_connection_id
+        ],
     )
-    _proactive_apply_tasks.add(task)
-    task.add_done_callback(_proactive_apply_tasks.discard)
 
 
 def _schedule_session_mcp_refresh(workspace_id: str, user_id: str) -> None:

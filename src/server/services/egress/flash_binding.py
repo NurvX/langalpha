@@ -47,15 +47,30 @@ async def sync_flash_grants(
     Every turn syncs on its way in, which retires a grant before the *next*
     turn. A turn already running holds the grant it was bound with, so a scope
     change made mid-turn keeps reaching the vendor until that turn ends unless
-    the change lands here as well.
+    the change lands here as well. Nothing else converges this workspace, which
+    is why the sync retries rather than accepting a superseded answer: there is
+    no scheduled apply behind it to pick the retirement back up.
     """
-    resolved = await resolve_mcp_config(base_config, user_id, workspace_id)
-    await sync_oauth_grants(
+    from src.server.services.egress.grant_resync import (
+        GrantSyncSuperseded,
+        sync_grants_until_current,
+    )
+
+    wrote = await sync_grants_until_current(
+        base_config,
         user_id=user_id,
         workspace_id=workspace_id,
-        connection_ids=[s.oauth_connection_id for s in _direct_servers(resolved)],
-        config_version=resolved.version,
+        connection_ids=lambda resolved: [
+            s.oauth_connection_id for s in _direct_servers(resolved)
+        ],
     )
+    if not wrote:
+        # Raised rather than logged because the caller's 200 is the claim that
+        # the revocation happened, and here it would be false: no scheduled
+        # apply stands behind this path, so an out-of-scope grant that survives
+        # this call survives until the next turn binds. The toggle is safe to
+        # repeat, and repeating it is what the caller should do.
+        raise GrantSyncSuperseded(workspace_id)
 
 
 async def bind_flash_direct_tools(
