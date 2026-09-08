@@ -144,14 +144,16 @@ describe('the tool access section', () => {
 
   // The override is written whole: the row's existing overrides travel with it,
   // so setting one tool never silently drops another's.
-  it('writes one tool override alongside the ones already stored', async () => {
+  // Only the tool the user touched travels. Carrying the rest of the map is
+  // what let a second tab's edit be written back to the version this one read.
+  it('writes only the tool it changed, never the stored map', async () => {
     await renderDetail();
     fireEvent.change(bindingSelect('sim_trade_account_list'), { target: { value: 'both' } });
 
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith({
         name: 'moomoo',
-        body: { tool_binding: { existing_tool: 'direct', sim_trade_account_list: 'both' } },
+        body: { tool_binding_set: { sim_trade_account_list: 'both' } },
       }),
     );
   });
@@ -196,50 +198,24 @@ describe('the tool access section', () => {
     }
   });
 
-  it('resets an overridden tool by removing its key, not by writing the default', async () => {
+  it('resets an overridden tool by naming it, not by writing the default', async () => {
     await renderDetail();
     fireEvent.click(
       screen.getByRole('button', { name: 'Reset existing_tool to the row default' }),
     );
 
     await waitFor(() =>
-      expect(patch).toHaveBeenCalledWith({ name: 'moomoo', body: { tool_binding: {} } }),
+      expect(patch).toHaveBeenCalledWith({
+        name: 'moomoo',
+        body: { tool_binding_unset: ['existing_tool'] },
+      }),
     );
   });
 
-  // The server reads overrides folded (NFKC, trim, casefold), so a stored key
-  // may be a differently cased or padded spelling of the discovered name. The
-  // controls act on every spelling that folds to the tool, or a reset leaves
-  // the override standing and a write adds a colliding key the server refuses.
-  describe('a stored key that only folds to the discovered name', () => {
-    const FOLDED = { ' EXISTING_TOOL ': 'direct', sim_trade_account_list: 'both' } as const;
-
-    it('resets by removing every stored spelling of the tool', async () => {
-      await renderDetail({ tool_binding: { ...FOLDED } });
-      fireEvent.click(
-        screen.getByRole('button', { name: 'Reset existing_tool to the row default' }),
-      );
-
-      await waitFor(() =>
-        expect(patch).toHaveBeenCalledWith({
-          name: 'moomoo',
-          body: { tool_binding: { sim_trade_account_list: 'both' } },
-        }),
-      );
-    });
-
-    it('replaces every stored spelling with one entry when the binding changes', async () => {
-      await renderDetail({ tool_binding: { ...FOLDED } });
-      fireEvent.change(bindingSelect('existing_tool'), { target: { value: 'ptc' } });
-
-      await waitFor(() =>
-        expect(patch).toHaveBeenCalledWith({
-          name: 'moomoo',
-          body: { tool_binding: { sim_trade_account_list: 'both', existing_tool: 'ptc' } },
-        }),
-      );
-    });
-  });
+  // A stored key may be a differently cased or padded spelling of the
+  // discovered name. Reconciling that is the server's job now: it reads the
+  // map folded, and the delta names the tool rather than carrying the map, so
+  // the page has no spellings to reconcile. Covered by ``merge_overrides``.
 
   it('shows the server refusal in the words the server sent', async () => {
     patch.mockRejectedValueOnce({

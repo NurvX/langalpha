@@ -80,11 +80,29 @@ export type McpBindingPreset = 'ptc_only';
 /** Precedence, highest first: override > preset > config > group > default. */
 export type McpBindingSource = 'override' | 'preset' | 'group' | 'default' | 'policy';
 
-/** Partial: only the fields present change. `tool_binding` replaces the map.
+/** Partial: only the fields present change. Bindings are sent per tool, not
+ * as the whole map, so two tabs editing different tools cannot overwrite
+ * each other.
  * A `binding_preset` of `null` clears it back to the group default. */
 export interface McpServerBindingPatch {
-  tool_binding?: Record<string, McpToolBinding>;
+  tool_binding_set?: Record<string, McpToolBinding>;
+  tool_binding_unset?: string[];
   binding_preset?: McpBindingPreset | null;
+}
+
+/** The server's merge, mirrored for the optimistic view: a delta replaces
+ * every stored key that folds to the name it addresses. */
+export function mergeToolBinding(
+  stored: Record<string, McpToolBinding>,
+  patch: McpServerBindingPatch,
+): Record<string, McpToolBinding> {
+  const touched = new Set(
+    [...Object.keys(patch.tool_binding_set ?? {}), ...(patch.tool_binding_unset ?? [])].map(
+      foldToolName,
+    ),
+  );
+  const kept = Object.entries(stored).filter(([name]) => !touched.has(foldToolName(name)));
+  return { ...Object.fromEntries(kept), ...(patch.tool_binding_set ?? {}) };
 }
 
 export type McpStatus =

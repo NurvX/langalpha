@@ -1,7 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { EnabledToggle } from '@/pages/ChatAgent/components/mcp/McpPrimitives';
 import { Select } from '@/components/ui/select';
-import { foldToolName } from '@/pages/ChatAgent/utils/directTools';
 import type {
   CatalogServer,
   McpServerBindingPatch,
@@ -111,24 +110,16 @@ export function ToolBindingControl({
   const pinned = tool.binding_source === 'policy';
   const allowed = tool.allowed;
   const permitted = (b: McpToolBinding) => allowed == null || allowed.includes(b);
-  const overrides = catalog.tool_binding ?? {};
   const value = tool.binding ?? 'ptc';
 
-  // The stored key may be another spelling of the discovered name: the server
-  // reads overrides folded, so the one it honours is whichever key folds to
-  // this tool. Drop every such key before writing, or a reset leaves the
-  // override in force and a write adds a second key the server refuses.
-  function withoutThisTool(): Record<string, McpToolBinding> {
-    const folded = foldToolName(tool.name);
-    return Object.fromEntries(
-      Object.entries(overrides).filter(([name]) => foldToolName(name) !== folded),
-    );
-  }
+  // Only this tool travels. A stored key that is another spelling of the same
+  // name is dropped server-side, which reads the map folded anyway, so the
+  // page never has to carry the map to write one switch.
   function write(next: McpToolBinding) {
-    onPatch({ tool_binding: { ...withoutThisTool(), [tool.name]: next } });
+    onPatch({ tool_binding_set: { [tool.name]: next } });
   }
   function reset() {
-    onPatch({ tool_binding: withoutThisTool() });
+    onPatch({ tool_binding_unset: [tool.name] });
   }
 
   return (

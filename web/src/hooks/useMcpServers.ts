@@ -23,6 +23,7 @@ import {
   deleteMcpCatalogServer,
   setMcpCatalogServerEnabled,
   setMcpCatalogServerBinding,
+  mergeToolBinding,
   importMcpCatalogServers,
   disconnectMcpOauth,
   refreshMcpOauthSchemas,
@@ -517,7 +518,10 @@ export function useSetMcpServerBinding() {
             s.name === name
               ? {
                   ...s,
-                  ...(body.tool_binding !== undefined && { tool_binding: body.tool_binding }),
+                  ...((body.tool_binding_set !== undefined ||
+                    body.tool_binding_unset !== undefined) && {
+                    tool_binding: mergeToolBinding(s.tool_binding ?? {}, body),
+                  }),
                   ...(body.binding_preset !== undefined && {
                     binding_preset: body.binding_preset,
                   }),

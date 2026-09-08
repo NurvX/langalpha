@@ -330,7 +330,11 @@ class BindingInput(BaseModel):
     and only the ones sent are written, so the page can flip one switch
     without re-sending the map."""
 
-    tool_binding: Optional[dict[str, Literal["ptc", "direct", "both"]]] = None
+    # A delta, not the map: a client that re-sends the whole map writes back
+    # whatever it last read, so a second tab editing another tool of the same
+    # row loses its edit to whichever save lands second.
+    tool_binding_set: Optional[dict[str, Literal["ptc", "direct", "both"]]] = None
+    tool_binding_unset: Optional[list[str]] = None
     # ``null`` clears the preset, which is how the row switch turns off: a
     # cleared row falls back to each group's own default. What separates that
     # from "not sent" is ``model_fields_set``, which the handler reads rather
@@ -347,7 +351,18 @@ class BindingInput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_map(self) -> "BindingInput":
-        for tool in self.tool_binding or {}:
+        # A server publishes at most ``MAX_TOOLS_PER_SERVER`` tools, so a
+        # request naming more than that is naming tools that do not exist. The
+        # merged map is bounded in the handler as well: this body is a delta,
+        # so a cap here alone would still let repeated writes accumulate one.
+        from src.server.services.mcp_discovery import MAX_TOOLS_PER_SERVER
+
+        names = [*(self.tool_binding_set or {}), *(self.tool_binding_unset or [])]
+        if len(names) > MAX_TOOLS_PER_SERVER:
+            raise ValueError(
+                f"a binding change may name at most {MAX_TOOLS_PER_SERVER} tools"
+            )
+        for tool in names:
             if not tool or len(tool) > 128:
                 raise ValueError("tool names must be 1-128 characters")
         return self

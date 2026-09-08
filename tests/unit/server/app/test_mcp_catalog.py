@@ -1451,7 +1451,7 @@ async def test_binding_refuses_a_live_order_override_off_the_direct_path(client,
     async with _binding_patches(row=row) as update:
         resp = await client.patch(
             "/api/v1/mcp/servers/moomoo/binding",
-            json={"tool_binding": {"trading_order_place": asked}},
+            json={"tool_binding_set": {"trading_order_place": asked}},
         )
     assert resp.status_code == 422
     assert "direct tool call" in resp.json()["detail"]
@@ -1464,7 +1464,7 @@ async def test_binding_accepts_a_live_order_override_that_says_direct(client):
     async with _binding_patches(row=row) as update:
         resp = await client.patch(
             "/api/v1/mcp/servers/moomoo/binding",
-            json={"tool_binding": {"trading_order_place": "direct"}},
+            json={"tool_binding_set": {"trading_order_place": "direct"}},
         )
     assert resp.status_code == 200, resp.json()
     assert _written(update) == {"tool_binding": {"trading_order_place": "direct"}}
@@ -1493,9 +1493,9 @@ async def test_binding_a_retained_disallowed_entry_does_not_lock_the_row(client)
 
 
 @pytest.mark.asyncio
-async def test_binding_resubmitting_a_retained_entry_unchanged_heals_it(client):
-    """The page re-sends the whole map to change one tool; the retained entry
-    rides along unchanged and is stripped, while the edit it wanted lands."""
+async def test_binding_an_edit_heals_a_retained_entry_it_never_mentions(client):
+    """A delta naming one tool still heals the row: the clamped entry the
+    request never mentions is stripped, and the edit it asked for lands."""
     row = _row(
         "moomoo",
         url=MOOMOO_URL,
@@ -1504,15 +1504,95 @@ async def test_binding_resubmitting_a_retained_entry_unchanged_heals_it(client):
     async with _binding_patches(row=row) as update:
         resp = await client.patch(
             "/api/v1/mcp/servers/moomoo/binding",
-            json={
-                "tool_binding": {
-                    "trading_order_place": "ptc",
-                    "quote_stock_quote": "both",
-                }
-            },
+            json={"tool_binding_set": {"quote_stock_quote": "both"}},
         )
     assert resp.status_code == 200, resp.json()
     assert _written(update)["tool_binding"] == {"quote_stock_quote": "both"}
+
+
+@pytest.mark.asyncio
+async def test_binding_an_edit_keeps_another_tool_a_concurrent_write_added(client):
+    """Two tabs, two tools. The second write is judged against the row as it
+    stands when the lock is taken, so the first tab's edit survives it. The
+    body carries no map, so there is nothing stale for it to write back."""
+    # The row already carries the other tab's edit by the time this one reads.
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding={"quote_stock_quote": "direct"})
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"tool_binding_set": {"quote_kline": "both"}},
+        )
+    assert resp.status_code == 200, resp.json()
+    assert _written(update)["tool_binding"] == {
+        "quote_stock_quote": "direct",
+        "quote_kline": "both",
+    }
+
+
+@pytest.mark.asyncio
+async def test_binding_refuses_a_request_naming_more_tools_than_a_server_has(client):
+    from src.server.services.mcp_discovery import MAX_TOOLS_PER_SERVER
+
+    row = _row("moomoo", url=MOOMOO_URL)
+    async with _binding_patches(row=row):
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={
+                "tool_binding_set": {
+                    f"quote_t{i}": "ptc" for i in range(MAX_TOOLS_PER_SERVER + 1)
+                }
+            },
+        )
+    assert resp.status_code == 422, resp.json()
+
+
+@pytest.mark.asyncio
+async def test_binding_refuses_a_delta_that_grows_the_row_past_the_cap(client):
+    """The body is a delta, so the per-request cap alone bounds nothing: a run
+    of small writes would accumulate a map no server could ever match."""
+    from src.server.services.mcp_discovery import MAX_TOOLS_PER_SERVER
+
+    stored = {f"quote_s{i}": "ptc" for i in range(MAX_TOOLS_PER_SERVER)}
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding=stored)
+    async with _binding_patches(row=row):
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"tool_binding_set": {"quote_one_more": "ptc"}},
+        )
+    assert resp.status_code == 422, resp.json()
+
+
+@pytest.mark.asyncio
+async def test_binding_still_lets_an_oversized_row_be_edited_down(client):
+    """The cap is judged on growth, so a row already over the line is not
+    frozen out of the write that would shrink it."""
+    from src.server.services.mcp_discovery import MAX_TOOLS_PER_SERVER
+
+    stored = {f"quote_s{i}": "ptc" for i in range(MAX_TOOLS_PER_SERVER + 5)}
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding=stored)
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"tool_binding_unset": ["quote_s0"]},
+        )
+    assert resp.status_code == 200, resp.json()
+    assert "quote_s0" not in _written(update)["tool_binding"]
+
+
+@pytest.mark.asyncio
+async def test_binding_unset_clears_one_tool_and_leaves_the_rest(client):
+    row = _row(
+        "moomoo",
+        url=MOOMOO_URL,
+        tool_binding={"quote_stock_quote": "direct", "quote_kline": "both"},
+    )
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"tool_binding_unset": ["quote_stock_quote"]},
+        )
+    assert resp.status_code == 200, resp.json()
+    assert _written(update)["tool_binding"] == {"quote_kline": "both"}
 
 
 @pytest.mark.asyncio
@@ -1603,7 +1683,7 @@ async def test_binding_validates_against_the_row_when_the_connection_is_dead(
     async with _binding_patches(row=row, connection=connection):
         resp = await client.patch(
             "/api/v1/mcp/servers/my_broker/binding",
-            json={"tool_binding": {"trading_order_place": "ptc"}},
+            json={"tool_binding_set": {"trading_order_place": "ptc"}},
         )
     assert resp.status_code == expected, resp.json()
 
@@ -1623,7 +1703,7 @@ async def test_binding_a_live_connection_outranks_the_row_url(client):
     async with _binding_patches(row=row, connection=connection):
         resp = await client.patch(
             "/api/v1/mcp/servers/my_broker/binding",
-            json={"tool_binding": {"place_equity_order": "ptc"}},
+            json={"tool_binding_set": {"place_equity_order": "ptc"}},
         )
     assert resp.status_code == 422, resp.json()
 

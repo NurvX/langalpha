@@ -589,13 +589,19 @@ async def set_binding(
     force are rewritten in the same breath as the row, the way a consent
     change is, because the relay reads the grant and the model is already
     running on the previous answer.
+
+    The body names the tools it changes rather than carrying the map. Merging
+    here, inside the lock that already serializes writers, is what keeps two
+    tabs editing different tools of one row from overwriting each other.
     """
     from src.server.database.egress_grants import (
         apply_consent_to_active_grants,
         lock_user_egress_state,
     )
     from src.server.services.brokerage_capabilities import vendor_for_url
+    from src.server.services.mcp_discovery import MAX_TOOLS_PER_SERVER
     from src.server.services.tool_binding import (
+        merge_overrides,
         strip_disallowed_overrides,
         validate_overrides,
     )
@@ -609,11 +615,10 @@ async def set_binding(
             detail="order_approval is not a setting that can be changed yet",
         )
     updates: dict = {}
-    if body.tool_binding is not None:
-        updates["tool_binding"] = dict(body.tool_binding)
+    delta = body.tool_binding_set is not None or body.tool_binding_unset is not None
     if "binding_preset" in body.model_fields_set:
         updates["binding_preset"] = body.binding_preset
-    if not updates:
+    if not delta and not updates:
         raise HTTPException(status_code=422, detail="nothing to change")
 
     # Only a servable connection's address says which vendor's rules apply: a
@@ -632,6 +637,9 @@ async def set_binding(
         if not row:
             raise HTTPException(status_code=404, detail="MCP server not found")
         stored = row.get("tool_binding") or {}
+        # A stdio row has no address for the relay, so no tool on it can take
+        # the direct path however the request or its group is worded.
+        relayable = row.get("transport") != "stdio"
         vendor = vendor_for_url(
             connection.server_url
             if connection is not None and connection.status in SERVABLE
@@ -639,16 +647,39 @@ async def set_binding(
         )
         # Validate what this request asks for. A path the tool's group does
         # not allow is refused rather than stored and then overruled at
-        # resolve time.
-        if "tool_binding" in updates:
-            reason = validate_overrides(vendor, updates["tool_binding"], stored=stored)
+        # resolve time. The delta is exactly this request's doing, so nothing
+        # a previous write left in the row is judged again here.
+        requested = dict(body.tool_binding_set or {})
+        if delta:
+            reason = validate_overrides(
+                vendor, requested, stored=stored, relayable=relayable
+            )
             if reason:
                 raise HTTPException(status_code=422, detail=reason)
+        merged = (
+            merge_overrides(stored, set_=requested, unset=body.tool_binding_unset)
+            if delta
+            else stored
+        )
         # Store the map with anything the clamp overrules stripped, so an
         # entry that got in before the clamp did leaves on the next write
         # instead of sitting under the resolver's ``policy`` answer forever.
-        healed = strip_disallowed_overrides(vendor, updates.get("tool_binding", stored))
-        if "tool_binding" in updates or healed != stored:
+        healed = strip_disallowed_overrides(vendor, merged, relayable)
+        # The stored map is what every later resolve expands and what the grant
+        # rows carry, and an override for a tool the server never published is
+        # kept rather than dropped, because a row can be pointed at a server
+        # whose tool list arrives later. Bounding it here is what stops a run of
+        # deltas from growing one no server could ever match. Judged after the
+        # merge and only when this request grew the map, so a row already over
+        # the line can still be edited down.
+        if len(healed) > MAX_TOOLS_PER_SERVER and len(healed) > len(stored):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"a row may hold at most {MAX_TOOLS_PER_SERVER} tool bindings"
+                ),
+            )
+        if delta or healed != stored:
             updates["tool_binding"] = healed
 
         updated = await update_catalog_server(user_id, name, updates=updates, conn=db)
