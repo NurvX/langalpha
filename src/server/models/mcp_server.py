@@ -325,6 +325,49 @@ class McpServerInput(BaseModel):
         return fields
 
 
+class BindingInput(BaseModel):
+    """PATCH body for a row's tool-binding settings. Every field is optional
+    and only the ones sent are written, so the page can flip one switch
+    without re-sending the map."""
+
+    # A delta, not the map: a client that re-sends the whole map writes back
+    # whatever it last read, so a second tab editing another tool of the same
+    # row loses its edit to whichever save lands second.
+    tool_binding_set: Optional[dict[str, Literal["ptc", "direct", "both"]]] = None
+    tool_binding_unset: Optional[list[str]] = None
+    # ``null`` clears the preset, which is how the row switch turns off: a
+    # cleared row falls back to each group's own default. What separates that
+    # from "not sent" is ``model_fields_set``, which the handler reads rather
+    # than a sentinel.
+    binding_preset: Optional[Literal["ptc_only"]] = None
+    # Echoed back from the column, but nothing reads it to decide a binding:
+    # live orders reach the model as tool calls, but the per-call stop this
+    # would arm is not built yet. The handler refuses a value here with a 422
+    # until governed order execution gives it something to mean; the field
+    # stays so the shape of the body does not change when that lands.
+    order_approval: Optional[bool] = None
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _validate_map(self) -> "BindingInput":
+        # A server publishes at most ``MAX_TOOLS_PER_SERVER`` tools, so a
+        # request naming more than that is naming tools that do not exist. The
+        # merged map is bounded in the handler as well: this body is a delta,
+        # so a cap here alone would still let repeated writes accumulate one.
+        from src.server.services.mcp_discovery import MAX_TOOLS_PER_SERVER
+
+        names = [*(self.tool_binding_set or {}), *(self.tool_binding_unset or [])]
+        if len(names) > MAX_TOOLS_PER_SERVER:
+            raise ValueError(
+                f"a binding change may name at most {MAX_TOOLS_PER_SERVER} tools"
+            )
+        for tool in names:
+            if not tool or len(tool) > 128:
+                raise ValueError("tool names must be 1-128 characters")
+        return self
+
+
 class EnabledInput(BaseModel):
     """PATCH body for the enabled toggle."""
 
@@ -626,6 +669,11 @@ class CatalogServer(BaseModel):
     # for everyone instead of every settings-page render telling a third party
     # who is looking, which is the same reason the brokerage marks are proxied.
     icon_url: Optional[str] = None
+    # Whether any tool on this row resolves to a path that binds directly, and
+    # so whether the row can reach Flash at all: Flash has no sandbox, and a
+    # tool it cannot bind directly it cannot run. Computed from the snapshot
+    # the list already loaded, never a per-row query.
+    has_direct_tools: bool = False
     command: Optional[str] = None
     args: list[str] = Field(default_factory=list)
     url: Optional[str] = None
@@ -642,6 +690,15 @@ class CatalogServer(BaseModel):
     instruction: str = ""
     tool_exposure_mode: str = "summary"
     discovery_uses_secrets: bool = False
+    # The row's say in which path each tool takes to the model: the map is the
+    # per-tool override, the preset a row-level shortcut. Neither can move a
+    # tool off the paths its group allows; a live-order tool is a tool call
+    # and nothing else. The effective binding per tool, and the paths it may
+    # take, are on the tools endpoint, which sees the vendor's list.
+    # ``order_approval`` is stored only; see ``BindingInput``.
+    tool_binding: dict[str, str] = Field(default_factory=dict)
+    binding_preset: Optional[str] = None
+    order_approval: bool = True
     # Non-blocking policy nudges (isolation etc.) — populated on create/update
     # responses only, never stored.
     warnings: Optional[list[str]] = None
@@ -803,6 +860,7 @@ def catalog_row_to_response(
     remembered_capabilities: list[str] | None = None,
     tool_count: int | None = None,
     icon_url: str | None = None,
+    has_direct_tools: bool = False,
 ) -> CatalogServer:
     """Shape a DB catalog row for the owner-scoped API.
 
@@ -819,6 +877,7 @@ def catalog_row_to_response(
         remembered_capabilities=remembered_capabilities,
         tool_count=tool_count,
         icon_url=icon_url,
+        has_direct_tools=has_direct_tools,
         command=row.get("command"),
         args=row.get("args") or [],
         url=row.get("url"),
@@ -830,6 +889,9 @@ def catalog_row_to_response(
         instruction=row.get("instruction") or "",
         tool_exposure_mode=row.get("tool_exposure_mode") or "summary",
         discovery_uses_secrets=bool(row.get("discovery_uses_secrets", False)),
+        tool_binding=dict(row.get("tool_binding") or {}),
+        binding_preset=row.get("binding_preset"),
+        order_approval=bool(row.get("order_approval", True)),
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
         # Indexed, not .get(): the plugin LEFT JOIN is part of every catalog

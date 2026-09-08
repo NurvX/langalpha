@@ -99,14 +99,17 @@ class _Cursor:
             # as an unpacking error here.
             (
                 _user_id, workspace_id, kind,
-                policy_ids, denylists, allowlists, policy_required,
+                policy_ids, denylists, allowlists, policy_required, direct_only,
                 connection_ids, owner, *rest,
             ) = params
             servable = rest[0] if rest else None
             policy = dict(
                 zip(
                     policy_ids,
-                    zip(denylists, allowlists, policy_required, strict=True),
+                    zip(
+                        denylists, allowlists, policy_required, direct_only,
+                        strict=True,
+                    ),
                 )
             )
             self._rows = []
@@ -131,7 +134,8 @@ class _Cursor:
                     row["tool_denylist"],
                     row["tool_allowlist"],
                     row["policy_required"],
-                ) = policy.get(connection_id, (None, None, False))
+                    row["tool_direct_only"],
+                ) = policy.get(connection_id, (None, None, False, None))
                 self._rows.append(
                     {"connection_id": connection_id, "grant_id": row["grant_id"]}
                 )
@@ -517,6 +521,47 @@ class TestToolPolicy:
         assert "trading_order_place" not in permitted
 
     @pytest.mark.asyncio
+    async def test_the_direct_only_set_is_the_granted_paper_trading_tools(self, db):
+        """What the relay refuses a sandbox: the tools the model calls itself.
+
+        Derived from the same consent as the denial, so declining the group
+        both denies the tools everywhere and leaves nothing to bind directly.
+        """
+        db.server_urls[CONNECTION_ID] = "https://mcp.moomoo.com/mcp"
+        db.capabilities[CONNECTION_ID] = ["market_data", "paper_trading"]
+        await _sync(OWNER, CONNECTION_ID)
+        row = db.grants[(WORKSPACE_ID, GRANT_KIND_OAUTH_MCP, CONNECTION_ID)]
+        direct = set(json.loads(row["tool_direct_only"]))
+        assert "sim_trade_input_order" in direct
+        assert "quote_stock_quote" not in direct
+
+    @pytest.mark.asyncio
+    async def test_a_granted_live_order_tool_is_refused_to_the_sandbox(self, db):
+        """Consenting to trading grants the tools as tool calls and nothing
+        else: the relay is told to refuse a sandbox caller every one of them,
+        so an order cannot be placed from inside an ``execute_code``."""
+        db.server_urls[CONNECTION_ID] = "https://mcp.moomoo.com/mcp"
+        db.capabilities[CONNECTION_ID] = ["market_data", "trading"]
+        await _sync(OWNER, CONNECTION_ID)
+        row = db.grants[(WORKSPACE_ID, GRANT_KIND_OAUTH_MCP, CONNECTION_ID)]
+        direct = set(json.loads(row["tool_direct_only"]))
+        assert {
+            "trading_order_place",
+            "trading_order_cancel",
+            "trading_order_confirm",
+            "trading_order_replace",
+        } <= direct
+        assert "quote_stock_quote" not in direct
+
+    @pytest.mark.asyncio
+    async def test_no_granted_direct_group_stores_no_direct_set(self, db):
+        db.server_urls[CONNECTION_ID] = "https://mcp.moomoo.com/mcp"
+        db.capabilities[CONNECTION_ID] = ["market_data"]
+        await _sync(OWNER, CONNECTION_ID)
+        row = db.grants[(WORKSPACE_ID, GRANT_KIND_OAUTH_MCP, CONNECTION_ID)]
+        assert row["tool_direct_only"] is None
+
+    @pytest.mark.asyncio
     async def test_a_brokerage_with_no_recorded_consent_denies_its_curation(self, db):
         """The one state that must fail closed rather than permissive."""
         db.server_urls[CONNECTION_ID] = "https://mcp.moomoo.com/mcp"
@@ -597,8 +642,11 @@ class TestApplyConsentToActiveGrants:
     async def _apply(self, server_url, capabilities):
         statements = await self._run(server_url, capabilities)
         update = next(s for s in statements if s[0].lstrip().startswith("UPDATE"))
-        denylist, allowlist, required, connection_id = update[1]
+        denylist, allowlist, required, direct_only, connection_id = update[1]
         assert connection_id == CONNECTION_ID
+        assert (direct_only is None) or set(json.loads(direct_only)) <= (
+            set(json.loads(allowlist)) if allowlist else set()
+        )
         assert "status = \'active\'" in update[0]
         # Both columns, for the reason the sync writes both: the other blue/green
         # colour authorizes off the allowlist, and a narrowing that never

@@ -3,7 +3,7 @@ Tests for src/server/handlers/chat/request_prep.py — chat request preparation.
 
 Covers:
 - classify_error: recoverable vs non-recoverable error classification
-- process_hitl_response: 4-tuple return, various HITL scenarios
+- process_hitl_response: 5-tuple return, various HITL scenarios
 - normalize_request_messages: dict conversion, multimodal, empty
 - init_tracking: returns (TokenTrackingManager, ToolUsageTracker)
 - apply_fetch_override: sets context vars
@@ -222,7 +222,7 @@ class TestProcessHitlResponse:
                 "interrupt_ids": ["int-1"],
             },
         ):
-            action, content, answers, ids = process_hitl_response(req)
+            action, content, answers, ids, decisions = process_hitl_response(req)
 
         assert action == "QUESTION_ANSWERED"
         assert ids == ["int-1"]
@@ -243,7 +243,7 @@ class TestProcessHitlResponse:
                 "interrupt_ids": ["int-1"],
             },
         ):
-            action, content, answers, ids = process_hitl_response(req)
+            action, content, answers, ids, decisions = process_hitl_response(req)
 
         assert action == "QUESTION_SKIPPED"
         assert answers["int-1"] is None
@@ -263,7 +263,7 @@ class TestProcessHitlResponse:
                 "interrupt_ids": ["int-1"],
             },
         ):
-            action, content, answers, ids = process_hitl_response(req)
+            action, content, answers, ids, decisions = process_hitl_response(req)
 
         assert answers["int-1"] == "ok"
 
@@ -284,7 +284,7 @@ class TestProcessHitlResponse:
                 "interrupt_ids": ["int-1", "int-2"],
             },
         ):
-            action, content, answers, ids = process_hitl_response(req)
+            action, content, answers, ids, decisions = process_hitl_response(req)
 
         assert action == "QUESTION_ANSWERED"
         assert answers["int-1"] == "answer 1"
@@ -305,10 +305,40 @@ class TestProcessHitlResponse:
                 "interrupt_ids": ["int-1"],
             },
         ):
-            action, content, answers, ids = process_hitl_response(req)
+            action, content, answers, ids, decisions = process_hitl_response(req)
 
         assert answers == {}
+        assert decisions == {}
         assert action == "QUESTION_SKIPPED"
+
+    def test_batch_records_a_decision_per_action_request(self):
+        """A mixed batch keeps every verdict, which hitl_answers cannot."""
+        from src.server.handlers.chat.request_prep import process_hitl_response
+
+        response = {
+            "decisions": [
+                {"type": "approve", "message": None},
+                {"type": "reject", "message": "not this one"},
+            ]
+        }
+        req = self._make_request({"int-1": response})
+
+        with patch(
+            f"{PREP}.summarize_hitl_response_map",
+            return_value={
+                "feedback_action": "QUESTION_SKIPPED",
+                "content": "not this one",
+                "interrupt_ids": ["int-1"],
+            },
+        ):
+            _action, _content, answers, _ids, decisions = process_hitl_response(req)
+
+        assert decisions["int-1"] == [
+            {"type": "approve", "message": None},
+            {"type": "reject", "message": "not this one"},
+        ]
+        # The collapsed record cannot tell this from rejecting both.
+        assert answers == {}
 
 
 # ---------------------------------------------------------------------------

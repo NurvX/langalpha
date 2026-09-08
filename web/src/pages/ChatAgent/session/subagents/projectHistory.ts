@@ -114,6 +114,7 @@ export function projectSubagentHistory(
             content_type: event.content_type,
             tool_call_id: event.tool_call_id,
             artifact: event.artifact,
+            status: event.status,
           },
           refs: tempRefs,
           updateSubagentCard: historyUpdateSubagentCard,

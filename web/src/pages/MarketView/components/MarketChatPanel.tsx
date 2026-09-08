@@ -687,7 +687,8 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     stableAnswerQuestion, stableSkipQuestion, stableApproveCreateWorkspace,
     stableRejectCreateWorkspace, stableApproveStartQuestion, stableRejectStartQuestion,
     stableApprovePTCAgent, stableRejectPTCAgent, stableApproveSecretaryAction,
-    stableRejectSecretaryAction, stableResumeCreditPause, stableEditMessage, stableRegenerate, stableRetry,
+    stableRejectSecretaryAction, stableResumeCreditPause,
+    stableEditMessage, stableRegenerate, stableRetry,
     stableThumbUp, stableThumbDown, stableReportWithAgent, stableWidgetSendPrompt,
   ]);
 

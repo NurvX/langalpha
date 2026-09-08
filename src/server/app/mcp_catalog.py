@@ -15,6 +15,7 @@ Endpoints (user-scoped):
 - GET    /api/v1/mcp/servers/{name}/tools
 - PUT    /api/v1/mcp/servers/{name}
 - PATCH  /api/v1/mcp/servers/{name}/enabled
+- PATCH  /api/v1/mcp/servers/{name}/binding
 - DELETE /api/v1/mcp/servers/{name}
 - GET    /api/v1/mcp/builtin-servers
 - GET    /api/v1/mcp/builtin-servers/{name}/tools
@@ -64,13 +65,16 @@ from src.server.database.mcp_servers import (
     list_local_servers_for_user,
     list_scope_markers_for_user,
     set_catalog_server_enabled,
+    update_catalog_server,
 )
 from src.server.database.mcp_tool_schemas import get_user_tool_schemas
+from src.server.database.pool import get_db_connection
 from src.server.database.user_vault_secrets import (
     create_user_secret,
     get_user_secret_names,
 )
 from src.server.models.mcp_server import (
+    BindingInput,
     BrokerageList,
     BuiltinServer,
     BuiltinServerList,
@@ -166,6 +170,37 @@ def _decorated(row: dict, conn: dict | None, **extra) -> CatalogServer:
         remembered_capabilities=conn["granted_capabilities"],
         **extra,
     )
+
+
+def _has_direct_tools(row: dict, conn: dict | None, snapshot: dict | None) -> bool:
+    """Whether any tool on this row binds directly, and so reaches Flash.
+
+    Flash has no sandbox, so a row is reachable from it only through a tool on
+    the direct path. Answered from the snapshot the list already holds rather
+    than by asking per row, which is the observer behind every server the user
+    owns that the rows deliberately do not carry.
+
+    Intersected with what the snapshot actually published, because a plan
+    carries every name the vendor's curation grants whether or not this server
+    published it, while ``build_direct_entries`` can only bind a schema it
+    holds. Reading ``plan.direct`` alone would offer Flash on a connection
+    whose scope toggle saves cleanly and then gives Flash nothing to call.
+    """
+    from src.server.services.brokerage_capabilities import vendor_for_url
+    from src.server.services.egress import folded_contains
+    from src.server.services.tool_binding import inputs_from_row, resolve_plan
+
+    if conn is None or ConnectionStatus(conn["status"]) not in SERVABLE:
+        return False
+    published = (snapshot or {}).get("tools") or []
+    names = [name for t in published if (name := t.get("name"))]
+    plan = resolve_plan(
+        vendor_for_url(conn.get("server_url")),
+        conn.get("granted_capabilities") or (),
+        inputs_from_row(row),
+        candidates=names,
+    )
+    return any(folded_contains(plan.direct, n) for n in names)
 
 
 async def _snapshots_by_server(
@@ -270,6 +305,7 @@ async def list_servers(
                     len(snapshot.get("tools") or []) if snapshot is not None else None
                 ),
                 icon_url=await _icon_url(meta.get("server_info")),
+                has_direct_tools=_has_direct_tools(r, oauth.get(r["name"]), snapshot),
             )
         )
     workspace_servers: list[WorkspaceScopedServer] = []
@@ -356,10 +392,12 @@ async def get_server_tools(name: str, user_id: CurrentUserId) -> dict:
     )
     from src.server.services.mcp_config import user_row_to_server_config
     from src.server.services.mcp_discovery import ToolSnapshotIndex
+    from src.server.services.tool_binding import inputs_from_row
 
     row = await get_catalog_server(user_id, name)
     if not row:
         raise HTTPException(status_code=404, detail="MCP server not found")
+    binding_inputs = inputs_from_row(row)
     snapshot = None
     try:
         schema_rows = await get_user_tool_schemas(user_id)
@@ -394,6 +432,11 @@ async def get_server_tools(name: str, user_id: CurrentUserId) -> dict:
                 # grant. The client cannot tell them apart and drew both as
                 # unreachable, so the distinction travels.
                 "always_denied": is_always_denied(_vendor, t.get("name", "")),
+                # Which path the tool takes to the model if consent lets it
+                # through, which layer decided, and which paths it may take
+                # at all. Independent of consent on purpose: the column shows
+                # what a grant would put in force.
+                **_binding_fields(_vendor, t.get("name", ""), binding_inputs),
             }
             for t in tools
         ],
@@ -550,6 +593,134 @@ async def _apply_catalog_enabled(
         return row, await _relay_execution_warning(user_id, name)
     await revoke_live_grants(user_id, [name])
     return row, None
+
+
+def _binding_fields(vendor: str | None, tool: str, inputs) -> dict:
+    """The effective path, which layer chose it, and which paths the row may
+    pick from, so the page offers exactly the options the write path accepts
+    rather than keeping its own copy of the group policy."""
+    from src.server.services.tool_binding import allowed_bindings, resolve_tool
+
+    resolved = resolve_tool(vendor, tool, inputs)
+    return {
+        "binding": resolved.binding,
+        "binding_source": resolved.source,
+        "allowed": sorted(allowed_bindings(vendor, tool, relayable=inputs.relayable)),
+    }
+
+
+@router.patch("/servers/{name}/binding")
+@handle_api_exceptions("set MCP catalog server binding", logger)
+async def set_binding(
+    name: str, body: BindingInput, user_id: CurrentUserId
+) -> CatalogServer:
+    """Change how this row's tools reach the model.
+
+    Not a PUT: the map is policy, not connection config, so it neither forks
+    the row off its plugin nor revokes its OAuth connection. The grants in
+    force are rewritten in the same breath as the row, the way a consent
+    change is, because the relay reads the grant and the model is already
+    running on the previous answer.
+
+    The body names the tools it changes rather than carrying the map. Merging
+    here, inside the lock that already serializes writers, is what keeps two
+    tabs editing different tools of one row from overwriting each other.
+    """
+    from src.server.database.egress_grants import (
+        apply_consent_to_active_grants,
+        lock_user_egress_state,
+    )
+    from src.server.services.brokerage_capabilities import vendor_for_url
+    from src.server.services.mcp_discovery import MAX_TOOLS_PER_SERVER
+    from src.server.services.tool_binding import (
+        merge_overrides,
+        strip_disallowed_overrides,
+        validate_overrides,
+    )
+
+    if body.order_approval is not None:
+        # Refused rather than dropped: a write that is accepted and then echoed
+        # back from the column reads as a setting in force, and nothing reads
+        # this one yet.
+        raise HTTPException(
+            status_code=422,
+            detail="order_approval is not a setting that can be changed yet",
+        )
+    updates: dict = {}
+    delta = body.tool_binding_set is not None or body.tool_binding_unset is not None
+    if "binding_preset" in body.model_fields_set:
+        updates["binding_preset"] = body.binding_preset
+    if not delta and not updates:
+        raise HTTPException(status_code=422, detail="nothing to change")
+
+    # Only a servable connection's address says which vendor's rules apply: a
+    # revoked one may belong to the host the row used to point at.
+    connection = await get_connection(user_id, name)
+
+    # One transaction, and the row is read inside it under the user's egress
+    # lock: the stored map is both what this request is judged against and
+    # what healing rewrites, so a read taken before the lock lets a write that
+    # landed in between be put back to the version this worker saw. The grant
+    # is rewritten in the same breath as the row because the relay reads the
+    # grant and the model is already running on the previous answer.
+    async with get_db_connection() as db, db.transaction():
+        await lock_user_egress_state(db, user_id)
+        row = await get_catalog_server(user_id, name, conn=db)
+        if not row:
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        stored = row.get("tool_binding") or {}
+        # A stdio row has no address for the relay, so no tool on it can take
+        # the direct path however the request or its group is worded.
+        relayable = row.get("transport") != "stdio"
+        vendor = vendor_for_url(
+            connection.server_url
+            if connection is not None and connection.status in SERVABLE
+            else row.get("url")
+        )
+        # Validate what this request asks for. A path the tool's group does
+        # not allow is refused rather than stored and then overruled at
+        # resolve time. The delta is exactly this request's doing, so nothing
+        # a previous write left in the row is judged again here.
+        requested = dict(body.tool_binding_set or {})
+        if delta:
+            reason = validate_overrides(
+                vendor, requested, stored=stored, relayable=relayable
+            )
+            if reason:
+                raise HTTPException(status_code=422, detail=reason)
+        merged = (
+            merge_overrides(stored, set_=requested, unset=body.tool_binding_unset)
+            if delta
+            else stored
+        )
+        # Store the map with anything the clamp overrules stripped, so an
+        # entry that got in before the clamp did leaves on the next write
+        # instead of sitting under the resolver's ``policy`` answer forever.
+        healed = strip_disallowed_overrides(vendor, merged, relayable)
+        # The stored map is what every later resolve expands and what the grant
+        # rows carry, and an override for a tool the server never published is
+        # kept rather than dropped, because a row can be pointed at a server
+        # whose tool list arrives later. Bounding it here is what stops a run of
+        # deltas from growing one no server could ever match. Judged after the
+        # merge and only when this request grew the map, so a row already over
+        # the line can still be edited down.
+        if len(healed) > MAX_TOOLS_PER_SERVER and len(healed) > len(stored):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"a row may hold at most {MAX_TOOLS_PER_SERVER} tool bindings"
+                ),
+            )
+        if delta or healed != stored:
+            updates["tool_binding"] = healed
+
+        updated = await update_catalog_server(user_id, name, updates=updates, conn=db)
+        if updated is None:
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        if connection is not None:
+            await apply_consent_to_active_grants(connection.connection_id, conn=db)
+    oauth = await _oauth_by_server(user_id)
+    return _decorated(updated, oauth.get(name))
 
 
 @router.patch("/servers/{name}/enabled")

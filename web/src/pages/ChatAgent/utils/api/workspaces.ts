@@ -43,7 +43,7 @@ export async function getWorkspace(workspaceId: string): Promise<Workspace> {
  * Idempotent — safe to call on every app load.
  * @returns {Promise<Object>} Flash workspace record
  */
-export async function getFlashWorkspace() {
+export async function getFlashWorkspace(): Promise<Workspace> {
   const { data } = await api.post('/api/v1/workspaces/flash');
   return data;
 }

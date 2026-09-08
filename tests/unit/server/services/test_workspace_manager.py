@@ -3783,3 +3783,48 @@ class TestRestoreGuard:
             )
 
         assert order == ["bind", "reconcile"]
+
+
+class TestSupersededResolve:
+    """A resolve a newer config version has overtaken keeps its composite but
+    not its directly bound tools."""
+
+    @pytest.mark.asyncio
+    async def test_direct_tools_are_dropped_and_the_composite_is_kept(self):
+        from src.server.services.egress.session_binding import RelayBind
+
+        manager = WorkspaceManager(_make_config())
+        session = SimpleNamespace(
+            sandbox=MagicMock(),
+            mcp_config_version=1,
+            mcp_tool_summary="old summary",
+            direct_mcp_tools={},
+        )
+
+        async def _install(sess, resolved, *, user_id=None):
+            sess.direct_mcp_tools = {"moomoo": object()}
+            sess.mcp_tool_summary = "installed summary"
+
+        with (
+            patch(
+                "src.server.services.mcp_config.resolve_mcp_config",
+                AsyncMock(return_value=SimpleNamespace(version=2, servers=[])),
+            ),
+            patch.object(
+                manager, "_install_session_composite", AsyncMock(side_effect=_install)
+            ),
+            patch(
+                "src.server.services.workspace_manager.sync_egress_relay",
+                AsyncMock(return_value=RelayBind.SUPERSEDED),
+            ),
+        ):
+            out = await manager._apply_session_mcp(
+                "ws-1", "user-1", session, ws_version=2
+            )
+
+        assert out is None
+        # The stamps on a stale direct set say which calls stop to ask, and the
+        # grants they were computed against are gone.
+        assert session.direct_mcp_tools == {}
+        assert session.mcp_tool_summary == "installed summary"
+        assert session.mcp_config_version is None

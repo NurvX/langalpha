@@ -3,7 +3,7 @@
  * Handles events from history replay (SSE stream of past conversations)
  */
 
-import { isToolResultFailure } from '../subagents/subagentStatus';
+import { isToolResultFailure, toolNameOf } from '../subagents/subagentStatus';
 import { isTaskAgentId } from '../../utils/agentId';
 import { deriveTaskSegment, applyTaskSegment, applyLaunchReply } from '../subagents/taskSegmentBuilder';
 import type { SubagentTaskRecord } from '@/types/chat';
@@ -455,7 +455,7 @@ export function handleHistoryToolCallResult({ assistantMessageId, toolCallId, re
       const toolCallProcesses = { ...((msg.toolCallProcesses as Record<string, Record<string, unknown>>) || {}) };
       const subagentTasks = { ...((msg.subagentTasks as Record<string, SubagentTaskRecord>) || {}) };
 
-      const isFailed = isToolResultFailure(result);
+      const isFailed = isToolResultFailure({ ...result, toolName: toolNameOf(toolCallProcesses, toolCallId) });
 
       if (toolCallProcesses[toolCallId]) {
         toolCallProcesses[toolCallId] = {

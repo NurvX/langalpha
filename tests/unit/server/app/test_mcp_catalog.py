@@ -1376,3 +1376,484 @@ class TestCapabilitiesInForceAndCapabilitiesRemembered:
         assert response.granted_capabilities is None
         assert response.remembered_capabilities is None
 
+
+
+# ---------------------------------------------------------------------------
+# PATCH binding: refuse only what the request asks for, heal what it carries
+# ---------------------------------------------------------------------------
+
+MOOMOO_URL = "https://mcp.moomoo.com/mcp"
+ROBINHOOD_URL = "https://agent.robinhood.com/mcp/trading"
+
+
+@asynccontextmanager
+async def _binding_patches(*, row, connection=None, read=None, lock=None):
+    """The write is captured rather than performed; ``update`` records the
+    ``updates`` the handler decided on, which is the whole contract here.
+
+    ``read`` replaces the catalog read (it receives the handler's call, so it
+    can answer by whether ``conn`` was passed); ``lock`` replaces the egress
+    lock. Both default to no-ops that return ``row``."""
+
+    @asynccontextmanager
+    async def _txn():
+        yield None
+
+    db = MagicMock(name="db")
+    db.transaction = _txn
+
+    @asynccontextmanager
+    async def _connection():
+        yield db
+
+    async def _update(user_id, name, *, updates, conn=None):
+        return {**row, **updates}
+
+    update = AsyncMock(side_effect=_update)
+    with (
+        patch(
+            "src.server.app.mcp_catalog.get_catalog_server",
+            new=AsyncMock(side_effect=read or (lambda *a, **k: row)),
+        ),
+        patch("src.server.app.mcp_catalog.update_catalog_server", new=update),
+        patch(
+            "src.server.database.egress_grants.lock_user_egress_state",
+            new=lock or AsyncMock(),
+        ),
+        patch(
+            "src.server.app.mcp_catalog.get_connection",
+            new=AsyncMock(return_value=connection),
+        ),
+        patch("src.server.app.mcp_catalog.get_db_connection", new=_connection),
+        patch(
+            "src.server.database.egress_grants.apply_consent_to_active_grants",
+            new=AsyncMock(),
+        ),
+        patch(
+            "src.server.app.mcp_catalog._oauth_by_server",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        yield update
+
+
+def _written(update) -> dict:
+    return update.await_args.kwargs["updates"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asked", ["ptc", "both"])
+async def test_binding_refuses_a_live_order_override_off_the_direct_path(client, asked):
+    """A live order is a tool call and nothing else, so the write path refuses
+    the two answers that would put a wrapper back in the sandbox, and says
+    what the tool may be instead."""
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding={})
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"tool_binding_set": {"trading_order_place": asked}},
+        )
+    assert resp.status_code == 422
+    assert "direct tool call" in resp.json()["detail"]
+    update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_binding_accepts_a_live_order_override_that_says_direct(client):
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding={})
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"tool_binding_set": {"trading_order_place": "direct"}},
+        )
+    assert resp.status_code == 200, resp.json()
+    assert _written(update) == {"tool_binding": {"trading_order_place": "direct"}}
+
+
+@pytest.mark.asyncio
+async def test_binding_a_retained_disallowed_entry_does_not_lock_the_row(client):
+    """A map stored before the clamp existed is not this request's doing: an
+    unrelated edit goes through, and the write it produces drops the entry so
+    the row stops carrying a setting the resolver reports as ``policy``."""
+    row = _row(
+        "moomoo",
+        url=MOOMOO_URL,
+        tool_binding={"trading_order_place": "ptc", "quote_stock_quote": "direct"},
+    )
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"binding_preset": "ptc_only"},
+        )
+    assert resp.status_code == 200, resp.json()
+    assert _written(update) == {
+        "binding_preset": "ptc_only",
+        "tool_binding": {"quote_stock_quote": "direct"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_binding_an_edit_heals_a_retained_entry_it_never_mentions(client):
+    """A delta naming one tool still heals the row: the clamped entry the
+    request never mentions is stripped, and the edit it asked for lands."""
+    row = _row(
+        "moomoo",
+        url=MOOMOO_URL,
+        tool_binding={"trading_order_place": "ptc", "quote_stock_quote": "direct"},
+    )
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"tool_binding_set": {"quote_stock_quote": "both"}},
+        )
+    assert resp.status_code == 200, resp.json()
+    assert _written(update)["tool_binding"] == {"quote_stock_quote": "both"}
+
+
+@pytest.mark.asyncio
+async def test_binding_an_edit_keeps_another_tool_a_concurrent_write_added(client):
+    """Two tabs, two tools. The second write is judged against the row as it
+    stands when the lock is taken, so the first tab's edit survives it. The
+    body carries no map, so there is nothing stale for it to write back."""
+    # The row already carries the other tab's edit by the time this one reads.
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding={"quote_stock_quote": "direct"})
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"tool_binding_set": {"quote_kline": "both"}},
+        )
+    assert resp.status_code == 200, resp.json()
+    assert _written(update)["tool_binding"] == {
+        "quote_stock_quote": "direct",
+        "quote_kline": "both",
+    }
+
+
+@pytest.mark.asyncio
+async def test_binding_refuses_a_request_naming_more_tools_than_a_server_has(client):
+    from src.server.services.mcp_discovery import MAX_TOOLS_PER_SERVER
+
+    row = _row("moomoo", url=MOOMOO_URL)
+    async with _binding_patches(row=row):
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={
+                "tool_binding_set": {
+                    f"quote_t{i}": "ptc" for i in range(MAX_TOOLS_PER_SERVER + 1)
+                }
+            },
+        )
+    assert resp.status_code == 422, resp.json()
+
+
+@pytest.mark.asyncio
+async def test_binding_refuses_a_delta_that_grows_the_row_past_the_cap(client):
+    """The body is a delta, so the per-request cap alone bounds nothing: a run
+    of small writes would accumulate a map no server could ever match."""
+    from src.server.services.mcp_discovery import MAX_TOOLS_PER_SERVER
+
+    stored = {f"quote_s{i}": "ptc" for i in range(MAX_TOOLS_PER_SERVER)}
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding=stored)
+    async with _binding_patches(row=row):
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"tool_binding_set": {"quote_one_more": "ptc"}},
+        )
+    assert resp.status_code == 422, resp.json()
+
+
+@pytest.mark.asyncio
+async def test_binding_still_lets_an_oversized_row_be_edited_down(client):
+    """The cap is judged on growth, so a row already over the line is not
+    frozen out of the write that would shrink it."""
+    from src.server.services.mcp_discovery import MAX_TOOLS_PER_SERVER
+
+    stored = {f"quote_s{i}": "ptc" for i in range(MAX_TOOLS_PER_SERVER + 5)}
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding=stored)
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"tool_binding_unset": ["quote_s0"]},
+        )
+    assert resp.status_code == 200, resp.json()
+    assert "quote_s0" not in _written(update)["tool_binding"]
+
+
+@pytest.mark.asyncio
+async def test_binding_unset_clears_one_tool_and_leaves_the_rest(client):
+    row = _row(
+        "moomoo",
+        url=MOOMOO_URL,
+        tool_binding={"quote_stock_quote": "direct", "quote_kline": "both"},
+    )
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"tool_binding_unset": ["quote_stock_quote"]},
+        )
+    assert resp.status_code == 200, resp.json()
+    assert _written(update)["tool_binding"] == {"quote_kline": "both"}
+
+
+@pytest.mark.asyncio
+async def test_binding_a_clean_row_is_not_rewritten_for_an_unrelated_edit(client):
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding={"quote_stock_quote": "direct"})
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"binding_preset": "ptc_only"},
+        )
+    assert resp.status_code == 200, resp.json()
+    assert _written(update) == {"binding_preset": "ptc_only"}
+
+
+@pytest.mark.asyncio
+async def test_binding_refuses_the_retired_order_direct_preset(client):
+    """The switch's off position is a cleared column, not a word. A value the
+    resolver would only fall through is refused at the body rather than stored
+    and echoed back as if it were a setting."""
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding={})
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"binding_preset": "order_direct"},
+        )
+    assert resp.status_code == 422, resp.json()
+    assert not update.await_count
+
+
+@pytest.mark.asyncio
+async def test_binding_heals_from_the_row_read_under_the_lock(client):
+    """Two workers, one row. A reads the row for a preset-only edit and stalls;
+    B stores an override and commits; A resumes. The map A heals from has to
+    be the one B left, or A's write puts the row back to what it saw."""
+    before = {"trading_order_place": "ptc"}
+    after = {"sim_trade_input_order": "ptc"}
+    calls: list[str] = []
+
+    async def read(user_id, name, *, conn=None, **_):
+        calls.append("read:locked" if conn is not None else "read:unlocked")
+        return _row("moomoo", url=MOOMOO_URL, tool_binding=after if conn else before)
+
+    async def lock(conn, user_id):
+        calls.append(f"lock:{user_id}")
+
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding=before)
+    async with _binding_patches(row=row, read=read, lock=lock) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"binding_preset": None},
+        )
+    assert resp.status_code == 200, resp.json()
+    # B's map is already clean, so a preset-only request writes no map at all.
+    assert _written(update) == {"binding_preset": None}
+    # The healing read happened under the user's egress lock, and nothing was
+    # read off the row before the lock was held.
+    assert calls == ["lock:test-user-123", "read:locked"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, expected",
+    [
+        # A servable connection's address is the identity the token was
+        # issued for, so its vendor's rules apply even when the row moved.
+        ("connected", 422),
+        ("refresh_ambiguous", 422),
+        # A dead connection may belong to the host the row used to point at;
+        # the row's own address says whose rules apply now.
+        ("needs_reauth", 422),
+        ("revoked", 422),
+    ],
+)
+async def test_binding_validates_against_the_row_when_the_connection_is_dead(
+    client, status, expected
+):
+    """Row repointed to moomoo, still holding a robinhood connection. Under
+    robinhood's curation the moomoo tool name is unknown and would pass; only
+    an active connection may say the vendor is still robinhood."""
+    from src.server.database.mcp_oauth import ConnectionStatus
+
+    row = _row("my_broker", url=MOOMOO_URL, tool_binding={})
+    connection = SimpleNamespace(
+        connection_id="c-1",
+        server_url=ROBINHOOD_URL if status in ("needs_reauth", "revoked") else MOOMOO_URL,
+        status=ConnectionStatus(status),
+    )
+    async with _binding_patches(row=row, connection=connection):
+        resp = await client.patch(
+            "/api/v1/mcp/servers/my_broker/binding",
+            json={"tool_binding_set": {"trading_order_place": "ptc"}},
+        )
+    assert resp.status_code == expected, resp.json()
+
+
+@pytest.mark.asyncio
+async def test_binding_a_live_connection_outranks_the_row_url(client):
+    """The converse: the row says moomoo but the token in force is robinhood's,
+    so robinhood's live-order names are what the write must refuse."""
+    from src.server.database.mcp_oauth import ConnectionStatus
+
+    row = _row("my_broker", url=MOOMOO_URL, tool_binding={})
+    connection = SimpleNamespace(
+        connection_id="c-1",
+        server_url=ROBINHOOD_URL,
+        status=ConnectionStatus.CONNECTED,
+    )
+    async with _binding_patches(row=row, connection=connection):
+        resp = await client.patch(
+            "/api/v1/mcp/servers/my_broker/binding",
+            json={"tool_binding_set": {"place_equity_order": "ptc"}},
+        )
+    assert resp.status_code == 422, resp.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [True, False])
+async def test_binding_refuses_a_new_order_approval_write(client, value):
+    """Nothing reads the setting yet, so a write that was stored and echoed
+    back would present as in force. The column and its echo stay untouched."""
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding={}, order_approval=False)
+    async with _binding_patches(row=row) as update:
+        resp = await client.patch(
+            "/api/v1/mcp/servers/moomoo/binding",
+            json={"order_approval": value, "binding_preset": "ptc_only"},
+        )
+    assert resp.status_code == 422
+    assert "order_approval" in resp.json()["detail"]
+    update.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# GET tools: the page reads which paths a tool may take, not a copy of policy
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tools_carry_the_paths_each_may_take(client):
+    """``allowed`` is the set the write path accepts, so the page disables
+    exactly what a PATCH would refuse instead of keeping its own list."""
+    row = _row("moomoo", url=MOOMOO_URL, tool_binding={}, binding_preset="ptc_only")
+    snapshot = {
+        "tools": [
+            {"name": "trading_order_place", "description": "", "input_schema": {}},
+            {"name": "sim_trade_input_order", "description": "", "input_schema": {}},
+            {"name": "quote_stock_quote", "description": "", "input_schema": {}},
+            {"name": "new_vendor_tool", "description": "", "input_schema": {}},
+        ],
+        "discovered_at": "2026-01-01T00:00:00+00:00",
+    }
+    with (
+        patch(
+            "src.server.app.mcp_catalog.get_catalog_server",
+            new=AsyncMock(return_value=row),
+        ),
+        patch(
+            "src.server.app.mcp_catalog.get_user_tool_schemas",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "src.server.services.mcp_discovery.ToolSnapshotIndex.ok",
+            return_value=snapshot,
+        ),
+    ):
+        resp = await client.get("/api/v1/mcp/servers/moomoo/tools")
+    assert resp.status_code == 200, resp.json()
+    by_name = {t["name"]: t for t in resp.json()["tools"]}
+    live = by_name["trading_order_place"]
+    assert live["capability"] == "trading"
+    assert (live["binding"], live["binding_source"]) == ("direct", "policy")
+    assert live["allowed"] == ["direct"]
+    for name in ("sim_trade_input_order", "quote_stock_quote", "new_vendor_tool"):
+        assert by_name[name]["allowed"] == ["both", "direct", "ptc"], name
+        assert (by_name[name]["binding"], by_name[name]["binding_source"]) == (
+            "ptc",
+            "preset",
+        )
+
+
+class TestHasDirectTools:
+    """Whether the row says it can reach Flash.
+
+    Flash has no sandbox, so a row is reachable from it only through a tool on
+    the direct path. The catalog answers it from the snapshot the list already
+    holds, so the page does not have to ask per row.
+    """
+
+    def _snapshot(self, *names):
+        return {"tools": [{"name": n} for n in names]}
+
+    def test_a_row_with_a_directly_bound_tool_says_so(self):
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
+        conn = {
+            "status": "connected",
+            "server_url": "https://example.com/mcp",
+            "granted_capabilities": [],
+        }
+        assert _has_direct_tools(row, conn, self._snapshot("quote_kline")) is True
+
+    def test_a_ptc_only_row_does_not(self):
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "http", "tool_binding": {}}
+        conn = {
+            "status": "connected",
+            "server_url": "https://example.com/mcp",
+            "granted_capabilities": [],
+        }
+        assert _has_direct_tools(row, conn, self._snapshot("quote_kline")) is False
+
+    def test_a_stdio_row_never_does_whatever_the_map_asks(self):
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "stdio", "tool_binding": {"quote_kline": "direct"}}
+        conn = {
+            "status": "connected",
+            "server_url": None,
+            "granted_capabilities": [],
+        }
+        assert _has_direct_tools(row, conn, self._snapshot("quote_kline")) is False
+
+    def test_an_unconnected_row_does_not(self):
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
+        assert _has_direct_tools(row, None, self._snapshot("quote_kline")) is False
+
+    def test_a_revoked_connection_does_not(self):
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
+        conn = {
+            "status": "revoked",
+            "server_url": "https://example.com/mcp",
+            "granted_capabilities": [],
+        }
+        assert _has_direct_tools(row, conn, self._snapshot("quote_kline")) is False
+
+    def test_a_map_naming_a_tool_the_server_never_published_does_not(self):
+        # The plan carries every name curation or the map grants; only a
+        # published schema can actually be bound, so the offer follows the
+        # snapshot rather than the plan.
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
+        conn = {
+            "status": "connected",
+            "server_url": "https://example.com/mcp",
+            "granted_capabilities": [],
+        }
+        assert _has_direct_tools(row, conn, self._snapshot("something_else")) is False
+
+    def test_a_row_with_no_snapshot_yet_does_not(self):
+        from src.server.app.mcp_catalog import _has_direct_tools
+
+        row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
+        conn = {
+            "status": "connected",
+            "server_url": "https://example.com/mcp",
+            "granted_capabilities": [],
+        }
+        assert _has_direct_tools(row, conn, None) is False

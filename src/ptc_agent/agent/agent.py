@@ -63,6 +63,11 @@ from ptc_agent.agent.middleware import (
     MemoAwarenessMiddleware,
     ReasoningCompatibilityMiddleware,
 )
+from ptc_agent.agent.middleware.direct_mcp import (
+    DirectMcpPolicyMiddleware,
+    DirectToolSet,
+    direct_tool_summary,
+)
 from ptc_agent.core.paths import (
     MEMO_INDEX_FILENAME,
     MEMO_USER_DIR,
@@ -219,6 +224,7 @@ class PTCAgent:
         memory_enabled: bool = True,
         memo_enabled: bool = True,
         crawl_enabled: bool = False,
+        direct_tool_summary: str = "",
     ) -> str:
         """Build the static system prompt (excludes time/profile for cacheability).
 
@@ -242,6 +248,7 @@ class PTCAgent:
             memo_enabled=memo_enabled,
             market_watch_enabled=self.config.feature_enabled("market_watch"),
             crawl_enabled=crawl_enabled,
+            direct_tool_summary=direct_tool_summary,
         )
 
     def _get_tool_summary(self, mcp_registry: MCPRegistry) -> str:
@@ -443,6 +450,7 @@ class PTCAgent:
         user_data_counts: dict[str, Any] | None = None,
         tool_summary: str | None = None,
         disable_subagents: bool = False,
+        direct_mcp: DirectToolSet | None = None,
     ) -> Any:
         """Create a deepagent with PTC pattern capabilities.
 
@@ -661,6 +669,12 @@ class PTCAgent:
         # Must be first: steering context must be visible before any other middleware.
         main_only_middleware.append(SteeringMiddleware())
 
+        # Consent is re-read per call here, so a tool the connection no longer
+        # covers is refused rather than reaching the vendor.
+        direct_tools = list(direct_mcp.tools) if direct_mcp is not None else []
+        if direct_tools:
+            main_only_middleware.append(DirectMcpPolicyMiddleware(direct_mcp))
+
         _bg_registry = background_registry or BackgroundTaskRegistry()
         event_capture_middleware = SubagentEventCaptureMiddleware(registry=_bg_registry)
 
@@ -769,6 +783,7 @@ class PTCAgent:
             memory_enabled=gates.memory,
             memo_enabled=gates.memo,
             crawl_enabled=bool(crawl_tools),
+            direct_tool_summary=direct_tool_summary(direct_tools),
         )
 
         logger.debug(
@@ -954,6 +969,12 @@ class PTCAgent:
             ]
             if m is not None
         ]
+
+        # Main agent only, added after the subagent snapshot was taken above:
+        # directly bound MCP tools are the ones a policy has to see every
+        # call, and a subagent runs no main-only middleware.
+        if direct_tools:
+            tools = [*tools, *direct_tools]
 
         agent: Any = create_agent(
             turn.client,

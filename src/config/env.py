@@ -70,6 +70,11 @@ EGRESS_RELAY_SECRET: str = os.getenv("EGRESS_RELAY_SECRET", "")
 # frontend.
 EGRESS_RELAY_BASE_URL: str = os.getenv("EGRESS_RELAY_BASE_URL", "")
 
+# Where THIS process reaches its own egress relay for directly bound MCP
+# tools. Loopback on purpose: the host-side call takes the same route, policy
+# and audit as a sandbox call, without leaving the box.
+EGRESS_RELAY_LOOPBACK_URL: str = os.getenv("EGRESS_RELAY_LOOPBACK_URL", "http://127.0.0.1:8000")
+
 # Credit conversion rate (USD → credits).  Override with USD_TO_CREDITS_RATE env var.
 USD_TO_CREDITS_RATE: int = int(os.getenv("USD_TO_CREDITS_RATE", "1000"))
 

@@ -115,7 +115,9 @@ def _is_visual_request(file_path: str) -> bool:
 
 def _error(tool_call_id: str, text: str) -> ToolMessage:
     """A refusal the agent can read. The ``ERROR:`` prefix is the tool convention."""
-    return ToolMessage(content=f"ERROR: {text}", tool_call_id=tool_call_id)
+    return ToolMessage(
+        content=f"ERROR: {text}", tool_call_id=tool_call_id, status="error"
+    )
 
 
 def build_content_blocks(

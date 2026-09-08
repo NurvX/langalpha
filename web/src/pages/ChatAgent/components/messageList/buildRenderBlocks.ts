@@ -68,6 +68,11 @@ export interface CreditPauseRenderBlock {
   key: string;
   segment: ContentSegmentRecord;
 }
+export interface ToolApprovalRenderBlock {
+  type: 'tool_approval';
+  key: string;
+  segment: ContentSegmentRecord;
+}
 export interface NotificationRenderBlock {
   type: 'notification';
   key: string;
@@ -91,6 +96,7 @@ export type RenderBlock =
   | PTCAgentRenderBlock
   | SecretaryActionRenderBlock
   | CreditPauseRenderBlock
+  | ToolApprovalRenderBlock
   | NotificationRenderBlock
   | HtmlWidgetRenderBlock;
 
@@ -158,6 +164,7 @@ export function buildRenderBlocks(
         if (s.type === 'stop_workspace') return true;
         if (s.type === 'delete_thread') return true;
         if (s.type === 'credit_pause') return true;
+        if (s.type === 'tool_approval') return true;
         if (s.type === 'html_widget') return true;
         if (s.type === 'tool_call') {
           const toolName = toolCallProcesses[s.toolCallId!]?.toolName as string | undefined;
@@ -363,6 +370,9 @@ export function buildRenderBlocks(
         } else if (seg.type === 'credit_pause') {
           flushActivity();
           blocks.push({ type: 'credit_pause', key: `credit-pause-${seg.proposalId}`, segment: seg });
+        } else if (seg.type === 'tool_approval') {
+          flushActivity();
+          blocks.push({ type: 'tool_approval', key: `tool-approval-${seg.proposalId}`, segment: seg });
         } else if (seg.type === 'html_widget') {
           flushActivity();
           blocks.push({ type: 'html_widget', key: `widget-${seg.widgetId}`, segment: seg });

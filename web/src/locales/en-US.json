@@ -2189,6 +2189,7 @@
       "updated_preference": "Updated preferences"
     },
     "inProgress": {
+      "callingServer": "calling {{server}}...",
       "activatingSkill": "activating skill...",
       "activatingSkillName": "activating skill {{name}}...",
       "readingMemory": "reading memory...",
@@ -2293,6 +2294,18 @@
       "openInTab": "Open in {{tab}}",
       "collapseDiff": "Collapse diff",
       "expandDiff": "Expand diff"
+    },
+    "directTool": {
+      "approvalTitle": "Approve this action?",
+      "unansweredTitle": "Waited for approval and was not answered",
+      "approve": "Approve",
+      "reject": "Reject",
+      "reasonPlaceholder": "Reason (optional)",
+      "approvedAction": "Approved {{vendor}} {{tool}}",
+      "rejectedAction": "Rejected {{vendor}} {{tool}}",
+      "refused": "The connector refused this call",
+      "rejected": "You rejected this call",
+      "noArguments": "No arguments"
     }
   },
   "setup": {
@@ -2849,7 +2862,7 @@
         },
         "trading": {
           "label": "Live orders",
-          "desc": "Buy, sell, replace and cancel with real money in your account, without asking you first."
+          "desc": "Buy, sell, replace and cancel with real money in your account."
         }
       },
       "consent": {
@@ -2987,6 +3000,8 @@
       "allExcept": "All workspaces except {{count}}",
       "activeIn": "Active in",
       "futureHint": "New workspaces start enabled",
+      "flash": "Flash",
+      "flashNote": "Flash reaches only the tools bound as Direct; PTC tools need the PTC agent.",
       "moveToWorkspace": "Move to workspace",
       "moveToAll": "Move to all workspaces",
       "moveToAnother": "Move to another workspace",
@@ -3163,7 +3178,19 @@
       "toolsFailed": "Could not load tools. The request failed, try again.",
       "toolsUnavailable": "Not available from this server process. A restart usually restores it.",
       "repository": "Repository",
-      "license": "License"
+      "license": "License",
+      "toolAccess": "Tool access",
+      "toolAccessNote": "PTC tools are called from the agent's code; Direct tools are single calls the app can show. A tool's own setting below beats these switches.",
+      "groupDefaults": "Use each tool group's default",
+      "groupDefaultsDesc": "On, each tool group decides how its tools run, so those built for it run as single calls the app can show. Off, everything this row can move runs from the agent's code.",
+      "binding_ptc": "PTC",
+      "binding_direct": "Direct",
+      "binding_both": "Both",
+      "bindingAria": "How the agent reaches {{name}}",
+      "bindingCustom": "custom",
+      "bindingReset": "Reset",
+      "bindingResetAria": "Reset {{name}} to the row default",
+      "bindingPinned": "Live order tools run only as direct calls the app can show."
     }
   }
 }

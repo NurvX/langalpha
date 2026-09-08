@@ -22,6 +22,8 @@ import {
   updateMcpCatalogServer,
   deleteMcpCatalogServer,
   setMcpCatalogServerEnabled,
+  setMcpCatalogServerBinding,
+  mergeToolBinding,
   importMcpCatalogServers,
   disconnectMcpOauth,
   refreshMcpOauthSchemas,
@@ -29,6 +31,7 @@ import {
   setBrokerageEnabled,
   type CatalogServerList,
   type EffectiveServerList,
+  type McpServerBindingPatch,
   type McpServerInput,
 } from '../pages/ChatAgent/utils/api';
 
@@ -479,6 +482,51 @@ export function useToggleMcpCatalogServer() {
           ...previous,
           servers: previous.servers.map((s) =>
             s.name === name ? { ...s, enabled } : s,
+          ),
+        });
+      }
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(key, context.previous);
+    },
+    onSettled: () => {
+      invalidateMcpFanout(queryClient);
+    },
+  });
+}
+
+/**
+ * Change how a catalog server's tools reach the model (Plugins detail panel).
+ * Optimistic on the three stored fields only: the effective per-tool answer
+ * lives on the tools query, which the fan-out refetches once the server has
+ * resolved the new precedence.
+ */
+export function useSetMcpServerBinding() {
+  const queryClient = useQueryClient();
+  const key = queryKeys.mcp.catalog();
+  return useMutation({
+    mutationFn: ({ name, body }: { name: string; body: McpServerBindingPatch }) =>
+      setMcpCatalogServerBinding(name, body),
+    onMutate: async ({ name, body }) => {
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<CatalogServerList>(key);
+      if (previous) {
+        queryClient.setQueryData<CatalogServerList>(key, {
+          ...previous,
+          servers: previous.servers.map((s) =>
+            s.name === name
+              ? {
+                  ...s,
+                  ...((body.tool_binding_set !== undefined ||
+                    body.tool_binding_unset !== undefined) && {
+                    tool_binding: mergeToolBinding(s.tool_binding ?? {}, body),
+                  }),
+                  ...(body.binding_preset !== undefined && {
+                    binding_preset: body.binding_preset,
+                  }),
+                }
+              : s,
           ),
         });
       }

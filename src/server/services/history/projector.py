@@ -169,6 +169,8 @@ def history_events_to_sse(
                 data["content_type"] = event.data.get("content_type") or "text"
             if event.data.get("artifact"):
                 data["artifact"] = event.data["artifact"]
+            if event.data.get("status"):
+                data["status"] = event.data["status"]
             items.append(_sse("tool_call_result", data))
         elif event.kind == "artifact":
             items.append(
@@ -424,6 +426,11 @@ def _project_tool_message(
                 "content": content,
                 "content_type": content_type,
                 "artifact": artifact if artifact else None,
+                # The whole status travels, not just the failing one. An
+                # explicit success is what stops a client from reading prose
+                # that merely looks like a failure, so dropping it here would
+                # make the success case indistinguishable from no status.
+                "status": getattr(message, "status", None),
             },
         )
     )

@@ -49,9 +49,18 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Literal, get_args
 
 from src.server.services.brokerages import brokerage_by_name, brokerage_for_url
 from src.server.services.egress import fold_tool_name
+
+# The paths a tool can take to the model: a sandbox wrapper (``ptc``), a JSON
+# tool call (``direct``), or one of each. Declared here rather than beside the
+# resolver because a group's policy is written in this vocabulary and the
+# resolver reads the group.
+Binding = Literal["ptc", "direct", "both"]
+ALL_BINDINGS: frozenset[Binding] = frozenset(get_args(Binding))
+BINDINGS: frozenset[str] = ALL_BINDINGS
 
 
 def vendor_for_url(server_url: str | None) -> str | None:
@@ -88,6 +97,27 @@ class CapabilityGroup:
     order: int
     tone: str
     rung: bool = False
+    # Which path the group's tools take when nothing on the row says otherwise.
+    # A JSON tool call is the shape a middleware can see, a UI can render, and
+    # a schema can type, which is worth having for the one-call actions a user
+    # watches. Reads stay in the sandbox, where the payoff is composing them.
+    default_binding: Binding = "ptc"
+    # The paths a map or a preset may move a tool of this group onto. The
+    # resolver clamps its answer to this set, so a group that names one path
+    # holds every tool on it whatever the row asks. It is a field rather than
+    # a reading of ``tone`` because ``tone`` is a display hint the client is
+    # free to restyle, and deriving enforcement from something chosen for how
+    # it looks is the mistake ``vendor_for_url`` records.
+    allowed_bindings: frozenset[Binding] = ALL_BINDINGS
+
+    def __post_init__(self) -> None:
+        # The clamp falls back to the default, so a default outside the
+        # allowed set would be a group nothing can resolve.
+        if self.default_binding not in self.allowed_bindings:
+            raise ValueError(
+                f"{self.key!r}: default binding {self.default_binding!r} is not "
+                f"among its allowed bindings {sorted(self.allowed_bindings)}"
+            )
 
 
 GROUPS: tuple[CapabilityGroup, ...] = (
@@ -96,10 +126,23 @@ GROUPS: tuple[CapabilityGroup, ...] = (
     CapabilityGroup(key="scanners", order=30, tone="neutral"),
     CapabilityGroup(key="alerts", order=40, tone="neutral"),
     CapabilityGroup(key="account", order=50, tone="caution"),
-    CapabilityGroup(key="paper_trading", order=60, tone="neutral", rung=True),
+    CapabilityGroup(
+        key="paper_trading", order=60, tone="neutral", rung=True, default_binding="direct"
+    ),
     CapabilityGroup(key="order_preview", order=70, tone="neutral", rung=True),
     CapabilityGroup(key="staged_orders", order=80, tone="caution", rung=True),
-    CapabilityGroup(key="trading", order=90, tone="danger", rung=True),
+    # Live orders take the JSON path and no other. A tool call is one
+    # interceptable event per order, which is what a per-call stop and a UI
+    # that shows the order need; a sandbox wrapper can place any number inside
+    # a single execution and shows the model's code, not the order.
+    CapabilityGroup(
+        key="trading",
+        order=90,
+        tone="danger",
+        rung=True,
+        default_binding="direct",
+        allowed_bindings=frozenset({"direct"}),
+    ),
 )
 
 _BY_KEY: dict[str, CapabilityGroup] = {g.key: g for g in GROUPS}
@@ -532,6 +575,16 @@ def group_of_tool(brokerage: str | None, tool: str) -> str | None:
     user a declined tool is callable.
     """
     return _BY_TOOL.get(brokerage or "", {}).get(fold_tool_name(tool))
+
+
+def group_for_tool(brokerage: str | None, tool: str) -> CapabilityGroup | None:
+    """The group itself, for a caller that reads what it says rather than its name.
+
+    Same lookup and same folding as :func:`group_of_tool`; the split is only that
+    a key is what a JSON payload carries and the group is what a policy reads.
+    """
+    key = group_of_tool(brokerage, tool)
+    return _BY_KEY.get(key) if key is not None else None
 
 
 def is_always_denied(brokerage: str | None, tool: str) -> bool:

@@ -19,6 +19,7 @@ import {
 import type { CatalogServer } from '@/pages/ChatAgent/utils/api';
 import { brokerageArt, mcpServerArt } from '@/lib/brandArt';
 import { type Brokerage } from '../brokerages';
+import { useFlashWorkspace } from '../hooks/useFlashWorkspace';
 import { isPluginOwned } from '../utils/provenance';
 import {
   ConnectButton,
@@ -93,6 +94,7 @@ export function McpCatalogRow({
   onMove: (toWorkspaceId: string) => void;
 }) {
   const { t } = useTranslation();
+  const flashWorkspace = useFlashWorkspace();
   const oauthEligible = server.transport === 'http';
   const status = server.oauth_status ?? null;
   const unconnected = oauthEligible && needsOauthConnect(status);
@@ -155,6 +157,10 @@ export function McpCatalogRow({
             scopeWorkspaceId={null}
             disabledWorkspaceIds={server.disabled_workspace_ids ?? []}
             checklistLocked={scopeLocked(server)}
+            // Flash has no sandbox, so it can install only directly bound
+            // tools. The server answers whether this row has any; offering
+            // Flash on a row that has none is a switch that does nothing.
+            flashWorkspace={server.has_direct_tools ? flashWorkspace : undefined}
             busy={scopeBusy}
             moveBlockedReason={
               // OAuth connections exist only at the user tier, so a connected

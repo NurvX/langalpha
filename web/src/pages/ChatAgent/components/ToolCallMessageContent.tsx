@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, FileText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { TextShimmer } from '@/components/ui/text-shimmer';
-import { getDisplayName, getToolIcon, getActiveLabel, stripLineNumbers, parseTruncatedResult } from './toolDisplayConfig';
+import { getDisplayName, getActiveLabel, stripLineNumbers, parseTruncatedResult } from './toolDisplayConfig';
+import { ToolIcon } from './ToolIcon';
 import Markdown from './Markdown';
 import { parseDisplayableResults, buildRichResultMap, resolveSnippet } from './webSearchUtils';
 
@@ -215,7 +216,12 @@ function ToolCallMessageContent({
   const displayProcess = processes[processes.length - 1];
   const rawToolName = displayProcess.toolName || displayProcess.toolCall?.name || 'Tool Call';
   const displayArgs = displayProcess.toolCall?.args;
-  const displayName = getDisplayName(rawToolName, t, displayArgs);
+  const displayName = getDisplayName(
+    rawToolName,
+    t,
+    displayArgs,
+    displayProcess.toolCallResult?.artifact,
+  );
   const isFileTool = FILE_TOOLS.includes(rawToolName);
   const filePath = isFileTool ? getFilePathFromToolCall(displayProcess.toolCall) : null;
 
@@ -236,7 +242,6 @@ function ToolCallMessageContent({
     : [];
   const hasInlineResult = inlineSummaries.length > 0;
 
-  const IconComponent = getToolIcon(rawToolName, displayArgs);
 
   // Inline tool rendering — compact row with summary
   if (isInlineTool) {
@@ -269,7 +274,9 @@ function ToolCallMessageContent({
         >
           {/* Icon */}
           <div className="flex-shrink-0" style={{ marginTop: '2px' }}>
-            <IconComponent
+            <ToolIcon
+              toolName={rawToolName}
+              args={displayArgs}
               className="h-4 w-4"
               style={{ color: displayProcess.isFailed ? 'var(--color-loss)' : 'var(--Labels-Secondary)' }}
             />
@@ -344,7 +351,9 @@ function ToolCallMessageContent({
       >
         {/* Icon */}
         <div className="flex-shrink-0">
-          <IconComponent
+          <ToolIcon
+            toolName={rawToolName}
+            args={displayArgs}
             className="h-4 w-4"
             style={{ color: displayProcess.isFailed ? 'var(--color-loss)' : 'var(--Labels-Secondary)' }}
           />

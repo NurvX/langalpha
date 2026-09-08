@@ -48,7 +48,7 @@ import type {
   HistoryInterruptInfo, StreamProcessorRefs,
   ModelStatus, FallbackSuggestion,
 } from '../session/types';
-import { SECRETARY_ACTION_TYPES, setCardStatus } from '../session/interrupts/buckets';
+import { PROPOSAL_INTERRUPT_TYPES, SECRETARY_ACTION_TYPES, setCardStatus } from '../session/interrupts/buckets';
 import { beginResume, restoreCreditPausePending, type CreditPauseResumeRefs } from '../session/interrupts/creditPauseResume';
 export type { ModelStatus, FallbackSuggestion } from '../session/types';
 import type { ChatSessionRuntime } from '../session/runtime';
@@ -895,8 +895,20 @@ export function useChatMessages(
         await reconnectToStream({ activeTasks: status.active_tasks || [], runId: status.run_id ?? null, resetCursor: true, snapshotAtMs });
         unresolvedHistoryInterruptRef.current = [];
       } else if (historyHasUnresolvedInterruptRef.current && !status.can_reconnect) {
-        // Workflow genuinely paused → make interrupt(s) interactive
-        const intInfos = unresolvedHistoryInterruptRef.current;
+        // Workflow genuinely paused → make interrupt(s) interactive.
+        //
+        // A tool approval is the one family with no answer path: nothing
+        // raises one any more and the approve/reject handlers are gone, so an
+        // unanswered one from history is a record to render, never a slot to
+        // fill. Arming it would disable the composer against a card with no
+        // controls, and a reload would only repeat that. Filtered here rather
+        // than where replay queues the entry: that list is also what the
+        // resolvers settle by id and what the reconnect branch strips, and
+        // both still need to find the card. The live projection keeps the
+        // same rule for a stream that still carries one (fromLiveEvent).
+        const intInfos = unresolvedHistoryInterruptRef.current.filter(
+          (info) => info.type !== 'tool_approval',
+        );
         if (intInfos.length > 0) {
           const intInfo = intInfos[0]; // Use first for setPendingInterrupt (single-slot state)
           console.log('[Reconnect] Workflow paused, making', intInfos.length, 'interrupt(s) interactive:', intInfos.map((p) => p.type));
@@ -917,37 +929,15 @@ export function useChatMessages(
               assistantMessageId: intInfo.assistantMessageId,
               questionId: intInfo.questionId,
             });
-          } else if (intInfo.type === 'create_workspace') {
-            setPendingInterrupt({
-              type: 'create_workspace',
-              interruptId: intInfo.interruptId,
-              assistantMessageId: intInfo.assistantMessageId,
-              proposalId: intInfo.proposalId,
-            });
-          } else if (intInfo.type === 'start_question') {
-            setPendingInterrupt({
-              type: 'start_question',
-              interruptId: intInfo.interruptId,
-              assistantMessageId: intInfo.assistantMessageId,
-              proposalId: intInfo.proposalId,
-            });
-          } else if (intInfo.type === 'ptc_agent') {
-            setPendingInterrupt({
-              type: 'ptc_agent',
-              interruptId: intInfo.interruptId,
-              assistantMessageId: intInfo.assistantMessageId,
-              proposalId: intInfo.proposalId,
-            });
-          } else if (intInfo.type === 'delete_workspace' || intInfo.type === 'stop_workspace' || intInfo.type === 'delete_thread') {
+          } else if (
+            PROPOSAL_INTERRUPT_TYPES.has(intInfo.type)
+            || intInfo.type === 'credit_pause'
+          ) {
+            // Every proposal-shaped card restores the same single-slot state,
+            // and the type it wants is the one the entry already carries, so a
+            // per-type branch here only differed in re-spelling that literal.
             setPendingInterrupt({
               type: intInfo.type,
-              interruptId: intInfo.interruptId,
-              assistantMessageId: intInfo.assistantMessageId,
-              proposalId: intInfo.proposalId,
-            });
-          } else if (intInfo.type === 'credit_pause') {
-            setPendingInterrupt({
-              type: 'credit_pause',
               interruptId: intInfo.interruptId,
               assistantMessageId: intInfo.assistantMessageId,
               proposalId: intInfo.proposalId,

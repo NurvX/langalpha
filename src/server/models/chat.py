@@ -64,17 +64,16 @@ class HITLResponse(BaseModel):
 
 
 def _format_rejection_message(user_feedback: Optional[str]) -> str:
-    """Format a clear rejection message for the agent.
+    """The tool message the agent reads after a rejection.
 
-    Args:
-        user_feedback: Optional feedback from the user explaining why they rejected.
-
-    Returns:
-        Formatted rejection message that clearly indicates the plan was rejected.
+    Worded for any interrupted action, not only a plan: the same resume path
+    now carries a declined order, and telling the model its "plan" was
+    rejected when it asked to place an order sends it off rewriting a plan it
+    never had.
     """
     if user_feedback and user_feedback.strip():
-        return f"User rejected the plan with the following feedback: {user_feedback.strip()}"
-    return "User rejected the plan. No specific feedback was provided."
+        return f"User rejected this action with the following feedback: {user_feedback.strip()}"
+    return "User rejected this action. No specific feedback was provided."
 
 
 def serialize_hitl_response_map(hitl_response: Mapping[str, Any]) -> Dict[str, dict]:

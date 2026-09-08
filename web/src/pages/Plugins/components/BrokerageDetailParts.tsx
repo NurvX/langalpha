@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Check, Minus, Monitor } from 'lucide-react';
 import { TagBadge } from '@/pages/ChatAgent/components/mcp/McpPrimitives';
@@ -129,10 +130,13 @@ export function GroupedToolList({
   groups,
   granted,
   tools,
+  renderControl,
 }: {
   groups: CapabilityGroup[];
   granted: string[] | null | undefined;
   tools: McpToolSummary[];
+  /** A control for each reachable tool; a declined group's tools get none. */
+  renderControl?: (tool: McpToolSummary) => ReactNode;
 }) {
   const { t } = useTranslation();
   const settled = granted != null;
@@ -188,7 +192,11 @@ export function GroupedToolList({
                 <TagBadge soft>{t('plugins.brokerages.detail.declined')}</TagBadge>
               )}
             </div>
-            <ToolNames tools={bucket} dimmed={settled && !on} />
+            <ToolNames
+              tools={bucket}
+              dimmed={settled && !on}
+              renderControl={renderControl}
+            />
           </div>
         );
       })}
@@ -212,6 +220,7 @@ export function GroupedToolList({
         )}
         // Not dimmed: these are the ones the agent can actually call.
         dimmed={!settled}
+        renderControl={renderControl}
       />
     </div>
   );
@@ -223,11 +232,13 @@ function TrailingBucket({
   label,
   note,
   dimmed,
+  renderControl,
 }: {
   tools: McpToolSummary[];
   label: string;
   note: string;
   dimmed: boolean;
+  renderControl?: (tool: McpToolSummary) => ReactNode;
 }) {
   if (tools.length === 0) return null;
   return (
@@ -249,34 +260,57 @@ function TrailingBucket({
       <p className="text-[0.6875rem]" style={{ color: 'var(--color-text-quaternary)' }}>
         {note}
       </p>
-      <ToolNames tools={tools} dimmed={dimmed} />
+      <ToolNames tools={tools} dimmed={dimmed} renderControl={renderControl} />
     </div>
   );
 }
 
+/**
+ * Chips when the list is only read, one row per tool when each carries a
+ * control. A dimmed bucket is unreachable, and a control on a tool the agent
+ * cannot call would be a setting with nothing to act on, so it stays chips.
+ */
 function ToolNames({
   tools,
   dimmed,
+  renderControl,
 }: {
   tools: McpToolSummary[];
   dimmed: boolean;
+  renderControl?: (tool: McpToolSummary) => ReactNode;
 }) {
+  const chip = (tool: McpToolSummary) => (
+    <span
+      title={tool.description || undefined}
+      className="text-[0.625rem] px-1.5 py-0.5 rounded break-all"
+      style={{
+        color: dimmed
+          ? 'var(--color-text-quaternary)'
+          : 'var(--color-text-tertiary)',
+        backgroundColor: 'var(--color-bg-tag)',
+        fontFamily: "'JetBrains Mono', 'Menlo', monospace",
+      }}
+    >
+      {tool.name}
+    </span>
+  );
+  if (renderControl && !dimmed) {
+    return (
+      <div className="flex flex-col gap-1">
+        {tools.map((tool) => (
+          <div key={tool.name} className="flex items-start justify-between gap-2">
+            <div className="min-w-0 pt-0.5">{chip(tool)}</div>
+            {renderControl(tool)}
+          </div>
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="flex flex-wrap gap-1">
       {tools.map((tool) => (
-        <span
-          key={tool.name}
-          title={tool.description || undefined}
-          className="text-[0.625rem] px-1.5 py-0.5 rounded break-all"
-          style={{
-            color: dimmed
-              ? 'var(--color-text-quaternary)'
-              : 'var(--color-text-tertiary)',
-            backgroundColor: 'var(--color-bg-tag)',
-            fontFamily: "'JetBrains Mono', 'Menlo', monospace",
-          }}
-        >
-          {tool.name}
+        <span key={tool.name} className="contents">
+          {chip(tool)}
         </span>
       ))}
     </div>

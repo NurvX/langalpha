@@ -10,6 +10,7 @@ import {
   isDesktopShell,
   type McpOAuthFlow,
 } from '@/lib/desktop';
+import { foldToolName } from '@/pages/ChatAgent/utils/directTools';
 
 //
 // Per-workspace effective list mixes built-in servers with workspace-added
@@ -55,6 +56,54 @@ export interface McpToolSummary {
    * detail view came to promise the agent could not reach tools it could.
    */
   always_denied?: boolean;
+  /**
+   * How the agent reaches this tool right now: `ptc` from Python in the
+   * sandbox, `direct` as one tool call the app can show, `both`. Effective,
+   * not stored: `binding_source` says which layer decided it, and `policy`
+   * means the server pins it and refuses any other value.
+   */
+  binding?: McpToolBinding;
+  binding_source?: McpBindingSource;
+  /**
+   * The bindings the server accepts for this tool. A live order tool lists
+   * only `direct`, so every order is one visible call rather than a line of
+   * Python. Absent means unrestricted.
+   */
+  allowed?: McpToolBinding[];
+}
+
+export type McpToolBinding = 'ptc' | 'direct' | 'both';
+
+/** The one row-wide override: send everything the row may move through the
+ * sandbox. Null, the only other state, leaves each group's own default in force. */
+export type McpBindingPreset = 'ptc_only';
+
+/** Precedence, highest first: override > preset > config > group > default. */
+export type McpBindingSource = 'override' | 'preset' | 'group' | 'default' | 'policy';
+
+/** Partial: only the fields present change. Bindings are sent per tool, not
+ * as the whole map, so two tabs editing different tools cannot overwrite
+ * each other.
+ * A `binding_preset` of `null` clears it back to the group default. */
+export interface McpServerBindingPatch {
+  tool_binding_set?: Record<string, McpToolBinding>;
+  tool_binding_unset?: string[];
+  binding_preset?: McpBindingPreset | null;
+}
+
+/** The server's merge, mirrored for the optimistic view: a delta replaces
+ * every stored key that folds to the name it addresses. */
+export function mergeToolBinding(
+  stored: Record<string, McpToolBinding>,
+  patch: McpServerBindingPatch,
+): Record<string, McpToolBinding> {
+  const touched = new Set(
+    [...Object.keys(patch.tool_binding_set ?? {}), ...(patch.tool_binding_unset ?? [])].map(
+      foldToolName,
+    ),
+  );
+  const kept = Object.entries(stored).filter(([name]) => !touched.has(foldToolName(name)));
+  return { ...Object.fromEntries(kept), ...(patch.tool_binding_set ?? {}) };
 }
 
 export type McpStatus =
@@ -208,6 +257,18 @@ export interface CatalogServer {
    * own last answer instead of the product defaults.
    */
   remembered_capabilities?: string[] | null;
+  /** Per-tool binding overrides; a name here beats the preset and the group. */
+  tool_binding?: Record<string, McpToolBinding>;
+  /** Whether any tool on this row binds directly, and so whether the row can
+   * reach Flash at all. */
+  has_direct_tools?: boolean;
+  binding_preset?: McpBindingPreset | null;
+  /**
+   * Retained but inert. The backend keeps the column for a later stage and
+   * nothing reads it now: live order tools run as direct calls the app can
+   * show, and no call stops for confirmation.
+   */
+  order_approval?: boolean;
   /** Host-side discovered tool count for the current config (OAuth servers). */
   tool_count?: number | null;
   /** Path on this origin to the mark the server declared in its handshake.
@@ -538,6 +599,19 @@ export async function deleteMcpCatalogServer(name: string) {
 export async function setMcpCatalogServerEnabled(name: string, enabled: boolean) {
   const { data } = await api.patch(`/api/v1/mcp/servers/${name}/enabled`, { enabled });
   return data as { name: string; enabled: boolean; warnings?: string[] };
+}
+
+/** Change how a catalog server's tools reach the model. 422 when a tool that
+ *  asks first is set to `both`; the detail names it. */
+export async function setMcpCatalogServerBinding(
+  name: string,
+  body: McpServerBindingPatch,
+): Promise<CatalogServer> {
+  const { data } = await api.patch<CatalogServer>(
+    `/api/v1/mcp/servers/${name}/binding`,
+    body,
+  );
+  return data;
 }
 
 /**

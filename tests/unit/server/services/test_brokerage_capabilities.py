@@ -6,13 +6,17 @@ the shape: a tool reachable from a group the user declined, a group nobody
 declared, or a write filed where a reader belongs.
 """
 
+from dataclasses import replace
+
 import pytest
 
 from src.server.services import brokerage_capabilities as capabilities
 from src.server.services import brokerages
 from src.server.services.brokerage_capabilities import (
+    ALL_BINDINGS,
     GROUPS,
     UNCURATED,
+    _BY_KEY,
     _CURATION,
     denied_tools,
     group_keys_for,
@@ -254,3 +258,27 @@ def test_the_catalog_annotation_reads_a_name_the_way_the_relay_does() -> None:
     # Folding widens what matches; it must not invent a match.
     assert group_of_tool("moomoo", "trading_order_place_v2") is None
     assert is_always_denied("ibkr", "provide_customer_feedback_v2") is False
+
+
+def test_a_groups_default_path_is_always_one_it_allows() -> None:
+    """The resolver clamps to the default, so a default outside the allowed
+    set would leave a group nothing can resolve; the constructor refuses it."""
+    for group in GROUPS:
+        assert group.default_binding in group.allowed_bindings, group.key
+    with pytest.raises(ValueError):
+        replace(_BY_KEY["trading"], default_binding="ptc")
+
+
+def test_only_live_orders_are_held_to_one_path() -> None:
+    """``tone`` says how to draw the row; the binding policy is its own field
+    so a restyle cannot change what a tool is allowed to be."""
+    restricted = {g.key: g for g in GROUPS if g.allowed_bindings != ALL_BINDINGS}
+    assert set(restricted) == {"trading"}
+    assert restricted["trading"].allowed_bindings == frozenset({"direct"})
+    assert restricted["trading"].default_binding == "direct"
+    assert _BY_KEY["paper_trading"].default_binding == "direct"
+    assert all(
+        g.default_binding == "ptc"
+        for g in GROUPS
+        if g.key not in ("trading", "paper_trading")
+    )

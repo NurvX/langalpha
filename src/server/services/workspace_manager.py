@@ -18,7 +18,7 @@ from ptc_agent.core.mcp_sanitize import is_untrusted_server
 from ptc_agent.core.sandbox.runtime import SandboxGoneError, SandboxTransientError
 from ptc_agent.core.session import Session, SessionManager
 
-from src.server.services.egress import fold_tool_name
+from src.server.services.mcp_tool_split import build_direct_entries
 from src.server.services.egress.session_binding import (
     maybe_remint_egress_jwt,
     RelayBind,
@@ -666,6 +666,12 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
             # resolve's, so a tool the user declined is refused whatever the
             # docs in the sandbox say.
             #
+            # The direct half is dropped rather than kept, because none of
+            # that reasoning applies to it: its stamps say which calls stop to
+            # ask, and those came from a resolve the grants no longer match.
+            # Binding nothing costs this turn only the direct tools, so it is
+            # the same trade the Flash binder already makes on supersede.
+            #
             # The withheld stamp is what ends it, and it needs the marker to
             # be read at all: ``_apply_session_mcp`` short-circuits only on a
             # non-None session version, but the warm path returns inside the
@@ -674,9 +680,11 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
             # cooldown rather than for one turn.
             logger.info(
                 "[EGRESS] resolve for %s superseded by a newer config version; "
-                "keeping the composite, withholding the version stamp",
+                "keeping the composite, dropping the direct tools, "
+                "withholding the version stamp",
                 workspace_id,
             )
+            session.direct_mcp_tools = {}
             session.mcp_config_version = None
             self._resolve_superseded.add(workspace_id)
             return None
@@ -746,26 +754,17 @@ class WorkspaceManager(WorkspaceEntitlementsMixin):
             # Subtractive, so a tool the vendor added after we curated them
             # reaches the prompt and the sandbox rather than going missing. The
             # policy only ever removes what a declined capability group named.
-            denied = resolved.denied_tools_by_name
-            for server in untrusted_servers:
-                snapshot = snapshots.ok(server)
-                if snapshot is not None:
-                    settled.add(server.name)
-                    tools = snapshot.get("tools") or []
-                    refused = denied.get(server.name)
-                    if refused:
-                        # Folded on both sides, because the relay reads the
-                        # denial that way and the two must name the same tool.
-                        # A vendor that recases or pads a name would otherwise
-                        # be refused per call while the prompt, the wrappers and
-                        # the per-tool docs kept advertising it.
-                        folded = {fold_tool_name(name) for name in refused}
-                        tools = [
-                            t
-                            for t in tools
-                            if fold_tool_name(t.get("name")) not in folded
-                        ]
-                    tool_schemas[server.name] = tools
+            tool_schemas, session.direct_mcp_tools = build_direct_entries(
+                untrusted_servers,
+                snapshots,
+                denied=resolved.denied_tools_by_name,
+                plans=resolved.binding_plans_by_name,
+            )
+            # A server answers for itself only once it has a usable snapshot,
+            # which is exactly the set the split could key.
+            settled = set(tool_schemas)
+        else:
+            session.direct_mcp_tools = {}
         session.mcp_settled_servers = settled
 
         # Always build from the BUILTIN registry, never a prior composite —
