@@ -372,6 +372,7 @@ function ArtifactOrMarkdown({ artifact, content, toolName, toolCallProcess, onOp
         toolName={toolName}
         args={toolCallProcess.toolCall?.args}
         content={content}
+        artifact={toolCallProcess.toolCallResult?.artifact}
         isFailed={toolCallProcess.isFailed}
       />
     );

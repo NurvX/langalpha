@@ -120,7 +120,12 @@ function classifyFromArgs(toolName: string, args: ToolCallArgs | undefined): Age
   return classifyAgentPath(fp);
 }
 
-export function getDisplayName(rawToolName: string, t?: TFn, args?: ToolCallArgs): string {
+export function getDisplayName(
+  rawToolName: string,
+  t?: TFn,
+  args?: ToolCallArgs,
+  artifact?: unknown,
+): string {
   const info = classifyFromArgs(rawToolName, args);
   if (info) {
     if (info.kind === 'skill') {
@@ -139,7 +144,7 @@ export function getDisplayName(rawToolName: string, t?: TFn, args?: ToolCallArgs
       return t ? t(`toolArtifact.tool.${info.entity}`) : entityLabel(info.entity);
     }
   }
-  const direct = directToolDisplayName(rawToolName);
+  const direct = directToolDisplayName(rawToolName, artifact);
   if (direct) return direct;
   const config = TOOL_DISPLAY_CONFIG[rawToolName];
   if (t && config?.i18nKey) return t(`toolArtifact.tool.${config.i18nKey}`);
@@ -442,8 +447,17 @@ export function getActiveLabel(toolName: string, toolCall: ToolCall | undefined,
  * Title for completed timeline rows. Returns the past-tense verb phrase for
  * path-aware tools ("Read memory", "Added memory", "Activated skill") and the
  * generic displayName otherwise.
+ *
+ * The result's artifact is optional because a row is only completed once, and
+ * a direct tool's vendor names ride on it: without it the title falls back to
+ * parsing the model-facing name, which is lossy for an aliased one.
  */
-export function getCompletedRowTitle(toolName: string, toolCall: ToolCall | undefined, t?: TFn): string {
+export function getCompletedRowTitle(
+  toolName: string,
+  toolCall: ToolCall | undefined,
+  t?: TFn,
+  artifact?: unknown,
+): string {
   const args = toolCall?.args;
   const info = classifyFromArgs(toolName, args);
   if (info) {
@@ -485,7 +499,7 @@ export function getCompletedRowTitle(toolName: string, toolCall: ToolCall | unde
       return t ? t(`toolArtifact.completed.updated_${entity}`) : `Updated ${entity}`;
     }
   }
-  return getDisplayName(toolName, t, args);
+  return getDisplayName(toolName, t, args, artifact);
 }
 
 /**

@@ -8,7 +8,7 @@ import { DirectToolTileMark } from './DirectToolMark';
 import { useDirectToolVendorLabel } from './useDirectToolVendor';
 import {
   directToolRejectionReason,
-  parseDirectToolName,
+  directToolIdentity,
   parseDirectToolResult,
   type DirectToolResult,
 } from '../../utils/directTools';
@@ -83,15 +83,17 @@ export function DirectToolDetail({
   toolName,
   args,
   content,
+  artifact,
   isFailed,
 }: {
   toolName: string;
   args: Record<string, unknown> | undefined;
   content: unknown;
+  artifact?: unknown;
   isFailed?: boolean;
 }): React.ReactElement {
   const { t } = useTranslation();
-  const parsed = parseDirectToolName(toolName) || { server: '', tool: toolName };
+  const parsed = directToolIdentity(toolName, artifact) || { server: '', tool: toolName };
   const vendorLabel = useDirectToolVendorLabel(parsed.server);
   const result = parseDirectToolResult(content, isFailed);
 

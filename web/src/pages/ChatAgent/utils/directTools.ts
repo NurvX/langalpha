@@ -39,9 +39,35 @@ export function parseDirectToolName(name: string | null | undefined): DirectTool
   return { server: rest.slice(0, sep), tool: rest.slice(sep + 2) };
 }
 
+/**
+ * The vendor's own server and tool, preferring the stamp the backend puts on
+ * the result over the tool name.
+ *
+ * The name is derived from the pair and gives way to a digest when it cannot
+ * hold both, so parsing it back is lossy by construction. The stamp only
+ * arrives with the result, so a call still in flight has the name and nothing
+ * else, which is why the parse stays as the fallback rather than being removed.
+ */
+export function directToolIdentity(
+  name: string | null | undefined,
+  artifact?: unknown,
+): DirectToolName | null {
+  const stamp = (artifact as { direct_mcp?: unknown } | null | undefined)?.direct_mcp;
+  if (stamp && typeof stamp === 'object') {
+    const { server, tool } = stamp as { server?: unknown; tool?: unknown };
+    if (typeof server === 'string' && typeof tool === 'string' && server && tool) {
+      return { server, tool };
+    }
+  }
+  return parseDirectToolName(name);
+}
+
 /** The display name for a direct tool, or null for any other tool. */
-export function directToolDisplayName(name: string | null | undefined): string | null {
-  const parsed = parseDirectToolName(name);
+export function directToolDisplayName(
+  name: string | null | undefined,
+  artifact?: unknown,
+): string | null {
+  const parsed = directToolIdentity(name, artifact);
   return parsed ? humanizeKey(parsed.tool) : null;
 }
 

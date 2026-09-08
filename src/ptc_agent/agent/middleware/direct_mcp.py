@@ -21,8 +21,10 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
+from langgraph.errors import GraphBubbleUp
 from langgraph.types import Command
 
+from ptc_agent.agent.middleware.tool.error_handling import format_tool_error
 from ptc_agent.core.mcp_sanitize import sanitize_tool_name
 
 METADATA_KEY = "direct_mcp"
@@ -74,6 +76,22 @@ def direct_tool_summary(tools: list[BaseTool]) -> str:
     return "\n".join(lines)
 
 
+def _stamped(result: ToolMessage | Command, stamp: dict[str, Any]) -> ToolMessage | Command:
+    """Carry the vendor's own names out on the result.
+
+    The tool name the model sees is derived from the pair and gives way to a
+    digest when it cannot hold both, so it is not something a reader can parse
+    back into a server and a tool. Riding on the message rather than on the
+    streamed event means the identity survives a reload, which replays from the
+    checkpoint and never sees the event.
+    """
+    if not isinstance(result, ToolMessage):
+        return result
+    artifact = result.artifact if isinstance(result.artifact, dict) else {}
+    result.artifact = {**artifact, METADATA_KEY: dict(stamp)}
+    return result
+
+
 class DirectMcpPolicyMiddleware(AgentMiddleware):
     """Refuse a direct tool call the connection's current consent does not cover.
 
@@ -89,12 +107,21 @@ class DirectMcpPolicyMiddleware(AgentMiddleware):
             if stamp:
                 self._stamps[tool.name] = stamp
 
-    def _refused(self, request: ToolCallRequest, reason: str) -> ToolMessage:
-        return ToolMessage(
-            content=f"Refused: {reason}",
-            tool_call_id=request.tool_call["id"],
-            name=request.tool_call.get("name"),
-            status="error",
+    def _refused(
+        self, request: ToolCallRequest, reason: str, stamp: dict[str, Any]
+    ) -> ToolMessage:
+        # Stamped like a result, because the refusal is one: the surface reads
+        # the identity off the message, and a refused call the model made under
+        # a digested name would otherwise be the one call rendered without the
+        # vendor's own names.
+        return _stamped(  # type: ignore[return-value]
+            ToolMessage(
+                content=f"Refused: {reason}",
+                tool_call_id=request.tool_call["id"],
+                name=request.tool_call.get("name"),
+                status="error",
+            ),
+            stamp,
         )
 
     def wrap_tool_call(
@@ -102,11 +129,14 @@ class DirectMcpPolicyMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
-        if request.tool_call.get("name") not in self._stamps:
+        stamp = self._stamps.get(request.tool_call.get("name", ""))
+        if stamp is None:
             return handler(request)
         # The policy is async and so are the tools; a sync invocation of a
         # direct tool has no path to either, so it fails closed.
-        return self._refused(request, "direct MCP tools run only on the async path")
+        return self._refused(
+            request, "direct MCP tools run only on the async path", stamp
+        )
 
     async def awrap_tool_call(
         self,
@@ -116,7 +146,30 @@ class DirectMcpPolicyMiddleware(AgentMiddleware):
         stamp = self._stamps.get(request.tool_call.get("name", ""))
         if stamp is None:
             return await handler(request)
-        reason = await self._toolset.check(stamp["server"], stamp["tool"])
-        if reason:
-            return self._refused(request, reason)
-        return await handler(request)
+        try:
+            # The policy check reads the connection row, so it fails the same
+            # transient ways the call does and belongs under the same guard.
+            reason = await self._toolset.check(stamp["server"], stamp["tool"])
+            if reason:
+                return self._refused(request, reason, stamp)
+            result = await handler(request)
+        except GraphBubbleUp:
+            raise
+        except Exception as e:
+            # ``ToolErrorHandlingMiddleware`` converts a raising tool into an
+            # error message, but it is installed ahead of this middleware and
+            # the first wrapper is the outermost one, so it only sees the
+            # exception after this frame has unwound and stamps nothing. A
+            # relay timeout would then be the one result rendered without the
+            # vendor's own names. Convert here instead, in the shape that
+            # middleware would have used, and let it pass the message through.
+            return _stamped(  # type: ignore[return-value]
+                ToolMessage(
+                    content=format_tool_error(e, request.tool_call.get("name")),
+                    tool_call_id=request.tool_call["id"],
+                    name=request.tool_call.get("name"),
+                    status="error",
+                ),
+                stamp,
+            )
+        return _stamped(result, stamp)

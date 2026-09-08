@@ -5,6 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  directToolIdentity,
   parseDirectToolName,
   isDirectToolName,
   directToolDisplayName,
@@ -186,5 +187,48 @@ describe('parseDirectToolResult', () => {
     expect(parseDirectToolResult('not json')).toEqual({ kind: 'text', text: 'not json' });
     expect(parseDirectToolResult('')).toEqual({ kind: 'empty' });
     expect(parseDirectToolResult(null)).toEqual({ kind: 'empty' });
+  });
+});
+
+describe('directToolIdentity', () => {
+  it('prefers the stamp over the name it cannot parse back', () => {
+    expect(
+      directToolIdentity('mcp__desk_prod_3a2b092c__place', {
+        direct_mcp: { server: 'desk__prod', tool: 'place' },
+      }),
+    ).toEqual({ server: 'desk__prod', tool: 'place' });
+  });
+
+  it('falls back to the name while a call is still in flight', () => {
+    expect(directToolIdentity('mcp__moomoo__quote', undefined)).toEqual({
+      server: 'moomoo',
+      tool: 'quote',
+    });
+  });
+
+  it('ignores a malformed stamp rather than rendering half of one', () => {
+    expect(
+      directToolIdentity('mcp__moomoo__quote', { direct_mcp: { server: 'moomoo' } }),
+    ).toEqual({ server: 'moomoo', tool: 'quote' });
+  });
+
+  it('is null for a tool that is not a direct one', () => {
+    expect(directToolIdentity('WebSearch', undefined)).toBeNull();
+  });
+});
+
+describe('directToolDisplayName with a completed result', () => {
+  it('titles from the stamp rather than the digest in the name', () => {
+    expect(
+      directToolDisplayName('mcp__desk_prod_3a2b092c__place_order', {
+        direct_mcp: { server: 'desk__prod', tool: 'place_order' },
+      }),
+    ).toBe('Place order');
+  });
+
+  it('still titles from the name while the call is in flight', () => {
+    expect(directToolDisplayName('mcp__moomoo__trading_order_place')).toBe(
+      'Trading order place',
+    );
   });
 });

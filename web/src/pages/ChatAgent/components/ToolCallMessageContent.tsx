@@ -216,7 +216,12 @@ function ToolCallMessageContent({
   const displayProcess = processes[processes.length - 1];
   const rawToolName = displayProcess.toolName || displayProcess.toolCall?.name || 'Tool Call';
   const displayArgs = displayProcess.toolCall?.args;
-  const displayName = getDisplayName(rawToolName, t, displayArgs);
+  const displayName = getDisplayName(
+    rawToolName,
+    t,
+    displayArgs,
+    displayProcess.toolCallResult?.artifact,
+  );
   const isFileTool = FILE_TOOLS.includes(rawToolName);
   const filePath = isFileTool ? getFilePathFromToolCall(displayProcess.toolCall) : null;
 

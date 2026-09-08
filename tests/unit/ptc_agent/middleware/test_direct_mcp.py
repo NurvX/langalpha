@@ -6,11 +6,14 @@ import pytest
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
 
+from langgraph.errors import GraphBubbleUp
+
 from ptc_agent.agent.middleware.direct_mcp import (
     METADATA_KEY,
     DirectMcpPolicyMiddleware,
     direct_tool_summary,
 )
+from ptc_agent.agent.middleware.tool.error_handling import format_tool_error
 
 
 def _tool(name: str, *, stamp: dict | None) -> StructuredTool:
@@ -72,6 +75,12 @@ async def test_direct_tool_is_refused_with_the_ports_reason():
     assert out.status == "error"
     assert out.tool_call_id == "call-1"
     assert out.content == "Refused: consent withdrawn"
+    # The refusal is the one result whose identity the surface cannot recover
+    # from the alias, because it is also the one the vendor never answered.
+    assert out.artifact["direct_mcp"] == {
+        "server": "moomoo",
+        "tool": "sim_trade_input_order",
+    }
 
 
 def test_sync_path_fails_closed_for_direct_tools_only():
@@ -86,6 +95,97 @@ def test_sync_path_fails_closed_for_direct_tools_only():
         lambda r: ToolMessage(content="ran", tool_call_id="call-1"),
     )
     assert refused.status == "error"
+    assert refused.artifact["direct_mcp"]["server"] == "moomoo"
+
+
+@pytest.mark.asyncio
+async def test_a_permitted_call_carries_the_vendor_names_out():
+    """The alias is lossy, so the result is where identity has to travel."""
+    tool = _tool(
+        "mcp__moomoo__sim_trade_input_order",
+        stamp={"server": "moomoo", "tool": "sim_trade_input_order"},
+    )
+    mw = DirectMcpPolicyMiddleware(_ToolSet([tool], reason=None))
+
+    async def handler(request):
+        return ToolMessage(content="ok", tool_call_id="1")
+
+    out = await mw.awrap_tool_call(_Request(tool.name), handler)
+    assert out.artifact["direct_mcp"] == {
+        "server": "moomoo",
+        "tool": "sim_trade_input_order",
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_stamp_does_not_displace_an_artifact_the_tool_set():
+    tool = _tool("mcp__moomoo__quote", stamp={"server": "moomoo", "tool": "quote"})
+    mw = DirectMcpPolicyMiddleware(_ToolSet([tool], reason=None))
+
+    async def handler(request):
+        return ToolMessage(content="ok", tool_call_id="1", artifact={"rows": 3})
+
+    out = await mw.awrap_tool_call(_Request(tool.name), handler)
+    assert out.artifact["rows"] == 3
+    assert out.artifact["direct_mcp"]["tool"] == "quote"
+
+
+@pytest.mark.asyncio
+async def test_a_raising_vendor_call_still_carries_the_vendor_names_out():
+    # ToolErrorHandlingMiddleware is installed ahead of this one and the first
+    # wrapper is the outermost, so it converts the exception only after this
+    # frame unwound. Without converting here, a relay timeout is the one
+    # result the surface renders under the alias instead of the vendor.
+    mw = DirectMcpPolicyMiddleware(_ToolSet([DIRECT]))
+
+    async def boom(request):
+        raise TimeoutError("relay wall clock exceeded")
+
+    out = await mw.awrap_tool_call(_Request(DIRECT.name), boom)
+
+    assert isinstance(out, ToolMessage)
+    assert out.status == "error"
+    assert out.tool_call_id == "call-1"
+    assert out.artifact["direct_mcp"] == {
+        "server": "moomoo",
+        "tool": "sim_trade_input_order",
+    }
+    # Reported in the shape the converter would have used, so the two error
+    # paths cannot drift into two different sentences for one failure.
+    assert out.content == format_tool_error(
+        TimeoutError("relay wall clock exceeded"), DIRECT.name
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_graph_interrupt_is_not_swallowed_as_a_tool_error():
+    # The converter re-raises GraphBubbleUp because LangGraph control flow
+    # travels as an exception; catching it here would strand the interrupt.
+    mw = DirectMcpPolicyMiddleware(_ToolSet([DIRECT]))
+
+    async def interrupt(request):
+        raise GraphBubbleUp("resume me")
+
+    with pytest.raises(GraphBubbleUp):
+        await mw.awrap_tool_call(_Request(DIRECT.name), interrupt)
+
+
+@pytest.mark.asyncio
+async def test_a_policy_check_that_raises_is_stamped_like_the_call():
+    # The check reads the connection row, so it fails the same transient ways
+    # the vendor call does, and it sits before the handler: left outside the
+    # guard it would be the one remaining path that unwinds without identity.
+    class Broken(_ToolSet):
+        async def check(self, server, tool):
+            raise ConnectionError("connection row unavailable")
+
+    mw = DirectMcpPolicyMiddleware(Broken([DIRECT]))
+
+    out = await mw.awrap_tool_call(_Request(DIRECT.name), _ran)
+
+    assert out.status == "error"
+    assert out.artifact["direct_mcp"]["tool"] == "sim_trade_input_order"
+    assert "connection row unavailable" in out.content
 
 
 class TestDirectToolSummaryImportHint:

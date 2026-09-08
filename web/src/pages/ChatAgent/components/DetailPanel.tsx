@@ -75,8 +75,10 @@ function DetailPanel({ toolCallProcess, planData, onClose, onOpenFile, onOpenSub
   const toolName = toolCallProcess.toolName || '';
   const toolArgs = toolCallProcess.toolCall?.args;
   const isTaskTool = toolName === 'Task' || toolName === 'task';
-  const displayName = isTaskTool ? t('toolArtifact.subagentTask') : getDisplayName(toolName, t, toolArgs);
   const artifact = toolCallProcess.toolCallResult?.artifact;
+  const displayName = isTaskTool
+    ? t('toolArtifact.subagentTask')
+    : getDisplayName(toolName, t, toolArgs, artifact);
   const content = toolCallProcess.toolCallResult?.content;
   const subagentType = isTaskTool ? ((toolCallProcess.toolCall?.args?.subagent_type as string) || 'general-purpose') : '';
   // Status only — a Task's reply exists from the moment it is dispatched, so
