@@ -55,19 +55,30 @@ def direct_tool_name(server: str, tool: str) -> str:
     """``mcp__<server>__<tool>``: distinct per server so two vendors' ``account_*``
     tools cannot collide, and prefixed so the frontend can route on it.
 
+    The plain form is kept only while it is unambiguous. A segment the provider
+    would reject, a server name carrying the ``__`` separator, or an overflow of
+    the limit each fall back to a digest of the *pair*, because two tools bound
+    under one name are not merely mislabelled: the tools node keeps whichever
+    came last, and ``DirectMcpPolicyMiddleware`` then gates the call against the
+    other tool's connection.
+
     Over the limit it is the *server* that gives way, never the tool: a long
     server name would otherwise eat the whole budget and leave ``read_order``
-    and ``cancel_order`` the same name, which the tools node resolves by
-    keeping whichever came last.
+    and ``cancel_order`` the same name. Only a tool long enough to overrun on
+    its own is trimmed, and the digest sits ahead of the cut so identity
+    survives it.
     """
-    full = f"mcp__{_NAME_SAFE.sub('_', server)}__{tool}"
-    if len(full) <= _MAX_TOOL_NAME:
-        return full
-    digest = sha1(server.encode()).hexdigest()[:6]
-    keep = _MAX_TOOL_NAME - len(f"mcp____{digest}__{tool}")
-    return f"mcp__{_NAME_SAFE.sub('_', server)[:max(keep, 0)]}_{digest}__{tool}"[
-        :_MAX_TOOL_NAME
-    ]
+    safe_server = _NAME_SAFE.sub("_", server).replace("__", "_")
+    safe_tool = _NAME_SAFE.sub("_", tool)
+    plain = f"mcp__{safe_server}__{safe_tool}"
+    if plain == f"mcp__{server}__{tool}" and len(plain) <= _MAX_TOOL_NAME:
+        return plain
+    digest = sha1(f"{server}\x00{tool}".encode()).hexdigest()[:8]
+    tail = f"_{digest}__{safe_tool}"
+    keep = _MAX_TOOL_NAME - len("mcp__") - len(tail)
+    if keep >= 1:
+        return f"mcp__{safe_server[:keep]}{tail}"
+    return f"mcp__{safe_server[:1]}_{digest}__{safe_tool}"[:_MAX_TOOL_NAME]
 
 
 @dataclass

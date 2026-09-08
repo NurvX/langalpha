@@ -9,6 +9,8 @@ change to the Python half that the frontend could not read fails here.
 
 from __future__ import annotations
 
+import re
+
 from src.server.services.egress.direct_tools import (
     _MAX_TOOL_NAME,
     direct_tool_name,
@@ -52,3 +54,31 @@ def test_two_tools_on_one_long_server_do_not_collide():
     assert read != cancel
     assert _parse(read)[1] == "read_order"
     assert _parse(cancel)[1] == "cancel_order"
+
+
+def test_a_tool_name_the_provider_would_reject_is_made_legal():
+    # Discovery accepts any tool name up to 128 chars; the model-facing
+    # function name has to survive a provider that enforces [A-Za-z0-9_-].
+    name = direct_tool_name("moomoo", "foo.bar")
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", name)
+
+
+def test_two_tools_differing_only_where_the_charset_folds_do_not_collide():
+    assert direct_tool_name("moomoo", "foo.bar") != direct_tool_name(
+        "moomoo", "foo_bar"
+    )
+
+
+def test_a_separator_bearing_server_cannot_alias_another_pair():
+    # ("a__b", "c") and ("a", "b__c") both name mcp__a__b__c unless the
+    # ambiguous one is disambiguated: the tools node keeps whichever came
+    # last, and the policy middleware then gates against the wrong connection.
+    assert direct_tool_name("a__b", "c") != direct_tool_name("a", "b__c")
+
+
+def test_two_long_tools_sharing_a_prefix_do_not_collide():
+    stem = "get_account_positions_with_realtime_market_quotes_and_pnl_v2_"
+    alpha = direct_tool_name("moomoo", stem + "alpha")
+    beta = direct_tool_name("moomoo", stem + "beta")
+    assert len(alpha) <= _MAX_TOOL_NAME and len(beta) <= _MAX_TOOL_NAME
+    assert alpha != beta
