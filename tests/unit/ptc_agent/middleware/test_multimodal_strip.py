@@ -236,13 +236,13 @@ class TestResolveModalities:
         mw = MultimodalStripMiddleware(model_name="gpt-5.5")
         # Configured for a vision model, but resilience substituted a text-only
         # client; judging on the configured name would replay image blocks at it.
-        assert mw._resolve_target(_request("deepseek-v4-pro"))[1] == ["text"]
+        assert mw._resolve_target(_request("glm-5.2"))[1] == ["text"]
 
     def test_custom_modalities_apply_only_to_the_configured_model(self):
         mw = MultimodalStripMiddleware(model_name="my-custom-vlm", custom_modalities=["text", "image"])
         assert mw._resolve_target(_request("my-custom-vlm"))[1] == ["text", "image"]
         # A fallback is a different model — the override must not follow it over.
-        assert mw._resolve_target(_request("deepseek-v4-pro"))[1] == ["text"]
+        assert mw._resolve_target(_request("glm-5.2"))[1] == ["text"]
 
     def test_an_unstamped_client_is_text_only_even_under_a_vision_parent(self):
         """Regression: a bare-string subagent resolves via ``init_chat_model`` and
@@ -321,7 +321,7 @@ class TestAwrapModelCall:
             return "ok"
 
         history = self._image_history()
-        request = _ModelCallRequest("deepseek-v4-pro", history)
+        request = _ModelCallRequest("glm-5.2", history)
         await MultimodalStripMiddleware().awrap_model_call(request, handler)
 
         forwarded = seen["request"]
@@ -339,7 +339,7 @@ class TestAwrapModelCall:
             seen["request"] = request
             return "ok"
 
-        request = _ModelCallRequest("deepseek-v4-pro", [HumanMessage(content="plain text")])
+        request = _ModelCallRequest("glm-5.2", [HumanMessage(content="plain text")])
         await MultimodalStripMiddleware().awrap_model_call(request, handler)
         assert seen["request"] is request
 
@@ -355,7 +355,7 @@ class TestManifestModelStampRoundTrip:
 
         # Configured for a text-only model, handed a vision client: the stamp is
         # what must win, which only works if both sides name the same key.
-        mw = MultimodalStripMiddleware(model_name="deepseek-v4-pro")
+        mw = MultimodalStripMiddleware(model_name="glm-5.2")
         _, modalities = mw._resolve_target(types.SimpleNamespace(model=client))
         assert "image" in modalities
 
@@ -380,7 +380,7 @@ class TestTheNoteReachesTheModelThatCannotSee:
             seen["request"] = request
             return "ok"
 
-        request = _ModelCallRequest("deepseek-v4-pro", [
+        request = _ModelCallRequest("glm-5.2", [
             HumanMessage(content=[
                 {"type": "text", "text": "Look at this"},
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},

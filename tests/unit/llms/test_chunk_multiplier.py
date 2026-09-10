@@ -18,7 +18,7 @@ from src.llms.pricing_utils import (
 
 # DeepSeek's card is the one with hours on it: peak is 01-04 and 06-10 UTC on
 # weekdays, so these two stamps straddle a boundary the manifest defines.
-_SCHEDULED = "deepseek-v4-pro"
+_SCHEDULED = "deepseek-flash"
 _PEAK = datetime(2026, 8, 27, 2, 0, tzinfo=timezone.utc)  # a Thursday
 _OFF_PEAK = datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc)
 
@@ -59,7 +59,7 @@ def test_the_mix_weights_reads_far_above_input():
     assert card["cached_input"] < rate < card["input"]
 
 
-@pytest.mark.parametrize("model", ["claude-opus-5", "deepseek-v4-pro", "gpt-5.6-sol"])
+@pytest.mark.parametrize("model", ["claude-opus-5", "deepseek-flash", "gpt-5.6-sol"])
 def test_a_multiplier_is_a_coarse_figure(model):
     """Snapped, because a budget is read by people. Anything below the baseline
     lands on a tenth, anything above on a half — a rate that drifts by a cent

@@ -12,7 +12,7 @@ llm:
   compaction: "" # blank → same model as flash
   fetch: ""         # blank → same model as flash
   fallback:
-    - "deepseek-v4-pro"
+    - "deepseek-flash"
     - "glm-5.2"
 
 sandbox:

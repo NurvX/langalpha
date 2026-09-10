@@ -28,9 +28,10 @@ class TestGetInputModalities:
         assert "image" in result
         assert "pdf" in result
 
-    def test_deepseek_text_only(self, model_config):
-        result = model_config.get_input_modalities("deepseek-v4-flash")
-        assert result == ["text"]
+    def test_deepseek_flash_supports_image(self, model_config):
+        result = model_config.get_input_modalities("deepseek-flash")
+        assert "text" in result
+        assert "image" in result
 
     def test_glm_text_only(self, model_config):
         result = model_config.get_input_modalities("glm-5.2")
