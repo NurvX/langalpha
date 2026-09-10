@@ -4174,6 +4174,21 @@ class TestEntitledTier:
             assert await manager._entitled_tier(binding, "user-1") == "max"
         mock_set_tier.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_small_sibling_projects_reserve_only_their_own_size(self):
+        """A project's restore stages at most its own bytes, so five tiny
+        projects must not each reserve a full staging window."""
+        manager = self._make_manager()
+        mod = "src.server.services.workspace_entitlements"
+        with (
+            patch(
+                f"{mod}.get_live_workspace_ids_for_computer",
+                AsyncMock(return_value=[f"ws-{i}" for i in range(5)]),
+            ),
+            patch(f"{mod}.get_workspace_total_size", AsyncMock(return_value=1024)),
+        ):
+            await manager._assert_machine_disk_fits(_STUB_COMPUTER_ID, 2)
+
 
 # ---------------------------------------------------------------------------
 # _entitled_always_on — lazy always-on reclaim at (re)provision time. Mirrors

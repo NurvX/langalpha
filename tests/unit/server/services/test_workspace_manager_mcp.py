@@ -1590,12 +1590,12 @@ class TestSetComputerSpecDiskGuard:
         sibling_id = str(uuid.uuid4())
         computer_id = str(uuid.uuid4())
         mock_get_computer.return_value = _make_computer(computer_id)
-        # Two projects on one disk. Neither overflows the standard tier's ~1 GiB
+        # Two projects on one disk. Neither overflows the standard tier's ~2 GiB
         # of usable space on its own; together they do. Summing the machine is
         # the point of the guard: checking only the project that asked is how a
         # two-project machine passes a downgrade its combined files cannot fit.
         mock_live_ids.return_value = [ws_id, sibling_id]
-        mock_total_size.return_value = 3 * 1024**3 // 4  # 0.75 GiB each
+        mock_total_size.return_value = 5 * 1024**3 // 4  # 1.25 GiB each
         self._attach_running_session(wm, computer_id)
         wm._backup_machine_files_to_db = AsyncMock()
         wm._clear_session = AsyncMock()

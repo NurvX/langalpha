@@ -25,17 +25,26 @@ from src.server.database.workspace import (
 )
 from src.server.models.computer import ComputerStatus
 from src.server.services.computer_manager._types import ComputerBinding
+from src.server.services.persistence.transfer import PULL_MAX_INFLIGHT_BYTES
 from src.server.database.workspace_file import (
     get_workspace_total_size,
 )
 
 logger = logging.getLogger(__name__)
 
-# Disk reserved for the OS, Python venv, and MCP wrapper packages baked into
-# every snapshot. Subtracted from a tier's disk to estimate space usable for
-# restored user files when guarding a downgrade. ~2 GiB matches the standard
-# tier's 3 GiB disk leaving ~1 GiB for files (the existing soft per-workspace cap).
-_DISK_SYSTEM_RESERVE_BYTES = 2 * 1024**3
+# Disk a restored workspace needs besides its own files, measured on fresh
+# sandboxes of every tier. The image lives in read-only layers the tier's disk
+# does not pay for, so the writable layer starts at a few MiB. A restore then
+# stages up to PULL_MAX_INFLIGHT_BYTES of pack chunks beside the files it has
+# already written, and the agent needs room to work once it runs. Each
+# project restores lazily on its own first start, under its own lock, so two
+# projects opened together stage at once: the machine's allowance carries one
+# staging window per project.
+_SANDBOX_BASELINE_BYTES = 16 * 1024**2
+_WORKING_HEADROOM_BYTES = 512 * 1024**2
+_DISK_SYSTEM_RESERVE_BYTES = (
+    _SANDBOX_BASELINE_BYTES + PULL_MAX_INFLIGHT_BYTES + _WORKING_HEADROOM_BYTES
+)
 _GIB = 1024**3
 
 
@@ -215,10 +224,14 @@ class WorkspaceEntitlementsMixin:
 
         Checking only the project that asked is how a two-project machine passes
         a downgrade its combined files cannot fit."""
-        usable = max(0, target_disk_gib * _GIB - _DISK_SYSTEM_RESERVE_BYTES)
-        total = 0
-        for workspace_id in await get_live_workspace_ids_for_computer(computer_id):
-            total += await get_workspace_total_size(workspace_id)
+        workspace_ids = await get_live_workspace_ids_for_computer(computer_id)
+        sizes = [await get_workspace_total_size(w) for w in workspace_ids]
+        # Each project's restore stages at most its own size, never a whole
+        # window, and the base reserve already holds one window.
+        staged = sorted(min(PULL_MAX_INFLIGHT_BYTES, s) for s in sizes)
+        reserve = _DISK_SYSTEM_RESERVE_BYTES + sum(staged[:-1])
+        usable = max(0, target_disk_gib * _GIB - reserve)
+        total = sum(sizes)
         if total > usable:
             raise RuntimeError(
                 f"Cannot downgrade: files on this computer "
