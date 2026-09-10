@@ -1,5 +1,6 @@
 import type { FileLocation } from '../../utils/fileLocation';
 import type { MemoryTier } from '../../utils/agentPaths';
+import type { BackupResponse } from '@/types/api';
 
 // --- Types ---
 
@@ -70,12 +71,10 @@ export interface ApiAdapter {
   buildServedUrl?: (path: string, opts?: { injectTheme?: boolean }) => string;
 }
 
-export interface BackupResult {
-  synced?: number;
-  skipped?: number;
-  error?: string;
-  [key: string]: unknown;
-}
+export type { UnsavedFile, UnsavedReason } from '@/types/api';
+
+/** A finished backup, or the reason it did not run. */
+export type BackupResult = Partial<BackupResponse> & { error?: string };
 
 export interface SortOption {
   value: string;

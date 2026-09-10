@@ -1,7 +1,28 @@
 import React from 'react';
 import { Pencil, RefreshCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { BackupResult } from './types';
+import type { BackupResult, UnsavedFile } from './types';
+
+/** How many skipped files the notice names before it summarises the rest. */
+const UNSAVED_NAMED = 5;
+
+function formatBytes(n: number): string {
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+  if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+function UnsavedReasonText({ file }: { file: UnsavedFile }): React.ReactElement {
+  const { t } = useTranslation();
+  const size = file.size ? formatBytes(file.size) : null;
+  return (
+    <span className="file-panel-unsaved-reason">
+      {file.reason === 'too_large' && size
+        ? t('filePanel.unsavedReason.too_large_sized', { size })
+        : t(`filePanel.unsavedReason.${file.reason}`, { defaultValue: t('filePanel.unsavedReason.failed') })}
+    </span>
+  );
+}
 
 interface PanelNoticesProps {
   /** 0–100 while a file is going up, null when nothing is. */
@@ -64,7 +85,9 @@ export function PanelNotices({
         </div>
       )}
       {busy && <div className="file-panel-progress-indeterminate" />}
-      {backupResult && (
+      {backupResult && !backupResult.error && (backupResult.unsaved_count || backupResult.unsaved?.length) ? (
+        <UnsavedBackupNotice result={backupResult} onDismiss={onDismissBackupResult} />
+      ) : backupResult && (
         <div className={`file-panel-backup-result ${backupResult.error ? 'error' : ''}`}>
           <span>
             {backupResult.error
@@ -84,5 +107,36 @@ export function PanelNotices({
         </div>
       )}
     </>
+  );
+}
+
+function UnsavedBackupNotice({ result, onDismiss }: { result: BackupResult; onDismiss: () => void }): React.ReactElement {
+  const { t } = useTranslation();
+  const listed = result.unsaved ?? [];
+  const total = Math.max(result.unsaved_count ?? 0, listed.length);
+  const named = listed.slice(0, UNSAVED_NAMED);
+  const rest = total - named.length;
+  return (
+    <div className="file-panel-backup-result unsaved" role="status">
+      <div className="file-panel-backup-result-head">
+        <span>
+          {t('filePanel.backupSummary', { count: result.synced ?? 0 })}
+          {' · '}
+          <span className="file-panel-unsaved-count">{t('filePanel.backupNotSaved', { count: total })}</span>
+        </span>
+        <button onClick={onDismiss} className="file-panel-icon-btn" style={{ padding: 2 }} aria-label={t('common.close')}>
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+      <ul className="file-panel-unsaved-list">
+        {named.map((file) => (
+          <li key={file.path}>
+            <span className="file-panel-unsaved-path" title={file.path}>{file.path}</span>
+            <UnsavedReasonText file={file} />
+          </li>
+        ))}
+      </ul>
+      {rest > 0 && <span className="file-panel-unsaved-more">{t('filePanel.backupNotSavedMore', { count: rest })}</span>}
+    </div>
   );
 }

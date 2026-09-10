@@ -3,6 +3,7 @@
  */
 import { api } from '@/api/client';
 import type { FileRefResolution } from '../../components/filePanel/types';
+import type { BackupResponse, BackupStatusResponse } from '@/types/api';
 
 /**
  * Resolve a file reference to one workspace path in a single server lookup.
@@ -78,23 +79,15 @@ export async function triggerFileDownload(workspaceId: string, filePath: string)
   URL.revokeObjectURL(blobUrl);
 }
 
-/**
- * Backup workspace files from sandbox to DB for offline access
- * @param {string} workspaceId
- * @returns {Promise<Object>} { synced, skipped, deleted, errors, total_size }
- */
-export async function backupWorkspaceFiles(workspaceId: string) {
-  const { data } = await api.post(`/api/v1/workspaces/${workspaceId}/files/backup`);
+/** Back up the sandbox's files so they outlive it. */
+export async function backupWorkspaceFiles(workspaceId: string): Promise<BackupResponse> {
+  const { data } = await api.post<BackupResponse>(`/api/v1/workspaces/${workspaceId}/files/backup`);
   return data;
 }
 
-/**
- * Get backup status: which files are saved in DB
- * @param {string} workspaceId
- * @returns {Promise<Object>} { persisted_files: {path: hash}, total_size }
- */
-export async function getBackupStatus(workspaceId: string) {
-  const { data } = await api.get(`/api/v1/workspaces/${workspaceId}/files/backup-status`);
+/** Which sandbox files match their backup, differ from it, or have none. */
+export async function getBackupStatus(workspaceId: string): Promise<BackupStatusResponse> {
+  const { data } = await api.get<BackupStatusResponse>(`/api/v1/workspaces/${workspaceId}/files/backup-status`);
   return data;
 }
 

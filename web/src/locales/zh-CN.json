@@ -1816,6 +1816,15 @@
     "backupFiles": "备份文件到数据库",
     "backupSummary": "已备份 {{count}} 个文件",
     "backupUnchanged": "，{{count}} 个未变更",
+    "backupNotSaved": "{{count}} 个未保存",
+    "backupNotSavedMore": "还有 {{count}} 个文件",
+    "unsavedReason": {
+      "too_large": "文件过大，无法在此备份。请移动或拆分。",
+      "too_large_sized": "文件过大（{{size}}），无法在此备份。请移动或拆分。",
+      "changed": "保存时文件被修改，下次备份会重试。",
+      "unreadable": "无法在沙箱中读取，请检查权限。",
+      "failed": "上传失败，下次备份会重试。"
+    },
     "refresh": "刷新",
     "deleteSelected": "删除所选",
     "cancelSelection": "取消选择",

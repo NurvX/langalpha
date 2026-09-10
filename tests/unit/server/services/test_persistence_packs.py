@@ -158,7 +158,7 @@ async def test_files_at_or_below_the_cutoff_pack_and_larger_ones_go_per_object(d
     assert rows["big.bin"]["blob_sha256"] == _sha(BIG) and rows["big.bin"]["pack_sha256"] is None
     registered = {sha for c in db["register"].await_args_list for sha, _ in c.args[1]}
     assert registered == {CHUNK, _sha(BIG)}
-    assert result["synced"] == 3 and result["errors"] == 0
+    assert result.synced == 3 and result.errors == 0
 
 
 @pytest.mark.asyncio
@@ -168,7 +168,7 @@ async def test_an_unchanged_pack_set_is_a_skip_without_the_pack_op(db):
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
     db["pack"].assert_not_awaited()
     db["push"].assert_not_awaited()
-    assert result["skipped"] == 2 and result["synced"] == 0
+    assert result.skipped == 2 and result.synced == 0
 
 
 @pytest.mark.asyncio
@@ -180,7 +180,7 @@ async def test_a_moved_stamp_on_an_unchanged_member_refreshes_the_row_without_by
     rows = _rows(db)
     assert set(rows) == {"a.txt"}
     assert rows["a.txt"]["permissions"] == "0600" and rows["a.txt"]["pack_sha256"] == CHUNK
-    assert result["skipped"] == 2
+    assert result.skipped == 2
 
 
 @pytest.mark.asyncio
@@ -193,7 +193,7 @@ async def test_a_moved_stamp_is_left_unrecorded_while_pruning_is_withheld(db):
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
     db["pack"].assert_not_awaited()
     db["upsert"].assert_not_awaited()
-    assert result["skipped"] == 2
+    assert result.skipped == 2
 
 
 @pytest.mark.asyncio
@@ -229,7 +229,7 @@ async def test_a_member_absent_while_pruning_is_withheld_does_not_rewrite_the_se
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
     db["pack"].assert_not_awaited()
     db["push"].assert_not_awaited()
-    assert result["skipped"] == 1 and result["synced"] == 0 and result["deleted"] == 0
+    assert result.skipped == 1 and result.synced == 0 and result.deleted == 0
 
 
 @pytest.mark.asyncio
@@ -255,7 +255,8 @@ async def test_a_chunk_the_store_rejected_withholds_its_members_rows(db):
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
     rows = _rows(db)
     assert set(rows) == {"big.bin"}
-    assert result["errors"] == 2 and result["synced"] == 1
+    assert result.errors == 2 and result.synced == 1
+    assert {(f.path, f.reason) for f in result.unsaved} == {("a.txt", "failed"), ("b.txt", "failed")}
 
 
 @pytest.mark.asyncio
@@ -263,7 +264,8 @@ async def test_members_that_changed_during_packing_count_as_errors(db):
     db["scan"].return_value = _scan(_entry("a.txt", A), _entry("b.txt", B))
     db["pack"].return_value = {"chunks": [_chunk([("a.txt", A)])], "changed": ["b.txt"]}
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
-    assert set(_rows(db)) == {"a.txt"} and result["errors"] == 1
+    assert set(_rows(db)) == {"a.txt"} and result.errors == 1
+    assert [(f.path, f.reason) for f in result.unsaved] == [("b.txt", "changed")]
 
 
 @pytest.mark.asyncio
@@ -465,7 +467,7 @@ async def test_a_chunk_the_sandbox_could_not_upload_is_relayed_out_of_the_sandbo
     # What the runtime kept, the server removes once it has the bytes.
     unlink.assert_awaited_once_with(sb, [chunk_path], layout=MACHINE_LAYOUT)
     assert _rows(db)["a.txt"]["pack_sha256"] == CHUNK
-    assert result["errors"] == 0
+    assert result.errors == 0
 
 
 @pytest.mark.asyncio
@@ -480,7 +482,7 @@ async def test_relay_rejects_bytes_whose_length_disagrees_with_the_scan(db):
         result = await backup.sync_to_db(WS, sb, layout=LAYOUT)
     store.assert_not_awaited()
     db["upsert"].assert_not_awaited()
-    assert result["errors"] == 1
+    assert result.errors == 1
 
 
 @pytest.mark.asyncio

@@ -37,6 +37,7 @@ from src.server.services.persistence.blobs import (
     _persist_inline,
     _persist_packed,
 )
+from src.server.services.persistence.sync_result import SyncResult, UnsavedFile
 from src.server.services.persistence.transfer import (
     scan_cap_bytes,
     PACK_CUTOFF,
@@ -99,7 +100,7 @@ def _has_ancestor_in(path: str, names: set[str]) -> bool:
 
 async def sync_to_db(
     workspace_id: str, sandbox: Any, *, layout: WorkspaceLayout
-) -> dict[str, Any]:
+) -> SyncResult:
     """
     Snapshot workspace files from the sandbox into the manifest.
 
@@ -119,7 +120,7 @@ async def sync_to_db(
     already recorded.
 
     Returns:
-        Sync result summary
+        What the pass saved, and every file it could not
     """
     try:
         async with workspace_sync_lock(workspace_id) as conn:
@@ -131,24 +132,20 @@ async def sync_to_db(
 
 async def _sync_locked(
     workspace_id: str, sandbox: Any, conn: Any, layout: WorkspaceLayout
-) -> dict[str, Any]:
+) -> SyncResult:
     """One sync pass, holding this workspace's lock on ``conn``.
 
     Every manifest read and write rides that same session: acquiring a
     second pooled connection underneath a lock holder doubles the slots a
     sync costs and can stall on the pool's own timeout.
     """
-    result = {
-        "synced": 0, "skipped": 0, "deleted": 0, "errors": 0,
-        "oversized": 0, "total_size": 0, "root_missing": False,
-    }
-
     # Taken before the scan, on the database's clock: rows written by
     # anyone after this instant are newer than what this pass saw.
     started_at = await manifest_clock(conn=conn)
     existing = await get_file_metadata_for_sync(workspace_id, conn=conn)
     blobs_on = is_storage_enabled()
     scan_cap = scan_cap_bytes(sandbox, blobs_on=blobs_on)
+    result = SyncResult(max_file_bytes=scan_cap)
     scan = await scan_workspace(
         sandbox,
         prior_from_meta(existing),
@@ -162,8 +159,10 @@ async def _sync_locked(
     oversized_paths = {
         str(item.get("path")) for item in scan.oversized if item.get("path")
     }
-    result["oversized"] = len(scan.oversized)
     for item in scan.oversized:
+        result.unsaved.append(
+            UnsavedFile(str(item.get("path")), "too_large", item.get("size"))
+        )
         logger.warning(
             f"Cannot store {item.get('path')} in workspace {workspace_id}: "
             f"{item.get('size')} bytes exceeds this transfer path's "
@@ -182,7 +181,7 @@ async def _sync_locked(
                 f"Workspace {workspace_id} has no folder on this sandbox; "
                 f"nothing to mirror this pass"
             )
-            result["root_missing"] = True
+            result.root_missing = True
             continue
         # ENOENT below the root is a file removed between the listing
         # and the read: absent for the right reason, so it is neither
@@ -199,7 +198,7 @@ async def _sync_locked(
             f"Could not read {item.get('path')} in workspace "
             f"{workspace_id}: {item.get('error')}"
         )
-        result["errors"] += 1
+        result.unsaved.append(UnsavedFile(str(item.get("path")), "unreadable"))
         read_errors += 1
 
     # Pruning treats "in the manifest but not the sandbox" as a user
@@ -218,7 +217,7 @@ async def _sync_locked(
         )
         may_prune = False
 
-    if result["root_missing"]:
+    if result.root_missing:
         return result
 
     if read_errors and may_prune:
@@ -242,15 +241,16 @@ async def _sync_locked(
                 f"A restore that failed for all files looks exactly like "
                 f"this, and pruning here would erase the whole file list."
             )
-            return result
-        deleted = await delete_removed_files(
-            workspace_id,
-            oversized_paths,
-            walked_dir_name=layout.dir_name,
-            untouched_since=started_at,
-            conn=conn,
-        )
-        result["deleted"] = deleted
+        else:
+            result.deleted = await delete_removed_files(
+                workspace_id,
+                oversized_paths,
+                walked_dir_name=layout.dir_name,
+                untouched_since=started_at,
+                conn=conn,
+            )
+        # Rows kept for oversized files, or by a skipped prune, still count.
+        result.total_size = await get_workspace_total_size(workspace_id, conn=conn)
         return result
 
     active_paths: set[str] = set(oversized_paths)
@@ -291,7 +291,7 @@ async def _sync_locked(
                 and db.get("symlink_target") == entry.symlink_target
                 and (_stamp_matches(db, entry) or not refresh_stamps)
             ):
-                result["skipped"] += 1
+                result.skipped += 1
             else:
                 rows.append(_row_base(entry))
             continue
@@ -307,7 +307,7 @@ async def _sync_locked(
             continue
 
         if _content_matches(db, entry):
-            result["skipped"] += 1
+            result.skipped += 1
             if _stamp_matches(db, entry) or not refresh_stamps:
                 continue
             if db.get("blob_sha256"):
@@ -331,23 +331,23 @@ async def _sync_locked(
 
     if needs_bytes:
         if blobs_on:
-            persisted, errors = await _persist_blobs(
+            persisted, unsaved = await _persist_blobs(
                 user_id, workspace_id, sandbox, needs_bytes, layout=layout
             )
             rows.extend(persisted)
-            result["errors"] += errors
+            result.unsaved.extend(unsaved)
         else:
             # Inline rows carry their own bytes, so they are written in
             # bounded batches rather than joining ``rows`` and being held
             # until the single upsert below.
-            inline_synced, errors = await _persist_inline(
+            inline_synced, unsaved = await _persist_inline(
                 workspace_id, sandbox, needs_bytes, layout=layout, conn=conn
             )
-            result["synced"] += inline_synced
-            result["errors"] += errors
+            result.synced += inline_synced
+            result.unsaved.extend(unsaved)
 
     if pack_members:
-        packed, errors, skipped = await _persist_packed(
+        packed, unsaved, skipped = await _persist_packed(
             user_id,
             workspace_id,
             sandbox,
@@ -357,8 +357,8 @@ async def _sync_locked(
             layout=layout,
         )
         rows.extend(packed)
-        result["errors"] += errors
-        result["skipped"] += skipped
+        result.unsaved.extend(unsaved)
+        result.skipped += skipped
 
     if stamp_updates:
         # A mode or mtime change on unchanged bytes is persisted only here.
@@ -371,10 +371,12 @@ async def _sync_locked(
                 f"Stamp update failed for {len(stamp_updates)} files in "
                 f"workspace {workspace_id}: {e}"
             )
-            result["errors"] += len(stamp_updates)
+            result.unsaved.extend(
+                UnsavedFile(path, "failed") for path, _, _ in stamp_updates
+            )
 
     if rows:
-        result["synced"] += await bulk_upsert_files(
+        result.synced += await bulk_upsert_files(
             workspace_id, rows, conn=conn
         )
 
@@ -383,7 +385,7 @@ async def _sync_locked(
         if p not in active_paths and _has_ancestor_in(p, non_dir_paths)
     ]
     if orphaned:
-        result["deleted"] += await delete_file_rows(
+        result.deleted += await delete_file_rows(
             workspace_id, orphaned, conn=conn
         )
 
@@ -395,7 +397,7 @@ async def _sync_locked(
             untouched_since=started_at,
             conn=conn,
         )
-        result["deleted"] += deleted
+        result.deleted += deleted
     else:
         withheld = len(set(existing) - active_paths)
         if withheld:
@@ -407,14 +409,14 @@ async def _sync_locked(
                 f"start retries the restore and pruning resumes."
             )
 
-    result["total_size"] = await get_workspace_total_size(
+    result.total_size = await get_workspace_total_size(
         workspace_id, conn=conn
     )
 
     logger.debug(
         f"File sync completed for workspace {workspace_id}: "
-        f"synced={result['synced']}, skipped={result['skipped']}, "
-        f"deleted={result['deleted']}, errors={result['errors']}, "
+        f"synced={result.synced}, skipped={result.skipped}, "
+        f"deleted={result.deleted}, errors={result.errors}, "
         f"hashed={scan.hashed}, reused={scan.reused}"
     )
 

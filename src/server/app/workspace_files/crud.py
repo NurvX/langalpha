@@ -7,6 +7,7 @@ import hashlib
 import logging
 import shlex
 from contextlib import AsyncExitStack
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -81,6 +82,10 @@ from ._shared import (
 )
 
 logger = logging.getLogger(__name__)
+
+# A tree the scan cannot read can fail thousands of paths. The backup
+# route lists this many, and its counts stay exact.
+_UNSAVED_LISTED = 100
 
 
 router = APIRouter(prefix="/api/v1/workspaces", tags=["Workspace Files"])
@@ -763,12 +768,15 @@ async def backup_workspace_files(
         )
     return {
         "workspace_id": workspace_id,
-        "synced": result["synced"],
-        "skipped": result["skipped"],
-        "deleted": result["deleted"],
-        "errors": result["errors"],
-        "oversized": result.get("oversized", 0),
-        "total_size": result["total_size"],
+        "synced": result.synced,
+        "skipped": result.skipped,
+        "deleted": result.deleted,
+        "errors": result.errors,
+        "oversized": result.oversized,
+        "total_size": result.total_size,
+        "max_file_bytes": result.max_file_bytes,
+        "unsaved": [asdict(f) for f in result.unsaved[:_UNSAVED_LISTED]],
+        "unsaved_count": len(result.unsaved),
     }
 
 

@@ -44,6 +44,7 @@ from src.server.services.persistence.file import (
     RestoreGuardUnavailable,
     RestoreIdentityLost,
 )
+from src.server.services.persistence.sync_result import BackupIncomplete, UnsavedFile
 from src.server.services.workspace_layout import (
     layout_from_binding,
     WorkspaceLayoutUnavailable,
@@ -666,7 +667,7 @@ class ProvisioningMixin:
                 f"durable={expected_sandbox_id})"
             )
             if strict:
-                raise RuntimeError(message)
+                raise BackupIncomplete(message)
             logger.warning(message)
             return False
 
@@ -681,29 +682,34 @@ class ProvisioningMixin:
             )
         except Exception as e:
             if strict:
-                raise RuntimeError(
+                raise BackupIncomplete(
                     f"File backup failed for {workspace_id}; aborting before "
                     f"sandbox teardown: {e}"
                 ) from e
             logger.warning(f"File backup failed for {workspace_id}: {e}")
             return False
 
-        # sync_to_db counts per-file failures without raising. Strict teardown must
-        # abort on any unsaved file to prevent data loss.
-        errors = int((result or {}).get("errors") or 0)
-        oversized = int((result or {}).get("oversized") or 0)
-        if errors or oversized:
-            unsaved = errors + oversized
+        # ``sync_to_db`` is per-file best-effort: it reports failures instead
+        # of raising, so an exception is not the only way a backup can be
+        # incomplete. A strict caller is about to delete the sandbox, and every
+        # unsaved file has its only copy in it, whatever the reason. A
+        # ``too_large`` file is refused by every later sync as well, so the
+        # workspace has to stay up holding it until an operator gives it a
+        # transfer path that fits. The message names paths because a count
+        # gives the user nothing to act on.
+        if result.unsaved:
             message = (
-                f"File backup for {workspace_id} left {unsaved} file(s) unsaved "
-                f"({result})"
+                f"File backup for {workspace_id} left {len(result.unsaved)} "
+                f"file(s) unsaved: {result.describe_unsaved()}"
             )
             if strict:
-                raise RuntimeError(f"{message}; aborting before sandbox teardown")
+                raise BackupIncomplete(
+                    f"{message}; aborting before sandbox teardown", result.unsaved
+                )
             logger.warning(message)
             return False
 
-        if (result or {}).get("root_missing"):
+        if result.root_missing:
             logger.info(
                 f"Workspace {workspace_id} has no folder on this sandbox; "
                 f"its mirror is already the record"
@@ -746,6 +752,8 @@ class ProvisioningMixin:
         ordered += [ws for ws in siblings if ws != workspace_id]
 
         mirrored = 0
+        unsaved: list[UnsavedFile] = []
+        unnamed_failure = bool(failures)
         for ws_id in ordered:
             try:
                 if await self.backup_project_files(
@@ -762,11 +770,17 @@ class ProvisioningMixin:
                     f"{type(e).__name__}: {e}"
                 )
                 failures.append(f"{ws_id}: {type(e).__name__}: {e}")
+                named = e.unsaved if isinstance(e, BackupIncomplete) else []
+                unsaved.extend(named)
+                # A project that failed outright has no file list, and naming
+                # only the others' files would read as the whole problem.
+                unnamed_failure = unnamed_failure or not named
 
         if strict and failures:
-            raise RuntimeError(
+            raise BackupIncomplete(
                 f"File backup left {len(failures)} of {len(ordered)} project(s) "
-                f"on computer {computer_id} unmirrored: " + "; ".join(failures)
+                f"on computer {computer_id} unmirrored: " + "; ".join(failures),
+                [] if unnamed_failure else unsaved,
             )
         if mirrored < len(ordered):
             logger.warning(

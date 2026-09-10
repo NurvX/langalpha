@@ -26,6 +26,7 @@ from src.server.services.persistence._rows import (
     _ns_to_datetime,
     _row_base,
 )
+from src.server.services.persistence.sync_result import SyncResult, UnsavedFile
 from src.server.services.persistence.transfer import ScanEntry, ScanResult
 
 
@@ -163,10 +164,7 @@ async def test_new_files_go_direct_and_register_only_what_the_store_took(db):
     assert rows["b.bin"]["is_binary"] is True and rows["a.txt"]["is_binary"] is False
     assert rows["a.txt"]["permissions"] == "0644"
     assert rows["a.txt"]["sandbox_modified_at"] == micros_to_datetime(NS // 1000)
-    assert result == {
-        "synced": 3, "skipped": 0, "deleted": 0, "errors": 0,
-        "oversized": 0, "total_size": 0, "root_missing": False,
-    }
+    assert result == SyncResult(synced=3)
 
 
 @pytest.mark.asyncio
@@ -193,7 +191,8 @@ async def test_store_rejection_withholds_the_row_and_counts_an_error(db):
 
     db["store"].assert_not_awaited()  # no relay after a rejection
     db["upsert"].assert_not_awaited()
-    assert result["errors"] == 2 and result["synced"] == 0
+    assert result.errors == 2 and result.synced == 0
+    assert {(f.path, f.reason) for f in result.unsaved} == {("a.txt", "failed"), ("b.txt", "changed")}
     db["deleter"].assert_awaited_once()
     assert db["deleter"].await_args.args[1] == {"a.txt", "b.txt"}  # paths still active: never pruned
 
@@ -212,7 +211,7 @@ async def test_unreachable_store_falls_back_to_relay_in_the_same_pass(db):
     sb.adownload_file_bytes.assert_awaited_once_with(f"{LAYOUT.workspace}/a.txt")
     db["store"].assert_awaited_once_with(USER, A, b"\x00" * 3)
     assert _rows(db)["a.txt"]["blob_sha256"] == A
-    assert result["errors"] == 0
+    assert result.errors == 0
 
 
 @pytest.mark.asyncio
@@ -247,7 +246,7 @@ async def test_unchanged_pointer_row_with_new_mode_is_refreshed_without_bytes(db
     db["push"].assert_not_awaited()
     row = _rows(db)["a.txt"]
     assert row["permissions"] == "0600" and row["blob_sha256"] == A
-    assert result["skipped"] == 1 and result["synced"] == 1
+    assert result.skipped == 1 and result.synced == 1
 
 
 @pytest.mark.asyncio
@@ -325,7 +324,7 @@ async def test_same_microsecond_stamp_is_a_pure_skip(db):
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
     db["upsert"].assert_not_awaited()
     db["mtimes"].assert_not_awaited()
-    assert result["skipped"] == 1
+    assert result.skipped == 1
 
 
 @pytest.mark.asyncio
@@ -348,7 +347,20 @@ async def test_scan_read_errors_count_against_a_strict_backup(db):
     db["scan"].return_value = ScanResult([_entry("ok.txt", A)], [], [{"path": "bad", "error": "EACCES"}], 1, 0)
     db["push"].return_value = {A: {"status": "ok"}}
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
-    assert result["errors"] == 1 and result["synced"] == 1
+    assert result.errors == 1 and result.synced == 1
+    assert result.unsaved == [UnsavedFile("bad", "unreadable")]
+
+
+@pytest.mark.asyncio
+async def test_a_file_over_the_path_cap_is_unsaved_but_not_an_error(db):
+    """Every later sync refuses it the same way, so it is reported apart from
+    the failures a retry can clear, together with the cap that refused it."""
+    db["scan"].return_value = ScanResult([_entry("ok.txt", A)], [{"path": "big.bin", "size": 300}], [], 1, 0)
+    db["push"].return_value = {A: {"status": "ok"}}
+    with patch.object(backup, "scan_cap_bytes", return_value=100):
+        result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
+    assert result.unsaved == [UnsavedFile("big.bin", "too_large", 300)]
+    assert (result.oversized, result.errors, result.max_file_bytes) == (1, 0, 100)
 
 
 @pytest.mark.asyncio
@@ -362,7 +374,7 @@ async def test_a_folder_this_sandbox_never_had_is_not_an_unsaved_file(db):
         [], [], [{"path": ".", "errno": errno.ENOENT, "error": "ENOENT"}], 0, 0
     )
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
-    assert result["root_missing"] is True and result["errors"] == 0
+    assert result.root_missing is True and result.unsaved == []
     db["deleter"].assert_not_awaited()
 
 
@@ -377,6 +389,19 @@ async def test_storage_off_keeps_bytes_inline(db):
     rows = _rows(db)
     assert rows["a.txt"]["content_text"] == "text" and rows["a.txt"]["blob_sha256"] is None
     assert rows["b.bin"]["content_binary"] == b"\x00\x01" and rows["b.bin"]["is_binary"] is True
+
+
+@pytest.mark.asyncio
+async def test_storage_off_says_why_a_file_went_unsaved(db):
+    """A download that finds nothing means the file left after the scan, which
+    the next pass settles; one that raises is a failure."""
+    db["scan"].return_value = _scan(_entry("gone.txt", A), _entry("broken.txt", B))
+    sb = _sandbox()
+    sb.adownload_file_bytes = AsyncMock(side_effect=[None, OSError("read failed")])
+    with patch.object(backup, "is_storage_enabled", return_value=False):
+        result = await backup.sync_to_db(WS, sb, layout=LAYOUT)
+    assert {(f.path, f.reason) for f in result.unsaved} == {("gone.txt", "changed"), ("broken.txt", "failed")}
+    assert result.synced == 0
 
 
 @pytest.mark.asyncio

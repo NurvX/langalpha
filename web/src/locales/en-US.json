@@ -1822,6 +1822,17 @@
     "backupSummary_one": "Backed up 1 file",
     "backupSummary_other": "Backed up {{count}} files",
     "backupUnchanged": ", {{count}} unchanged",
+    "backupNotSaved_one": "1 not saved",
+    "backupNotSaved_other": "{{count}} not saved",
+    "backupNotSavedMore_one": "and 1 more file",
+    "backupNotSavedMore_other": "and {{count}} more files",
+    "unsavedReason": {
+      "too_large": "Too large to back up here. Move or split it.",
+      "too_large_sized": "Too large to back up here ({{size}}). Move or split it.",
+      "changed": "Changed while saving. The next backup retries.",
+      "unreadable": "Couldn't be read in the sandbox. Check its permissions.",
+      "failed": "Didn't upload. The next backup retries."
+    },
     "refresh": "Refresh",
     "deleteSelected": "Delete selected",
     "cancelSelection": "Cancel selection",

@@ -33,6 +33,7 @@ from src.server.services.persistence._rows import (
     _row_base,
     _stamp_matches,
 )
+from src.server.services.persistence.sync_result import UnsavedFile, UnsavedReason
 from src.server.services.persistence.transfer import (
     transfer_mode,
     INPROCESS_MAX_INFLIGHT_BYTES,
@@ -98,13 +99,13 @@ async def _persist_blobs(
     *,
     unlink_after: bool = False,
     layout: WorkspaceLayout,
-) -> tuple[list[dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], list[UnsavedFile]]:
     """Make sure every entry's digest has an object, then build its row.
 
     Digests the registry already knows under the owner are done before any
     byte moves. The rest go direct when the store and sandbox allow it, and
     through this process otherwise. An entry whose digest still has no
-    object at the end is dropped from the batch and counted as an error:
+    object at the end is dropped from the batch and returned as unsaved:
     its old row survives, and the next sync retries.
     """
     wanted = {e.sha256 for e in entries if e.sha256}
@@ -155,24 +156,25 @@ async def _persist_blobs(
 
     available = have | registered
     rows: list[dict[str, Any]] = []
-    errors = 0
+    unsaved: list[UnsavedFile] = []
     for entry in entries:
         if entry.sha256 in available:
             rows.append(_blob_row(entry))
+        elif entry.sha256 in changed:
+            unsaved.append(UnsavedFile(entry.path, "changed", entry.size))
         else:
-            errors += 1
-            if entry.sha256 not in changed:
-                logger.error(
-                    f"Blob upload failed for {entry.path} "
-                    f"(workspace {workspace_id}, sha {entry.sha256}); "
-                    f"keeping the previous manifest row"
-                )
+            unsaved.append(UnsavedFile(entry.path, "failed", entry.size))
+            logger.error(
+                f"Blob upload failed for {entry.path} "
+                f"(workspace {workspace_id}, sha {entry.sha256}); "
+                f"keeping the previous manifest row"
+            )
     if changed:
         logger.info(
             f"{len(changed)} file(s) in workspace {workspace_id} changed "
             f"during sync and will be picked up next pass"
         )
-    return rows, errors
+    return rows, unsaved
 
 
 async def _sign_push_items(
@@ -549,8 +551,9 @@ async def _relay_blobs(
             # The direct path caps nothing, so a file this large is normal
             # until the store turns out to be unreachable and the push lands
             # here instead. Downloading it would pull the whole thing into
-            # this process. Left unregistered, so the caller counts an error,
-            # keeps the previous row, and the next sync retries: unlike a
+            # this process. Left unregistered, so the caller reports it
+            # unsaved as ``failed``, keeps the previous row, and the next sync
+            # retries: unlike a
             # scan-time rejection this is a passing condition, not a limit
             # the file will always exceed. Checked before the budget, since
             # holding weight for bytes we refuse to move helps nobody.
@@ -614,8 +617,8 @@ async def _persist_packed(
     *,
     may_prune: bool = True,
     layout: WorkspaceLayout,
-) -> tuple[list[dict[str, Any]], int, int]:
-    """Rows for every small file, via the pack set. Returns (rows, errors, skipped).
+) -> tuple[list[dict[str, Any]], list[UnsavedFile], int]:
+    """Rows for every small file, via the pack set. Returns (rows, unsaved, skipped).
 
     The pack set is rewritten whole whenever a member changed, appeared or
     left, so a workspace never trails half-dead chunks and a restore stays
@@ -652,7 +655,7 @@ async def _persist_packed(
                         e, db["pack_sha256"], db["pack_offset"], is_binary=db.get("is_binary")
                     )
                 )
-        return rows, 0, len(members)
+        return rows, [], len(members)
 
     out = await pack_direct(
         sandbox,
@@ -690,13 +693,17 @@ async def _persist_packed(
     )
     available = {r["blob_sha256"] for r in chunk_rows}
 
+    def unsaved_member(path: str, reason: UnsavedReason) -> UnsavedFile:
+        e = by_path.get(path)
+        return UnsavedFile(path, reason, e.size if e else None)
+
     rows = []
-    errors = len(changed)
+    unsaved = [unsaved_member(path, "changed") for path in sorted(changed)]
     for c in chunks:
         if c["sha256"] not in available:
             # The old rows survive, still pointing at the previous chunk,
             # which stays referenced and restorable; next sync retries.
-            errors += len(c["members"])
+            unsaved.extend(unsaved_member(m["path"], "failed") for m in c["members"])
             continue
         for m in c["members"]:
             e = by_path.get(m["path"])
@@ -714,7 +721,7 @@ async def _persist_packed(
         f"Packed {len(rows)} file(s) into {len(chunks)} chunk(s) "
         f"for workspace {workspace_id}"
     )
-    return rows, errors, 0
+    return rows, unsaved, 0
 
 
 def _batched_by_weight(
@@ -747,7 +754,7 @@ async def _persist_inline(
     *,
     layout: WorkspaceLayout,
     conn: Any,
-) -> tuple[int, int]:
+) -> tuple[int, list[UnsavedFile]]:
     """No object store: bytes go into the manifest row itself.
 
     Written a batch at a time rather than gathered and upserted once, because
@@ -757,15 +764,15 @@ async def _persist_inline(
     released as soon as they are stored, so the bound is the batch.
     """
     synced = 0
-    errors = 0
+    unsaved: list[UnsavedFile] = []
 
-    async def _one(entry: ScanEntry) -> dict[str, Any] | None:
+    async def _one(entry: ScanEntry) -> dict[str, Any] | UnsavedFile:
         try:
             content = await sandbox.adownload_file_bytes(
                 _entry_abs_path(entry, layout)
             )
             if content is None:
-                return None
+                return UnsavedFile(entry.path, "changed", entry.size)
             # The row describes the bytes it carries, so hash and size
             # come from the download even if the scan saw an earlier
             # version of the file.
@@ -799,17 +806,17 @@ async def _persist_inline(
                 f"Error downloading file {entry.path} "
                 f"for workspace {workspace_id}: {e}"
             )
-            return None
+            return UnsavedFile(entry.path, "failed", entry.size)
 
     for batch in _batched_by_weight(
         entries, INPROCESS_MAX_INFLIGHT_BYTES, RELAY_CONCURRENCY
     ):
         rows: list[dict[str, Any]] = []
         for payload in await asyncio.gather(*(_one(e) for e in batch)):
-            if payload is None:
-                errors += 1
+            if isinstance(payload, UnsavedFile):
+                unsaved.append(payload)
             else:
                 rows.append(payload)
         if rows:
             synced += await bulk_upsert_files(workspace_id, rows, conn=conn)
-    return synced, errors
+    return synced, unsaved
