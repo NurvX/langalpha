@@ -623,72 +623,13 @@
       "write": "parameters.reasoning_effort"
     }
   },
-  "deepseek-v4-pro": {
-    "model_id": "deepseek-v4-pro",
+  "deepseek-flash": {
+    "model_id": "deepseek-flash",
     "provider": "deepseek",
-    "visible": true,
-    "speed": 2,
-    "intelligence": 4,
-    "context": 1000000,
-    "input_modalities": [
-      "text"
-    ],
-    "parameters": {
-      "max_tokens": 384000
-    },
-    "reasoning": {
-      "efforts": [
-        "none",
-        "low",
-        "high",
-        "max"
-      ],
-      "default": "high",
-      "write": "parameters.output_config.effort",
-      "on": {
-        "parameters.thinking.type": "enabled"
-      },
-      "off": {
-        "parameters.thinking.type": "disabled"
-      }
-    }
-  },
-  "deepseek-v4-flash": {
-    "model_id": "deepseek-v4-flash",
-    "provider": "deepseek",
+    "display_name": "DeepSeek-V4.1-Flash",
     "visible": true,
     "speed": 4,
-    "intelligence": 4,
-    "context": 1000000,
-    "input_modalities": [
-      "text"
-    ],
-    "parameters": {
-      "max_tokens": 384000
-    },
-    "reasoning": {
-      "efforts": [
-        "none",
-        "low",
-        "high",
-        "max"
-      ],
-      "default": "high",
-      "write": "parameters.output_config.effort",
-      "on": {
-        "parameters.thinking.type": "enabled"
-      },
-      "off": {
-        "parameters.thinking.type": "disabled"
-      }
-    }
-  },
-  "deepseek-v4-flash-vision-exp": {
-    "model_id": "deepseek-v4-flash-vision-exp",
-    "provider": "deepseek",
-    "visible": true,
-    "speed": 4,
-    "intelligence": 4,
+    "intelligence": 5,
     "context": 1000000,
     "input_modalities": [
       "text",
