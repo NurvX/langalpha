@@ -156,6 +156,20 @@ describe('effort row', () => {
   });
 });
 
+describe('model names', () => {
+  it('prints the authored display name, else one derived from the key', () => {
+    renderMenu({
+      selectedModel: 'deepseek-flash',
+      threadModels: ['claude-opus-4-8'],
+      validModelNames: new Set(['deepseek-flash', 'claude-opus-4-8']),
+      metadata: { 'deepseek-flash': { display_name: 'DeepSeek-V4.1-Flash' } },
+    });
+    expect(screen.getAllByText('DeepSeek-V4.1-Flash').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Deepseek Flash')).toBeNull();
+    expect(screen.getByText('Opus 4.8')).toBeInTheDocument();
+  });
+});
+
 describe('speed row', () => {
   it('is absent on a non-Codex model', () => {
     renderMenu();

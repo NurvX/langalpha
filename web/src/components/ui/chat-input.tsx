@@ -19,7 +19,7 @@ import { ChatInputRegistry, ContextBus } from '@/lib/contextBus';
 import type { WidgetContextSnapshot } from '@/pages/Dashboard/widgets/framework/contextSnapshot';
 import './chat-input.css';
 import type { ModelOptions, ReadyAttachment, SlashCommand, Workspace } from './chat-input.types';
-import { getSlashCommandIcon, isLargePaste } from './chat-input.helpers';
+import { getSlashCommandIcon, isLargePaste, getModelDisplayName } from './chat-input.helpers';
 import { effortLabelFor } from '@/lib/modelTuning';
 import type { ModelProfile } from '@/lib/modelTuning';
 import {
@@ -579,8 +579,10 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const { measureRowRef, fold } = useToolbarFold({
     containerRef: chatContainerRef,
     items: toolbarItems,
-    // The model pill is measured too, but it isn't foldable.
-    measureKey: `${selectedModel}|${resolvedEffort}|${resolvedFastMode && isCodexModel}`,
+    // The model pill is measured too, but it isn't foldable. Its label joins
+    // the key because an authored display_name comes with the models request,
+    // which can land after the pill was first measured under the key's label.
+    measureKey: `${selectedModel}|${getModelDisplayName(selectedModel, modelMetadata)}|${resolvedEffort}|${resolvedFastMode && isCodexModel}`,
     // Left of the first pill: container border + px-3, the attach button, and
     // the optional ring / chart-capture button (see the action bar below).
     fixedLeft: CONTAINER_BORDER + CONTAINER_PX + ICON_BUTTON_W
@@ -872,7 +874,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                   <span key={item.id} data-measure={item.id}>{item.inline({ measureOnly: true })}</span>
                 ))}
                 <span data-measure="model">
-                  <ModelTriggerMeasure selectedModel={selectedModel} effortLabel={effortLabelFor(t, resolvedEffort)} fastMode={resolvedFastMode} isCodexModel={isCodexModel} />
+                  <ModelTriggerMeasure selectedModel={selectedModel} metadata={modelMetadata} effortLabel={effortLabelFor(t, resolvedEffort)} fastMode={resolvedFastMode} isCodexModel={isCodexModel} />
                 </span>
               </div>
             </div>
@@ -881,6 +883,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             <div className="flex flex-row items-center min-w-0 gap-1">
               <ChatInputModelMenu
                 selectedModel={selectedModel}
+                metadata={modelMetadata}
                 onSelectModel={setSelectedModel}
                 threadModels={threadModelsProp}
                 validModelNames={validModelNames}
