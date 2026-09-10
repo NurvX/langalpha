@@ -660,9 +660,11 @@ async def get_workspace_total_size(
     try:
 
         async def _execute(cur):
+            # SUM over a bigint is numeric, which arrives as a Decimal and
+            # serializes as a string.
             await cur.execute(
                 """
-                SELECT COALESCE(SUM(file_size), 0) AS total_size
+                SELECT COALESCE(SUM(file_size), 0)::bigint AS total_size
                 FROM workspace_files
                 WHERE workspace_id = %s
                 """,
