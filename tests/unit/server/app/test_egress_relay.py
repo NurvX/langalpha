@@ -330,11 +330,15 @@ def _error(response: httpx.Response) -> str | None:
     return response.headers.get("x-relay-error")
 
 
-async def _call_route(headers: dict[str, str], *, body: bytes | None = None):
+async def _call_route(
+    headers: dict[str, str], *, body: bytes | None = None, cut: bool = False
+):
     """Drive the route callable directly, for exact control of the wire headers.
 
     httpx always injects its own ``accept``/``user-agent``, so an ASGI client
     cannot express "the sandbox sent no Accept" or a mid-stream disconnect.
+    ``cut`` is the second of those: the body says more is coming and the caller
+    hangs up instead.
     """
     from src.server.app.egress_relay import relay as relay_route
 
@@ -360,7 +364,7 @@ async def _call_route(headers: dict[str, str], *, body: bytes | None = None):
         if delivered:
             return {"type": "http.disconnect"}
         delivered = True
-        return {"type": "http.request", "body": payload, "more_body": False}
+        return {"type": "http.request", "body": payload, "more_body": cut}
 
     return await relay_route(GRANT_ID, Request(scope, receive))
 
@@ -803,6 +807,22 @@ class TestBodyHandling:
         assert resp.status_code == 400
         assert _error(resp) == "bad_request"
         assert "exceeds" in resp.text
+        assert env.vendor.sends == 0
+
+    @pytest.mark.asyncio
+    async def test_a_caller_that_hangs_up_mid_body_is_refused_not_raised(self, env):
+        """A client going away is not an error the worker should log as one.
+
+        Letting ``ClientDisconnect`` out of the body read printed an ASGI
+        traceback for every dropped connection, and skipped the refusal path
+        that releases the concurrency slot and the upstream connection.
+        """
+        response = await _call_route(
+            {"authorization": f"Bearer {_jwt()}"}, cut=True
+        )
+
+        assert response.status_code == 400
+        assert response.headers.get("x-relay-error") == "bad_request"
         assert env.vendor.sends == 0
 
     @pytest.mark.asyncio
