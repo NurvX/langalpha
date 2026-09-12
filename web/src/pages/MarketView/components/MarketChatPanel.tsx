@@ -381,7 +381,6 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     messageError,
     threadId,
     threadModels,
-    lastThreadModel,
     handleSendMessage,
     stopWorkflow,
     getSubagentHistory,
@@ -698,8 +697,6 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     stableThumbUp, stableThumbDown, stableReportWithAgent, stableWidgetSendPrompt,
   ]);
 
-  const initialModel = lastThreadModel ?? null;
-
   // In fast mode, carry the source thread/workspace into a PTC-agent proposal so
   // its "open in chat" deep-link lands back here. Null in PTC mode. Memoized:
   // a fresh object per render would defeat the memoized bubbles downstream.
@@ -1014,7 +1011,6 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
             ? t('chat.placeholderStopped')
             : (placeholder ?? t('marketView.chatPanel.defaultPlaceholder'))
         }
-        initialModel={initialModel}
         threadModels={threadModels}
         tokenUsage={tokenUsage}
       />

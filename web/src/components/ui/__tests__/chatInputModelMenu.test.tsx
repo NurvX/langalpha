@@ -19,11 +19,12 @@ const h = vi.hoisted(() => ({ isMobile: false }));
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => h.isMobile }));
 
 vi.mock('../dropdown-menu', () => {
-  const Pass = ({ children }: { children: React.ReactNode }) => <>{children}</>;
   const Box = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   return {
     DropdownMenu: Box,
-    DropdownMenuTrigger: Pass,
+    // The real trigger puts `disabled` on the button it wraps.
+    DropdownMenuTrigger: ({ children, disabled }: { children: React.ReactElement; disabled?: boolean }) =>
+      React.cloneElement(children as React.ReactElement<{ disabled?: boolean }>, { disabled }),
     DropdownMenuContent: Box,
     // Props pass through, so a caller's own role/aria survives — the real
     // primitive forwards them, and the effort options rely on it. data-menu-item
@@ -167,6 +168,18 @@ describe('model names', () => {
     expect(screen.getAllByText('DeepSeek-V4.1-Flash').length).toBeGreaterThan(0);
     expect(screen.queryByText('Deepseek Flash')).toBeNull();
     expect(screen.getByText('Opus 4.8')).toBeInTheDocument();
+  });
+});
+
+describe('trigger', () => {
+  it('is disabled while the model list loads', () => {
+    renderMenu({ disabled: true });
+    expect(screen.getByTitle('Select model')).toBeDisabled();
+  });
+
+  it('is enabled once it has loaded', () => {
+    renderMenu();
+    expect(screen.getByTitle('Select model')).toBeEnabled();
   });
 });
 

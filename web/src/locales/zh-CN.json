@@ -1371,6 +1371,8 @@
     "switchToModel": "切换到 {{model}}",
     "modelSwitched": "默认模型已设为 {{model}}",
     "modelSwitchFailed": "默认模型更新失败",
+    "undo": "撤销",
+    "undoModelSwitch": "撤销默认模型更改",
     "backgroundTasksRunning": "后台任务仍在运行",
     "reportBackPending": "等待 PTC Agent 汇报结果",
     "taskReportBackPending": "等待子代理结果汇报",

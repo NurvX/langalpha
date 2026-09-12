@@ -60,7 +60,6 @@ vi.mock('@/pages/ChatAgent/hooks/useChatMessages', () => ({
     messageError: null,
     threadId: h.threadId,
     threadModels: {},
-    lastThreadModel: null,
     handleSendMessage: h.handleSendMessage,
     stopWorkflow: h.stopWorkflow,
     getSubagentHistory: vi.fn(),

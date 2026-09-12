@@ -1373,6 +1373,8 @@
     "switchToModel": "Switch to {{model}}",
     "modelSwitched": "Default model set to {{model}}",
     "modelSwitchFailed": "Couldn't update the default model",
+    "undo": "Undo",
+    "undoModelSwitch": "Undo the default model change",
     "backgroundTasksRunning": "Background tasks are still running",
     "reportBackPending": "Waiting for PTC Agent to report back",
     "taskReportBackPending": "Waiting for subagent results to report back",
