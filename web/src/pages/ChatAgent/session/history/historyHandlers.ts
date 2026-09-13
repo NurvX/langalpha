@@ -7,7 +7,7 @@ import { isToolResultFailure, toolNameOf } from '../subagents/subagentStatus';
 import { ownerOfToolCall } from '../toolCallOwner';
 import { isTaskAgentId } from '../../utils/agentId';
 import { deriveTaskSegment, applyTaskSegment, applyLaunchReply } from '../subagents/taskSegmentBuilder';
-import type { SubagentTaskRecord } from '@/types/chat';
+import type { SubagentTaskRecord, TextSegment } from '@/types/chat';
 import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload, HtmlWidgetData } from '../../hooks/utils/types';
 import type { PairState } from '../types';
 
@@ -314,13 +314,14 @@ export function handleHistoryReasoningContent({ assistantMessageId, content, pai
 }
 
 /** Handles text content chunks and finish_reason in history replay. */
-export function handleHistoryTextContent({ assistantMessageId, content, finishReason, pairState, setMessages, eventId }: {
+export function handleHistoryTextContent({ assistantMessageId, content, finishReason, pairState, setMessages, eventId, phase }: {
   assistantMessageId: string;
   content: string;
   finishReason: string | undefined;
   pairState: PairState;
   setMessages: SetMessages;
   eventId?: number | null;
+  phase?: TextSegment['phase'];
 }): boolean {
   if (content) {
     const currentOrder = eventId != null ? eventId : ++pairState.contentOrderCounter;
@@ -335,6 +336,7 @@ export function handleHistoryTextContent({ assistantMessageId, content, finishRe
             type: 'text',
             content,
             order: currentOrder,
+            ...(phase ? { phase } : {}),
           },
         ];
 

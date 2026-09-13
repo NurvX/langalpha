@@ -69,6 +69,8 @@ export interface MessageChunkEvent extends BaseSSEEvent {
   event: 'message_chunk';
   content?: string;
   finish_reason?: string | null;
+  /** OpenAI Responses text-block phase. Absent on every other provider. */
+  phase?: 'commentary' | 'final_answer';
 }
 
 export interface ToolCallData {

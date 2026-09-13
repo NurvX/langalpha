@@ -22,6 +22,8 @@ export interface TextSegment {
   type: 'text';
   content: string;
   order: number;
+  /** OpenAI Responses text-block phase, carried through but not yet rendered. */
+  phase?: 'commentary' | 'final_answer';
 }
 
 export interface ToolCallSegment {

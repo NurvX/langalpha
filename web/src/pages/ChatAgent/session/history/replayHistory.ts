@@ -517,6 +517,7 @@ export async function loadConversationHistory(
             pairState,
             setMessages: setMessagesForHandlers,
             eventId: event._eventId as number | undefined,
+            phase: event.phase,
           });
           return;
         }
