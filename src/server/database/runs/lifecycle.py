@@ -614,23 +614,34 @@ async def workspace_has_active_run(workspace_id: str) -> bool:
             return bool((await cur.fetchone())[0])
 
 
-async def get_latest_attempt(thread_id: str) -> Optional[Dict[str, Any]]:
+async def get_latest_attempt(
+    thread_id: str, *, before_turn: Optional[int] = None
+) -> Optional[Dict[str, Any]]:
     """The thread's most recent attempt row — /retry's validation target.
 
     Ordered by ``run_seq`` — the one monotonic run ordering. turn_index is
     reused by retries and lowered by branch rewinds, so it cannot define
     "latest" (two coexisting definitions of latest is a drift bug).
+
+    ``before_turn`` narrows the search to attempts of earlier turns: a fork
+    from turn N discards N and everything after it, so its predecessor is the
+    latest attempt that will survive, not the latest attempt there is.
     """
+    clauses = ["conversation_thread_id = %s"]
+    params: list[Any] = [thread_id]
+    if before_turn is not None:
+        clauses.append("turn_index < %s")
+        params.append(before_turn)
     async with pool.get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
-                """
+                f"""
                 SELECT * FROM conversation_responses
-                WHERE conversation_thread_id = %s
+                WHERE {" AND ".join(clauses)}
                 ORDER BY run_seq DESC
                 LIMIT 1
                 """,
-                (thread_id,),
+                tuple(params),
             )
             row = await cur.fetchone()
             return dict(row) if row else None

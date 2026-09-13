@@ -45,26 +45,22 @@ from src.server.utils.chart_selection_context import (
     parse_chart_selection_contexts,
     serialize_chart_selections_for_metadata,
 )
-from src.llms.llm import get_input_modalities
 from src.server.utils.multimodal_context import (
     build_attachment_metadata,
-    build_unsupported_reminder,
-    filter_multimodal_by_capability,
-    inject_multimodal_context,
     parse_multimodal_contexts,
 )
 from src.utils.tracking import ExecutionTracker
 from ptc_agent.agent.flash import build_flash_graph
-from ptc_agent.agent.graph import get_user_profile_for_prompt
+from ptc_agent.agent.graph import fetch_user_data_counts, get_user_profile_for_prompt
 from ptc_agent.agent.middleware.credit_gate import run_with_credit_gate
 
 from .request_prep import (
     DISPATCH_STARTED_MARKER,
-    _append_to_last_user_message,
     _resolve_fork,
     _resolve_timezone,
     apply_fetch_override,
     build_graph_config,
+    build_turn_context,
     ensure_thread,
     init_tracking,
     inject_inline_reminders,
@@ -86,6 +82,7 @@ from src.server.services.runs.admission import (
 from src.config.settings import get_flash_recursion_limit
 
 from .admission_gate import admission_conflict_detail, wait_or_steer
+from .attachments import attach_flash_request_files
 from .error_handling import handle_workflow_error
 from src.server.services.llm.clients import is_own_key_turn
 from src.server.services.llm.config import resolve_llm_config
@@ -213,7 +210,7 @@ async def astream_flash_workflow(
             flash_ws = await get_or_create_flash_workspace(user_id)
         workspace_id = str(flash_ws["workspace_id"])
 
-        await ensure_thread(
+        prior_thread = await ensure_thread(
             request,
             thread_id,
             workspace_id,
@@ -221,6 +218,7 @@ async def astream_flash_workflow(
             msg_type="flash",
             initial_query=user_input,
         )
+        turn_context = build_turn_context(request, prior_thread)
 
         query_type, fork = _resolve_fork(request=request)
         is_checkpoint_replay = bool(request.checkpoint_id and not request.messages)
@@ -370,9 +368,14 @@ async def astream_flash_workflow(
         # Propagate fetch model override to tool context
         apply_fetch_override(config)
 
-        flash_user_profile = None
+        # The counts ride with the profile for the same reason they do on the
+        # PTC path: the preferred market is voted from the watchlist, and the
+        # cached profile carries no symbols.
+        flash_user_profile, flash_user_data_counts = None, None
         if user_id:
-            flash_user_profile = await get_user_profile_for_prompt(user_id)
+            flash_user_profile, flash_user_data_counts = await asyncio.gather(
+                get_user_profile_for_prompt(user_id), fetch_user_data_counts(user_id)
+            )
 
         # The one MCP surface Flash has: tools bound directly through the relay.
         from src.server.services.egress.direct_tools import direct_tools_for_turn
@@ -396,62 +399,21 @@ async def astream_flash_workflow(
             # rule as PTC (InsightService, checkpointer-less, is exempt).
             checkpointer=run_handle.checkpointer,
             user_profile=flash_user_profile,
+            user_data_counts=flash_user_data_counts,
             store=setup.store,
+            user_id=user_id,
             direct_mcp=direct_mcp,
             order_ledger=order_ledger,
+            turn_context=turn_context,
         )
 
         messages = normalize_request_messages(request)
 
         # Multimodal Context Injection (images and PDFs) -- Flash-specific
         # ordering: inject multimodal before skills.
-        # Filter by model capability: supported items are injected as native
-        # content blocks; unsupported items get a text note (Flash has no
-        # sandbox for file upload).
-        multimodal_contexts = parse_multimodal_contexts(request.additional_context)
-        if multimodal_contexts:
-            modalities = (
-                get_input_modalities(
-                    effective_model, custom_modalities=config.input_modalities
-                )
-                if effective_model
-                else ["text"]
-            )
-            supported, unsupported, file_only = filter_multimodal_by_capability(
-                multimodal_contexts, modalities
-            )
-            if file_only:
-                logger.warning(
-                    f"[FLASH_CHAT] {len(file_only)} file-only attachment(s) "
-                    f"ignored (Flash mode has no sandbox)"
-                )
-            if supported:
-                messages = inject_multimodal_context(messages, supported)
-                logger.info(
-                    f"[FLASH_CHAT] Multimodal context injected: "
-                    f"{len(supported)} supported attachment(s)"
-                )
-            if unsupported:
-                types = list(
-                    set(
-                        "PDF"
-                        if (c.data if hasattr(c, "data") else "").startswith(
-                            "data:application/pdf"
-                        )
-                        else "image"
-                        for c in unsupported
-                    )
-                )
-                _append_to_last_user_message(
-                    messages,
-                    build_unsupported_reminder(
-                        [f"The user attached {', '.join(types)} file(s)."]
-                    ),
-                )
-                logger.info(
-                    f"[FLASH_CHAT] {len(unsupported)} unsupported attachment(s) "
-                    f"noted for {effective_model}"
-                )
+        messages = attach_flash_request_files(
+            messages, request, effective_model, config
+        )
 
         # Skill Context Resolution (Flash) — body injection happens in
         # SkillsMiddleware, which dedups bodies already live in the thread. Only

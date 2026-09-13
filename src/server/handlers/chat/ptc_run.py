@@ -48,15 +48,9 @@ from src.server.utils.chart_selection_context import (
     serialize_chart_selections_for_metadata,
 )
 from src.server.utils.credit_resume_context import build_credit_resume_update
-from src.llms.llm import get_input_modalities
 from src.server.utils.multimodal_context import (
     build_attachment_metadata,
-    build_file_reminder,
-    build_unsupported_reminder,
-    filter_multimodal_by_capability,
-    inject_multimodal_context,
     parse_multimodal_contexts,
-    upload_to_sandbox,
 )
 from src.utils.tracking import ExecutionTracker
 
@@ -71,6 +65,7 @@ from .request_prep import (
     _resolve_timezone,
     apply_fetch_override,
     build_graph_config,
+    build_turn_context,
     ensure_thread,
     init_tracking,
     inject_inline_reminders,
@@ -92,6 +87,7 @@ from src.server.services.runs.admission import (
 from src.config.settings import get_ptc_recursion_limit
 
 from .admission_gate import wait_or_steer
+from .attachments import attach_request_files
 from .error_handling import handle_workflow_error
 from src.server.services.llm.clients import is_own_key_turn
 from src.server.services.llm.config import resolve_llm_config
@@ -246,10 +242,11 @@ async def astream_ptc_workflow(
         # Database Persistence Setup
         # =====================================================================
 
-        await ensure_thread(
+        prior_thread = await ensure_thread(
             request, thread_id, workspace_id, user_id, msg_type="ptc",
             initial_query=user_input,
         )
+        turn_context = build_turn_context(request, prior_thread)
 
         query_type, fork = _resolve_fork(request=request)
         is_checkpoint_replay = bool(request.checkpoint_id and not request.messages)
@@ -509,7 +506,7 @@ async def astream_ptc_workflow(
         background_registry.current_run_id = run_id
 
         # Build graph with the workspace's session
-        # Note: agent.md is injected dynamically by WorkspaceContextMiddleware
+        # Note: agent.md is injected by the runtime-context baseline middleware
         # on every model call, ensuring it's always the latest content.
         from src.server.app.workspace_sandbox import _set_cached_signed_url
         from src.server.services.egress.direct_tools import (
@@ -552,6 +549,7 @@ async def astream_ptc_workflow(
             on_signed_url=_set_cached_signed_url,
             direct_mcp=direct_mcp,
             order_ledger=order_ledger,
+            turn_context=turn_context,
         )
 
         _mark_phase("graph_build")
@@ -590,81 +588,9 @@ async def astream_ptc_workflow(
         )
 
         # Multimodal Context Injection
-        # All attachments are uploaded to sandbox (when available) so the
-        # agent always has file access.  Model-supported modalities also get
-        # native content blocks merged into the user message.
-        multimodal_contexts = parse_multimodal_contexts(request.additional_context)
-        if multimodal_contexts and not request.hitl_response:
-            # 1. Upload ALL files to sandbox
-            file_paths: list = []
-            if session and session.sandbox:
-                file_paths = await upload_to_sandbox(
-                    multimodal_contexts, session.sandbox
-                )
-                logger.info(
-                    f"[PTC_CHAT] Uploaded {len(multimodal_contexts)} attachment(s) to sandbox"
-                )
-
-            # 2. Filter by model capability for native content blocks
-            modalities = get_input_modalities(effective_model, custom_modalities=config.input_modalities) if effective_model else ["text"]
-            supported, unsupported, file_only = filter_multimodal_by_capability(
-                multimodal_contexts, modalities
-            )
-
-            # 3. Inject supported as native content blocks (merged into user message)
-            if supported:
-                supported_paths = [
-                    file_paths[i]
-                    for i, ctx in enumerate(multimodal_contexts)
-                    if ctx in supported
-                ] if file_paths else None
-                messages = inject_multimodal_context(
-                    messages, supported, file_paths=supported_paths
-                )
-                logger.info(
-                    f"[PTC_CHAT] Multimodal context injected: "
-                    f"{len(supported)} supported attachment(s)"
-                )
-
-            # Helper to build per-file path notes
-            def _file_note(ctx, idx):
-                desc = ctx.description or "file"
-                data = ctx.data
-                mime = data.split(":")[1].split(";")[0] if ":" in data else "unknown"
-                fpath = file_paths[idx] if file_paths and idx < len(file_paths) else None
-                if fpath:
-                    return (
-                        f"The user attached a file ({desc}, {mime}). "
-                        f"It has been saved to {fpath}. "
-                        f"Use Python to process it."
-                    )
-                return f"The user attached a file ({desc}, {mime})."
-
-            # 4. Unsupported image/PDF: "cannot view" warning + file paths
-            if unsupported:
-                notes = [
-                    _file_note(ctx, i)
-                    for i, ctx in enumerate(multimodal_contexts)
-                    if ctx in unsupported
-                ]
-                _append_to_last_user_message(
-                    messages, build_unsupported_reminder(notes)
-                )
-
-            # 5. File-only (xlsx, csv, etc.): path notes only, no "cannot view"
-            if file_only:
-                notes = [
-                    _file_note(ctx, i)
-                    for i, ctx in enumerate(multimodal_contexts)
-                    if ctx in file_only
-                ]
-                _append_to_last_user_message(
-                    messages, build_file_reminder(notes)
-                )
-                logger.info(
-                    f"[PTC_CHAT] {len(file_only)} file-only attachment(s) "
-                    f"uploaded to sandbox for {effective_model}"
-                )
+        messages = await attach_request_files(
+            messages, request, session, effective_model, config
+        )
 
         # Build input state or resume command
         if request.hitl_response:

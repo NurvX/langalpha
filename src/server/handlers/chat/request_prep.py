@@ -10,11 +10,14 @@ classification and the terminal error funnel live in ``error_handling``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
 
+from ptc_agent.agent.middleware.runtime_context import TurnContext
 from src.config.settings import (
     get_langsmith_metadata,
     get_langsmith_tags,
@@ -22,6 +25,7 @@ from src.config.settings import (
 )
 from src.server.app import setup
 from src.server.database import conversation as qr_db
+from src.server.database.runs import lifecycle as tl_db
 from src.server.models.chat import summarize_hitl_response_map
 from src.server.utils.skill_context import (
     detect_slash_commands,
@@ -371,6 +375,60 @@ def apply_fetch_override(config) -> None:
             fetch_llm_client_override.set(fetch_client)
 
 
+class PriorThread(NamedTuple):
+    """The thread row as it stood before this turn stamped it.
+
+    Both fields are absent on a thread's first turn, and on any turn whose read
+    failed: they are context for the turn anchor row rather than correctness,
+    so a read failure degrades to nothing rather than failing the turn start.
+    """
+
+    last_turn_at: Optional[datetime] = None
+
+
+def _fork_predecessor_turn(request: ChatRequest) -> Optional[int]:
+    """The turn a fork discards from, when this request is one (``_resolve_fork``)."""
+    if request.fork_from_turn is not None and request.checkpoint_id:
+        return request.fork_from_turn
+    return None
+
+
+async def _read_prior_thread(
+    thread_id: str, *, before_turn: Optional[int] = None
+) -> PriorThread:
+    """The prior-turn time.
+
+    The time is the latest attempt row's, never the thread's ``updated_at``: a
+    rename or a share bumps the thread stamp between turns, a concurrent POST
+    on another worker bumps it before losing admission, and the create-first
+    web flow leaves a thread behind when the send never happened, while an
+    attempt row is written only by a turn that was admitted. A thread with no
+    attempt has had no turn, so it has no prior-turn time.
+
+    An edit or a regenerate forks from an earlier turn, and the history the
+    model reads ends there, so its prior turn is the attempt before the fork
+    rather than the newest attempt on the thread.
+    """
+    try:
+        row, attempt = await asyncio.gather(
+            qr_db.get_thread_by_id(thread_id),
+            tl_db.get_latest_attempt(thread_id, before_turn=before_turn),
+        )
+    except Exception:
+        logger.debug("thread runtime-context read failed", exc_info=True)
+        return PriorThread()
+    if not row:
+        return PriorThread()
+
+    stamp = (attempt or {}).get("created_at")
+    last_turn_at = None
+    if isinstance(stamp, datetime):
+        # A naive stamp would raise against the envelope's aware clock.
+        last_turn_at = stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
+
+    return PriorThread(last_turn_at)
+
+
 async def ensure_thread(
     request: ChatRequest,
     thread_id: str,
@@ -378,8 +436,17 @@ async def ensure_thread(
     user_id: str,
     msg_type: str,
     initial_query: str = "",
-) -> None:
-    """Ensure a thread record exists in the database, optionally with external linkage."""
+) -> PriorThread:
+    """Ensure a thread record exists in the database, optionally with external linkage.
+
+    Returns the prior turn as it stood on entry, read here so the ordering
+    against the ensure below (which stamps the thread row) stays off the
+    callers.
+    """
+    prior = await _read_prior_thread(
+        thread_id, before_turn=_fork_predecessor_turn(request)
+    )
+
     ensure_kwargs = dict(
         workspace_id=workspace_id,
         conversation_thread_id=thread_id,
@@ -411,6 +478,25 @@ async def ensure_thread(
             expected_title=initial_query[:255],
             timezone=request.timezone,
         )
+
+    return prior
+
+
+def build_turn_context(request: ChatRequest, prior: PriorThread) -> TurnContext:
+    """What this turn knows about itself: the request's surface plus the prior row.
+
+    Origin, surface and rules all come from the request alone, because they
+    describe this turn. The stored origin is the thread's, and an automation's
+    thread can take a manual follow-up: that turn has a person waiting on it,
+    and the automation line in the rules would tell the model otherwise. An
+    automation stamps the origin on every request it sends, so nothing is lost.
+    """
+    return TurnContext(
+        last_turn_at=prior.last_turn_at,
+        platform=request.platform,
+        origin=request.origin.type if request.origin else None,
+        surface_rules=request.surface_rules,
+    )
 
 
 def _slash_text_target(content: Any) -> tuple[str, dict | None]:
