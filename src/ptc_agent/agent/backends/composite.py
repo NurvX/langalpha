@@ -8,6 +8,7 @@ from typing import Any, Protocol, Sequence
 
 import structlog
 
+from ptc_agent.agent.backends.results import EditTextResult
 from ptc_agent.agent.backends.sandbox import SandboxBackend
 
 logger = structlog.get_logger(__name__)
@@ -36,7 +37,7 @@ class FilesystemRoute(Protocol):
         new_string: str,
         *,
         replace_all: bool = False,
-    ) -> dict[str, Any]: ...
+    ) -> EditTextResult: ...
 
     async def aglob_paths(self, pattern: str, path: str = ".") -> list[str]: ...
 
@@ -149,7 +150,7 @@ class CompositeFilesystemBackend:
         new_string: str,
         *,
         replace_all: bool = False,
-    ) -> dict[str, Any]:
+    ) -> EditTextResult:
         normalized = self.normalize_path(file_path)
         route = self._route_for(normalized)
         if route is not None:

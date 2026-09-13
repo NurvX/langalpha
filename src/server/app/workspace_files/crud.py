@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import logging
 import shlex
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
@@ -407,7 +408,15 @@ async def write_workspace_file(
             manager = WorkspaceManager.get_instance()
             session = manager._sessions.get(workspace_id)
             if session:
-                session.invalidate_agent_md()
+                # Stamp the writer too, so the agent's runtime-context baseline
+                # attributes the next diff to the user rather than to whoever
+                # wrote agent.md last from inside a turn.
+                session.note_agent_md_write(
+                    {
+                        "writer": "user",
+                        "at": datetime.now(UTC).isoformat(),
+                    }
+                )
         except Exception:
             pass
 

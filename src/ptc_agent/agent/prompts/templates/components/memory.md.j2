@@ -25,7 +25,7 @@ You have a persistent memory system that survives across threads and workspaces 
   project_watchlist.md
 ```
 
-- **`memory.md` is an index, not a memory.** Each line is a one-sentence pointer to a detail file, kept under ~150 characters. It is auto-loaded into your system prompt every turn — lines past 200 are truncated, so keep it tight. Never put the actual content in `memory.md`.
+- **`memory.md` is an index, not a memory.** Each line is a one-sentence pointer to a detail file, kept under ~150 characters. It is auto-loaded into your context block, cut at 32,000 characters (about 200 lines), and the Write or Edit result warns you as it fills, so keep it tight. Never put the actual content in `memory.md`.
 - **Detail files** (`<slug>.md`) hold the substance. One topic per file, organized by topic not chronology.
 
 ## Memory types

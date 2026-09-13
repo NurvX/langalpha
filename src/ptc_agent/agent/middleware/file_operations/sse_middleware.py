@@ -63,12 +63,33 @@ class FileOperationMiddleware(AgentMiddleware):
 
     def __init__(
         self,
-        on_agent_md_write: Callable[[], None] | None = None,
+        on_agent_md_write: Callable[[dict[str, Any] | None], None] | None = None,
         work_dir: str = "/home/workspace",
+        thread_id: str | None = None,
     ) -> None:
         super().__init__()
         self._on_agent_md_write = on_agent_md_write
         self._work_dir = work_dir
+        self._thread_id = thread_id
+
+    def _writer_stamp(self) -> dict[str, Any]:
+        """Who wrote agent.md, from the background-subagent identity ContextVar.
+
+        The ContextVar is the only signal that distinguishes a subagent from the
+        main agent here: both stacks share this middleware instance and the
+        ``current_agent`` state key is set once for the whole run.
+        """
+        from ptc_agent.agent.middleware.background_subagent.context import (
+            current_background_agent_id,
+        )
+
+        agent_id = current_background_agent_id.get()
+        writer = f"subagent:{agent_id.split(':', 1)[0]}" if agent_id else "main"
+        return {
+            "thread_id": self._thread_id,
+            "writer": writer,
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
 
     @staticmethod
     def _count_lines(text: str) -> int:
@@ -112,6 +133,8 @@ class FileOperationMiddleware(AgentMiddleware):
         # Hardcode agent name for now (PTCAgent is the main agent)
         agent_name = "ptc"
 
+        normalized = workspace_relative_path(file_path, self._work_dir)
+
         # Get stream writer for custom event emission
         try:
             writer = get_stream_writer()
@@ -124,12 +147,13 @@ class FileOperationMiddleware(AgentMiddleware):
         try:
             result = await handler(request)
 
-            normalized = workspace_relative_path(file_path, self._work_dir)
-
-            # Invalidate agent.md cache when agent.md is written or edited
+            # Invalidate agent.md cache when agent.md is written or edited, and
+            # stamp who did it. The stamp is provenance for the runtime-context
+            # baseline, which finds the change by content hash regardless, so a
+            # failure here costs attribution, never the write.
             if self._on_agent_md_write and normalized == "agent.md":
                 try:
-                    self._on_agent_md_write()
+                    self._on_agent_md_write(self._writer_stamp())
                 except Exception:
                     logger.debug("[FILE_OP_MIDDLEWARE] Failed to invalidate agent.md cache")
 

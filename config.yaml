@@ -270,11 +270,6 @@ workflow:
 market_watch:
   min_interval_seconds: 25
   max_symbols: 10
-  # The stamp is ephemeral (overrides each model request only; never enters
-  # checkpoints or history), so pin a provider cache breakpoint (Anthropic
-  # cache_control / OpenAI prompt_cache_breakpoint) on the last durable
-  # message so the ephemeral stamp doesn't break incremental caching.
-  cache_breakpoint_pin: true
 
 
 # =============================================================================

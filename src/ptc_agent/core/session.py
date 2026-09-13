@@ -100,46 +100,34 @@ class Session:
         # verifies once against the sandbox manifest and stamps.
         self.skills_signature: str | None = None
 
-        # agent.md cache with dirty flag (force first read)
-        self._agent_md_cache: str | None = None
-        self._agent_md_dirty: bool = True
+        # Last-writer sidecar for agent.md, taken once by the runtime-context
+        # baseline to attribute the next change it observes. Best-effort by
+        # design: it is process-local, so a write on another worker leaves it
+        # empty and the provenance falls back to the file path alone. Never
+        # truth, only colour; the content itself is always read fresh.
+        self._agent_md_writer: dict[str, Any] | None = None
 
         logger.debug("Created session", conversation_id=conversation_id)
 
-    async def get_agent_md(self) -> str | None:
-        """Read agent.md from sandbox, with session-level caching.
+    def note_agent_md_write(self, stamp: dict[str, Any] | None = None) -> None:
+        """Record who wrote agent.md, for the next change the baseline observes.
 
-        Returns cached content unless invalidated by invalidate_agent_md().
-
-        A failed read keeps the previous value and stays dirty. Caching the
-        failure as None would conflate "the workspace has no notes" with "the
-        sandbox did not answer", handing the model the no-agent.md placeholder
-        and inviting it to recreate a file that already exists.
+        The stamp is decoration on a change the content hash finds anyway, so
+        a malformed one is dropped rather than raised.
         """
-        if self._agent_md_dirty:
-            try:
-                content = (
-                    await self.sandbox.aread_file_text(self.sandbox.normalize_path("agent.md"))
-                    if self.sandbox
-                    else None
-                )
-            except Exception:
-                # A missing agent.md is a silent None from aread_file_text;
-                # reaching here means the read itself failed, so fall through
-                # holding the last good value and stay dirty for a retry.
-                logger.warning(
-                    "Failed to read agent.md",
-                    conversation_id=self.conversation_id,
-                    exc_info=True,
-                )
-            else:
-                self._agent_md_cache = content
-                self._agent_md_dirty = False
-        return self._agent_md_cache
+        if isinstance(stamp, dict) and stamp:
+            self._agent_md_writer = dict(stamp)
 
-    def invalidate_agent_md(self) -> None:
-        """Mark agent.md cache as stale so the next get_agent_md() re-reads."""
-        self._agent_md_dirty = True
+    def take_agent_md_writer(self) -> dict[str, Any] | None:
+        """The last agent.md write this process saw, cleared on read.
+
+        Cleared so one local write labels one observed change: left in place,
+        the stamp would attribute every later change, including one made from
+        another worker, to a writer it never had.
+        """
+        writer = self._agent_md_writer
+        self._agent_md_writer = None
+        return dict(writer) if writer else None
 
     async def initialize(
         self,
@@ -346,7 +334,6 @@ class Session:
         self.egress_binding = None
 
         self._initialized = False
-        self._agent_md_dirty = True
 
         logger.info("Session cleaned up", conversation_id=self.conversation_id)
 
@@ -379,7 +366,6 @@ class Session:
         # This preserves the fast early-return path in initialize() when the
         # session is genuinely already initialized.
         self._initialized = False
-        self._agent_md_dirty = True
         self.sandbox = None
         self.mcp_registry = None
         self._builtin_mcp_registry = None
