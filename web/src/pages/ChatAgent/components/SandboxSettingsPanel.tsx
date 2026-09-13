@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { api } from '@/api/client';
+import { useBackdropDismiss, useDialogA11y } from '@/hooks/useDialogA11y';
 import {
   formatApiErrorDetail, getSandboxStats, refreshWorkspace,
 } from '../utils/api';
@@ -220,13 +221,21 @@ export function SandboxSettingsContent({ workspaceId }: { workspaceId: string })
  * SandboxSettingsPanel -- full-screen overlay showing sandbox details.
  */
 export default function SandboxSettingsPanel({ onClose, workspaceId }: SandboxSettingsPanelProps) {
+  const titleId = useId();
+  const dialogRef = useDialogA11y<HTMLDivElement>(onClose);
+  const backdrop = useBackdropDismiss<HTMLDivElement>(onClose);
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
+      className="fixed inset-0 z-[1010] flex items-center justify-center"
       style={{ backgroundColor: 'var(--color-bg-overlay-strong)' }}
-      onClick={onClose}
+      {...backdrop}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="relative w-full max-w-2xl rounded-lg p-4 sm:p-6"
         style={{
           backgroundColor: 'var(--color-bg-elevated)',
@@ -236,19 +245,19 @@ export default function SandboxSettingsPanel({ onClose, workspaceId }: SandboxSe
           flexDirection: 'column',
           overflow: 'hidden',
         }}
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Close button */}
         <button
           onClick={onClose}
           className="absolute top-4 right-4 p-1 rounded-full transition-colors hover:bg-foreground/10"
           style={{ color: 'var(--color-text-primary)' }}
+          aria-label="Close"
         >
           <X className="h-5 w-5" />
         </button>
 
         {/* Title */}
-        <h2 className="text-xl font-semibold mb-6" style={{ color: 'var(--color-text-primary)' }}>
+        <h2 id={titleId} className="text-xl font-semibold mb-6" style={{ color: 'var(--color-text-primary)' }}>
           Sandbox Settings
         </h2>
 

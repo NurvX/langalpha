@@ -39,7 +39,7 @@ export function DetailOverlay({
   const reducedMotion = useReducedMotion();
   return (
     <motion.div
-      className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+      className="fixed inset-0 z-[1010] flex items-center justify-center p-4"
       style={{ backgroundColor: 'var(--color-bg-overlay-strong)' }}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}

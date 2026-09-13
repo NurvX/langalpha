@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../lib/queryKeys';
+import { FAIL_FAST_OFFLINE } from '../lib/network';
 import { needsDiscoveryProbe } from '../pages/ChatAgent/components/mcp/mcpState';
 import {
   getWorkspaceMcpServers,
@@ -253,6 +254,7 @@ export function useToggleBuiltinMcpServer() {
 export function useAddWorkspaceMcpServer(workspaceId: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    ...FAIL_FAST_OFFLINE,
     mutationFn: (body: McpServerInput) => addWorkspaceMcpServer(workspaceId, body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.mcp.workspace(workspaceId) });
@@ -263,6 +265,7 @@ export function useAddWorkspaceMcpServer(workspaceId: string) {
 export function useUpdateWorkspaceMcpServer(workspaceId: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    ...FAIL_FAST_OFFLINE,
     mutationFn: ({ name, body }: { name: string; body: McpServerInput }) =>
       updateWorkspaceMcpServer(workspaceId, name, body),
     onSuccess: () => {
@@ -334,6 +337,7 @@ export function useDeleteWorkspaceMcpServer(workspaceId: string) {
 export function useImportWorkspaceMcpServers(workspaceId: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    ...FAIL_FAST_OFFLINE,
     mutationFn: (payload: unknown) => importWorkspaceMcpServers(workspaceId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.mcp.workspace(workspaceId) });
@@ -440,6 +444,7 @@ export function useDiscoverWorkspaceMcpServer(workspaceId: string) {
 export function useCreateMcpCatalogServer() {
   const queryClient = useQueryClient();
   return useMutation({
+    ...FAIL_FAST_OFFLINE,
     mutationFn: (body: McpServerInput) => createMcpCatalogServer(body),
     onSuccess: () => {
       invalidateMcpFanout(queryClient);
@@ -450,6 +455,7 @@ export function useCreateMcpCatalogServer() {
 export function useUpdateMcpCatalogServer() {
   const queryClient = useQueryClient();
   return useMutation({
+    ...FAIL_FAST_OFFLINE,
     mutationFn: ({ name, body }: { name: string; body: McpServerInput }) =>
       updateMcpCatalogServer(name, body),
     onSuccess: () => {
@@ -558,6 +564,7 @@ export function useSetMcpServerBinding() {
 export function useImportMcpCatalogServers() {
   const queryClient = useQueryClient();
   return useMutation({
+    ...FAIL_FAST_OFFLINE,
     mutationFn: (payload: unknown) => importMcpCatalogServers(payload),
     onSuccess: () => {
       invalidateMcpFanout(queryClient);
