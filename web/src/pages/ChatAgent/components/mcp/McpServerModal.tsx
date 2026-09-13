@@ -1,7 +1,7 @@
-import React, { useCallback, useDeferredValue, useMemo, useState } from 'react';
+import React, { useCallback, useDeferredValue, useId, useMemo, useState } from 'react';
 import { X, Plus, Trash2, Zap, ClipboardPaste } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
-import { useBackdropDismiss } from '@/hooks/useDialogA11y';
+import { useBackdropDismiss, useDialogA11y } from '@/hooks/useDialogA11y';
 import { VaultSecretPicker } from './VaultSecretPicker';
 import { McpDiscoverResult } from './McpDiscoverResult';
 import { parseMcpServersJson } from './mcpImport';
@@ -79,6 +79,8 @@ export interface McpServerModalProps {
   submitError?: string | null;
 }
 
+const NOOP = () => {};
+
 export function McpServerModal({
   secretNames,
   initial,
@@ -90,7 +92,13 @@ export function McpServerModal({
   saving = false,
   submitError = null,
 }: McpServerModalProps) {
-  const backdrop = useBackdropDismiss<HTMLDivElement>(onClose);
+  // Every dismissal route waits out a save. Closing mid-flight leaves the
+  // outcome nowhere to land: a failure has no form left to show it in, and a
+  // success closes whatever the user opened next.
+  const close = saving ? NOOP : onClose;
+  const titleId = useId();
+  const dialogRef = useDialogA11y<HTMLDivElement>(close);
+  const backdrop = useBackdropDismiss<HTMLDivElement>(close);
   const isEdit = !!initial;
   const [name, setName] = useState(initial?.name ?? '');
   const [transport, setTransport] = useState<McpTransport>(initial?.transport ?? 'stdio');
@@ -237,11 +245,16 @@ export function McpServerModal({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+      className="fixed inset-0 z-[1010] flex items-center justify-center p-4"
       style={{ backgroundColor: 'var(--color-bg-overlay-strong)' }}
       {...backdrop}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="relative w-full max-w-lg rounded-lg p-5"
         style={{
           backgroundColor: 'var(--color-bg-elevated)',
@@ -253,15 +266,16 @@ export function McpServerModal({
         }}
       >
         <button
-          onClick={onClose}
-          className="absolute top-3 right-3 p-1 rounded-full transition-colors hover:bg-foreground/10"
+          onClick={close}
+          disabled={saving}
+          className="absolute top-3 right-3 p-1 rounded-full transition-colors hover:bg-foreground/10 disabled:opacity-40 disabled:pointer-events-none"
           style={{ color: 'var(--color-text-primary)' }}
           aria-label="Close"
         >
           <X className="h-4 w-4" />
         </button>
 
-        <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--color-text-primary)' }}>
+        <h3 id={titleId} className="text-lg font-semibold mb-4" style={{ color: 'var(--color-text-primary)' }}>
           {isEdit ? 'Edit MCP server' : 'Add MCP server'}
         </h3>
 
@@ -539,8 +553,9 @@ export function McpServerModal({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-foreground/10"
+              onClick={close}
+              disabled={saving}
+              className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-foreground/10 disabled:opacity-50 disabled:pointer-events-none"
               style={{ color: 'var(--color-text-tertiary)' }}
             >
               Cancel

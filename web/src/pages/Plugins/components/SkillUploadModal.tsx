@@ -17,6 +17,8 @@ import { formatApiErrorDetail } from '@/pages/ChatAgent/utils/api';
 // ever disagree the upload simply fails a step later with the server's reason.
 const MAX_ZIP_BYTES = 2 * 1024 * 1024;
 
+const NOOP = () => {};
+
 export function SkillUploadModal({
   onClose,
   onUpload,
@@ -26,12 +28,15 @@ export function SkillUploadModal({
 }) {
   const { t } = useTranslation();
   const titleId = useId();
-  const dialogRef = useDialogA11y<HTMLDivElement>(onClose);
-  const backdrop = useBackdropDismiss<HTMLDivElement>(onClose);
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // Every dismissal route waits out the upload. It would finish regardless, so
+  // closing early saves nothing and only hides the reason if it fails.
+  const close = uploading ? NOOP : onClose;
+  const dialogRef = useDialogA11y<HTMLDivElement>(close);
+  const backdrop = useBackdropDismiss<HTMLDivElement>(close);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,7 +70,7 @@ export function SkillUploadModal({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+      className="fixed inset-0 z-[1010] flex items-center justify-center p-4"
       style={{ backgroundColor: 'var(--color-bg-overlay-strong)' }}
       {...backdrop}
     >
@@ -82,8 +87,9 @@ export function SkillUploadModal({
         }}
       >
         <button
-          onClick={onClose}
-          className="absolute top-3 right-3 p-1 rounded-full transition-colors hover:bg-foreground/10"
+          onClick={close}
+          disabled={uploading}
+          className="absolute top-3 right-3 p-1 rounded-full transition-colors hover:bg-foreground/10 disabled:opacity-40 disabled:pointer-events-none"
           style={{ color: 'var(--color-text-primary)' }}
           aria-label={t('common.close')}
         >
@@ -149,8 +155,9 @@ export function SkillUploadModal({
         <div className="flex justify-end gap-2 mt-4">
           <button
             type="button"
-            onClick={onClose}
-            className="px-3 py-1.5 text-xs rounded-md"
+            onClick={close}
+            disabled={uploading}
+            className="px-3 py-1.5 text-xs rounded-md disabled:opacity-50"
             style={{ color: 'var(--color-text-secondary)', border: '1px solid var(--color-border-muted)' }}
           >
             {t('common.cancel')}

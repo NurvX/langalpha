@@ -1,7 +1,7 @@
-import React, { useDeferredValue, useMemo, useState } from 'react';
+import React, { useDeferredValue, useId, useMemo, useState } from 'react';
 import { X, Download, CheckCircle2, AlertTriangle, KeyRound } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
-import { useBackdropDismiss } from '@/hooks/useDialogA11y';
+import { useBackdropDismiss, useDialogA11y } from '@/hooks/useDialogA11y';
 import { parseMcpServersJson } from './mcpImport';
 import { formatApiErrorDetail, type McpImportResult, type McpImportResultRow } from '../../utils/api';
 
@@ -30,10 +30,17 @@ export interface McpImportModalProps {
   onImported?: (createdNames: string[], secretsCreated: string[]) => void;
 }
 
+const NOOP = () => {};
+
 export function McpImportModal({ onClose, onImport, onImported }: McpImportModalProps) {
-  const backdrop = useBackdropDismiss<HTMLDivElement>(onClose);
   const [text, setText] = useState('');
   const [importing, setImporting] = useState(false);
+  // Every dismissal route waits out an import: its report is the only record of
+  // which servers were created and which secrets went into the vault.
+  const close = importing ? NOOP : onClose;
+  const titleId = useId();
+  const dialogRef = useDialogA11y<HTMLDivElement>(close);
+  const backdrop = useBackdropDismiss<HTMLDivElement>(close);
   const [result, setResult] = useState<McpImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -69,11 +76,16 @@ export function McpImportModal({ onClose, onImport, onImported }: McpImportModal
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+      className="fixed inset-0 z-[1010] flex items-center justify-center p-4"
       style={{ backgroundColor: 'var(--color-bg-overlay-strong)' }}
       {...backdrop}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="relative w-full max-w-lg rounded-lg p-5"
         style={{
           backgroundColor: 'var(--color-bg-elevated)',
@@ -85,15 +97,16 @@ export function McpImportModal({ onClose, onImport, onImported }: McpImportModal
         }}
       >
         <button
-          onClick={onClose}
-          className="absolute top-3 right-3 p-1 rounded-full transition-colors hover:bg-foreground/10"
+          onClick={close}
+          disabled={importing}
+          className="absolute top-3 right-3 p-1 rounded-full transition-colors hover:bg-foreground/10 disabled:opacity-40 disabled:pointer-events-none"
           style={{ color: 'var(--color-text-primary)' }}
           aria-label="Close"
         >
           <X className="h-4 w-4" />
         </button>
 
-        <h3 className="text-lg font-semibold mb-1" style={{ color: 'var(--color-text-primary)' }}>
+        <h3 id={titleId} className="text-lg font-semibold mb-1" style={{ color: 'var(--color-text-primary)' }}>
           Import MCP servers
         </h3>
         <p className="text-xs mb-4" style={{ color: 'var(--color-text-tertiary)' }}>
@@ -138,8 +151,9 @@ export function McpImportModal({ onClose, onImport, onImported }: McpImportModal
         <div className="flex items-center justify-end gap-2 pt-4 mt-2 border-t" style={{ borderColor: 'var(--color-border-muted)' }}>
           <button
             type="button"
-            onClick={onClose}
-            className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-foreground/10"
+            onClick={close}
+            disabled={importing}
+            className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-foreground/10 disabled:opacity-50 disabled:pointer-events-none"
             style={{ color: 'var(--color-text-tertiary)' }}
           >
             {result ? 'Done' : 'Cancel'}
