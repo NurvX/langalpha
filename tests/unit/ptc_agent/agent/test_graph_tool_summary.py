@@ -1,9 +1,12 @@
 """Per-turn read path: the session-cached MCP tool summary is plumbed into
 create_agent and reused byte-stable across turns (no per-turn recompute).
 
-Regression #6 at the session-cache layer: two consecutive turns of the same
-session pass the IDENTICAL cached summary string into create_agent — the hot
-path never re-resolves or recomputes, keeping the prompt-cache prefix warm.
+The summary is what the runtime-context baseline freezes as its
+``<mcp-servers>`` block. Regression #6 at the session-cache layer: two
+consecutive turns of the same session pass the IDENTICAL cached string into
+create_agent, so the hot path never re-resolves or recomputes. A recomputed
+string that merely reordered would now read as a roster change and file a row
+saying nothing changed.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,7 +23,6 @@ def _make_session(summary):
     session.sandbox.vault_secrets = None
     session.mcp_registry = MagicMock()
     session.mcp_tool_summary = summary
-    session.invalidate_agent_md = MagicMock()
     return session
 
 
@@ -47,8 +49,9 @@ async def test_session_summary_passed_to_create_agent():
 
 @pytest.mark.asyncio
 async def test_two_turns_pass_identical_cached_summary():
-    """The cached summary string is identical across consecutive turns —
-    the per-turn path reads it, never recomputes it (prompt-cache stays warm)."""
+    """The cached summary string is identical across consecutive turns: the
+    per-turn path reads it, never recomputes it, so the text the baseline froze
+    is the text every later turn is compared against."""
     session = _make_session("STABLE-SUMMARY")
     config = MagicMock()
     config.subagents = MagicMock(enabled=[])

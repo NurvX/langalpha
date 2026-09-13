@@ -22,6 +22,7 @@ from src.server.utils.content_normalizer import (
     is_thinking_status_signal,
 )
 from src.server.utils.pg_sanitize import finite_json_dumps
+from src.server.utils.text_phase import TextPhaseTracker
 from src.llms.content_utils import extract_reasoning_summary_index
 from src.utils.tracking import ExecutionTracker
 from src.config import settings as app_settings
@@ -320,7 +321,7 @@ class StreamEventAccumulator:
         if prev_data.get("content_type") == "reasoning_signal":
             return False
 
-        merge_keys = ("thread_id", "agent", "id", "role", "content_type")
+        merge_keys = ("thread_id", "agent", "id", "role", "content_type", "phase")
         if any(prev_data.get(k) != incoming.get(k) for k in merge_keys):
             return False
 
@@ -426,6 +427,9 @@ class RunSSEProducer:
         # When index changes (e.g., 0→1), a separator (\n\n) is needed between blocks
         self._reasoning_block_index: dict[str, int] = {}
         self._reasoning_separator_pending: Set[str] = set()
+
+        # The OpenAI Responses `phase` of streamed text, per agent and message.
+        self._text_phase = TextPhaseTracker()
 
         # Track function_call state for Response API (per agent)
         # Response API sends name/call_id only in first chunk, need to persist across chunks
@@ -1419,6 +1423,10 @@ class RunSSEProducer:
             if prev_idx is not None and reasoning_idx != prev_idx:
                 self._reasoning_separator_pending.add(agent_name)
 
+        # Resolve before normalization: the frame that announces the phase has
+        # empty text and is dropped below, so the table must be filled first.
+        text_phase = self._text_phase.resolve(agent_name, message_id, message_chunk.content)
+
         # Normalize main content - extract text and get content type
         text_content, content_type = normalize_text_content(message_chunk.content)
 
@@ -1467,6 +1475,8 @@ class RunSSEProducer:
 
             event_stream_message["content"] = text_content
             event_stream_message["content_type"] = content_type  # "text" or "reasoning"
+            if content_type == "text" and text_phase:
+                event_stream_message["phase"] = text_phase
 
             # Handle reasoning content lifecycle
             if content_type == "reasoning":
@@ -1531,6 +1541,8 @@ class RunSSEProducer:
                 f"normalized={finish_reason} has_tool_state={has_tool_call_state} "
                 f"response_metadata={message_chunk.response_metadata}"
             )
+
+            self._text_phase.finish(agent_name)
 
             # If finishing while reasoning is active, emit completion signal
             if agent_name in self.reasoning_active:

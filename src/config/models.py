@@ -324,13 +324,6 @@ class MarketWatchConfig(BaseModel):
         default=25, ge=5, description="Throttle between injections per thread"
     )
     max_symbols: int = Field(default=10, ge=1, le=50, description="Watch list cap")
-    cache_breakpoint_pin: bool = Field(
-        default=True,
-        description=(
-            "Pin a provider cache breakpoint on the last durable message so the "
-            "ephemeral stamp doesn't break incremental caching"
-        ),
-    )
 
 
 class WorkflowOrchestrationConfig(BaseModel):

@@ -334,6 +334,30 @@ class TestChatRequest:
         with pytest.raises(ValidationError):
             ChatRequest(platform=platform)
 
+    def test_surface_rules_defaults_to_none(self):
+        assert ChatRequest().surface_rules is None
+
+    def test_surface_rules_keeps_the_text_it_was_sent(self):
+        rules = "Surface slack: plain text, one message per answer."
+        assert ChatRequest(surface_rules=rules).surface_rules == rules
+
+    @pytest.mark.parametrize("sent", ["", "   ", "\n\t "])
+    def test_blank_surface_rules_are_no_rules(self, sent):
+        """A gateway with nothing to say and one that drops the key have to
+        land in the same state, or the model gets an empty paragraph."""
+        assert ChatRequest(surface_rules=sent).surface_rules is None
+
+    def test_surface_rules_are_stripped(self):
+        assert ChatRequest(surface_rules="  keep this  ").surface_rules == "keep this"
+
+    def test_surface_rules_are_capped(self):
+        """The text rides in every thread that changes it, so an unbounded
+        field is an unbounded prompt."""
+        assert ChatRequest(surface_rules="x" * 2000).surface_rules == "x" * 2000
+
+        with pytest.raises(ValidationError):
+            ChatRequest(surface_rules="x" * 2001)
+
 
 # ---------------------------------------------------------------------------
 # Utility request models

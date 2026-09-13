@@ -78,8 +78,13 @@ class SubagentCompiler:
         config: AgentConfig | None = None,
         skill_registry: dict[str, SkillDefinition] | None = None,
         skill_dirs: list[str] | None = None,
+        default_model: Any | None = None,
     ) -> None:
         self._sandbox = sandbox
+        # The model a definition with no model of its own runs on (the
+        # parent's client, which SubAgentMiddleware supplies at run time).
+        # Read here only for the shape its turn stamp takes.
+        self._default_model = default_model
         self._mcp_registry = mcp_registry
         self._tool_sets: dict[str, list[Any]] = tool_sets or {}
         self._user_profile = user_profile
@@ -96,15 +101,9 @@ class SubagentCompiler:
 
     def compile(self, definition: SubagentDefinition) -> dict[str, Any]:
         """Compile a single definition into a ``SubAgent`` TypedDict."""
-        result: dict[str, Any] = {
-            "name": definition.name,
-            "description": definition.description,
-            "system_prompt": self._resolve_prompt(definition),
-            "tools": self._resolve_tools(definition),
-        }
-
         # A credentialed user's resolved client outranks the definition's
-        # string model name.
+        # string model name. Resolved first: the prompt names the shape the
+        # turn stamp takes, which is this model's.
         resolved = (
             self._config.client_for_role(
                 f"subagent:{definition.name}", fallback_to_main=False
@@ -113,6 +112,13 @@ class SubagentCompiler:
             else None
         )
         model = resolved if resolved is not None else definition.model
+        runs_on = model if model is not None else self._default_model
+        result: dict[str, Any] = {
+            "name": definition.name,
+            "description": definition.description,
+            "system_prompt": self._resolve_prompt(definition, runs_on),
+            "tools": self._resolve_tools(definition),
+        }
         if model is not None:
             result["model"] = model
 
@@ -126,7 +132,7 @@ class SubagentCompiler:
 
     # ── Prompt resolution ─────────────────────────────────────────────
 
-    def _resolve_prompt(self, defn: SubagentDefinition) -> str:
+    def _resolve_prompt(self, defn: SubagentDefinition, model: Any = None) -> str:
         """Resolve the system prompt based on priority.
 
         1. ``custom_prompt`` — raw string, used directly.

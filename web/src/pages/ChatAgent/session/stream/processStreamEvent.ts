@@ -657,6 +657,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
           refs,
           setMessages: setMessagesForHandlers,
           eventId,
+          phase: event.phase,
         })) {
           return;
         }

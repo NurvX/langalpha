@@ -602,6 +602,9 @@ async def aedit_file_text(
         return {
             "success": True,
             "message": "File edited successfully",
+            # Characters in the file after the edit, so a caller sizing the
+            # result against a cap does not have to read the file back.
+            "size": len(updated),
         }
 
     except (SandboxGoneError, SandboxTransientError):

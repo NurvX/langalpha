@@ -35,6 +35,7 @@ import {
   fetchSharedServeArrayBuffer,
 } from './api';
 import type { SharedThreadMetadata, SSEEvent } from './api';
+import type { TextSegment } from '@/types/chat';
 import { buildSharedServeUrl } from '../ChatAgent/components/viewers/html/wsfilesUrl';
 import { isTaskAgentId } from '../ChatAgent/utils/agentId';
 
@@ -185,6 +186,7 @@ export default function SharedChatView() {
                 finishReason: event.finish_reason as string | undefined,
                 pairState,
                 setMessages: setMessagesCompat,
+                phase: event.phase as TextSegment['phase'],
               });
               return;
             }

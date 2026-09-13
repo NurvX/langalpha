@@ -45,6 +45,7 @@ from deepagents.backends.protocol import (
     WriteResult,
 )
 
+from ptc_agent.agent.backends.results import EditTextResult
 from ptc_agent.core.sandbox import ExecutionResult, PTCSandbox
 from ptc_agent.core.sandbox.runtime import PreviewInfo
 
@@ -496,7 +497,7 @@ class SandboxBackend(SandboxBackendProtocol):
         new_string: str,
         *,
         replace_all: bool = False,
-    ) -> dict[str, Any]:
+    ) -> EditTextResult:
         """Edit by exact-string replacement. Returns PTCSandbox's raw result dict."""
         normalized = self.normalize_path(file_path)
         return await self.sandbox.aedit_file_text(

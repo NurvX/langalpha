@@ -9,7 +9,7 @@ import { ownerOfToolCall } from '../toolCallOwner';
 import { deriveTaskSegment, applyTaskSegment, applyLaunchReply } from '../subagents/taskSegmentBuilder';
 import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload, HtmlWidgetData } from '../../hooks/utils/types';
 import type { ProvenanceEvent } from '@/types/sse';
-import type { ProvenanceRecord, SubagentTaskRecord } from '@/types/chat';
+import type { ProvenanceRecord, SubagentTaskRecord, TextSegment } from '@/types/chat';
 import { provenanceEventToRecord, provenanceRecordKey } from './provenance';
 import { extractLastReasoningTitle, nextArrivalSeq } from '../streamRefs';
 import type { StreamRefs, ToolCallChunkRecord } from '../streamRefs';
@@ -162,13 +162,14 @@ export function handleReasoningContent({ assistantMessageId, content, refs, setM
  * @param {Function} params.setMessages - State setter for messages
  * @returns {boolean} True if event was handled
  */
-export function handleTextContent({ assistantMessageId, content, finishReason, refs, setMessages, eventId }: {
+export function handleTextContent({ assistantMessageId, content, finishReason, refs, setMessages, eventId, phase }: {
   assistantMessageId: string;
   content: string;
   finishReason: string | undefined;
   refs: StreamRefs;
   setMessages: SetMessages;
   eventId?: number | null;
+  phase?: TextSegment['phase'];
 }): boolean {
   const { contentOrderCounterRef } = refs;
 
@@ -210,6 +211,7 @@ export function handleTextContent({ assistantMessageId, content, finishReason, r
             type: 'text',
             content,
             order: currentOrder,
+            ...(phase ? { phase } : {}),
           },
         ];
 

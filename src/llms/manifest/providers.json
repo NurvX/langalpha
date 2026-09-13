@@ -839,9 +839,11 @@
           "access_type": "oauth",
           "use_response_api": true,
           "display_name": "ChatGPT Codex",
-          "reasoning_compat_group": "codex-oauth"
+          "reasoning_compat_group": "codex-oauth",
+          "operator_channel": "developer"
         }
-      }
+      },
+      "operator_channel": "developer"
     },
     "anthropic": {
       "sdk": "anthropic",
@@ -860,9 +862,11 @@
             "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
             "user-agent": "claude-cli/2.1.77",
             "x-app": "cli"
-          }
+          },
+          "operator_channel": "system"
         }
-      }
+      },
+      "operator_channel": "system"
     },
     "gemini": {
       "sdk": "gemini",
@@ -872,6 +876,7 @@
       "display_name": "Gemini"
     },
     "dashscope": {
+      "operator_channel": "developer",
       "env_key": "DASHSCOPE_API_KEY",
       "access_type": "api_key",
       "region": "cn",
@@ -922,10 +927,12 @@
       "env_key": "MOONSHOT_API_KEY",
       "access_type": "api_key",
       "display_name": "Moonshot (Kimi)",
+      "operator_channel": "system",
       "variants": {
         "moonshot-coding": {
           "base_url": "https://api.kimi.com/coding",
-          "access_type": "coding_plan"
+          "access_type": "coding_plan",
+          "operator_channel": null
         }
       }
     },
@@ -939,6 +946,7 @@
       "variants": {
         "z-ai-cn": {
           "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+          "operator_channel": "system",
           "env_key": "ZAI_CN_API_KEY",
           "region": "cn"
         },
@@ -965,6 +973,7 @@
       "access_type": "api_key",
       "byok_eligible": true,
       "display_name": "MiniMax",
+      "operator_channel": "system",
       "variants": {
         "minimax-coding": {
           "base_url": "https://api.minimax.io/anthropic",
@@ -989,6 +998,7 @@
       }
     },
     "deepseek": {
+      "operator_channel": "system",
       "sdk": "anthropic",
       "base_url": "https://api.deepseek.com/anthropic",
       "env_key": "DEEPSEEK_API_KEY",

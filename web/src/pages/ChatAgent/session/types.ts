@@ -67,6 +67,7 @@ interface SSEEvent {
   tool_call_id?: string;
   tool_call_chunks?: Array<{ id?: string; name?: string; args?: string }>;
   finish_reason?: string;
+  phase?: 'commentary' | 'final_answer';
   artifact_type?: string;
   artifact_id?: string;
   artifact?: Record<string, unknown>;

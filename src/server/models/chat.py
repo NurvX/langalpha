@@ -444,15 +444,45 @@ class ChatRequest(BaseModel):
         "'market_view:AAPL', 'market_view:002851.SZ', 'telegram', 'slack', "
         "'discord', 'feishu'. Absent for system-initiated threads (see origin).",
     )
+    # The client that draws a surface owns what that surface accepts, so the
+    # rules for it are text on the request rather than a branch in langalpha.
+    # langalpha ships built-in rules only for the surfaces it renders itself
+    # (`web`, `market_view`), and this field replaces them when it is sent.
+    surface_rules: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        description="Delivery rules for the surface this turn arrived on, "
+        "written by the client that owns the surface (a channel gateway). "
+        "Honoured only on a service-token request; a user's own value is "
+        "dropped. langalpha carries them to the model only when they are news "
+        "to the thread: the first turn, a change of surface or of the text, the "
+        "first turn after a compaction. The client sends them on every request; "
+        "langalpha decides whether to restate.",
+    )
     # Orthogonal to platform: platform = which user surface, origin = who
     # initiated. Absent origin = user-initiated (the common case is never
-    # written). Only affects the caller's own thread labeling, so it is
-    # accepted from any client without gating.
+    # written). Affects the caller's own thread labeling and the delivery
+    # rules of its own turn, so it is accepted from any client without gating.
     origin: Optional["ThreadOrigin"] = Field(
         default=None,
-        description="Thread initiator provenance, recorded at thread creation "
-        "(ignored for existing threads). Absent = user-initiated.",
+        description="Who sent this turn. Recorded on the thread at creation "
+        "and read on every turn for the turn's delivery rules, so an "
+        "automation sends it on every request; a turn without it is a "
+        "person's, even on a thread an automation started.",
     )
+
+    @field_validator("surface_rules")
+    @classmethod
+    def _normalize_surface_rules(cls, v: Optional[str]) -> Optional[str]:
+        """Blank text is no rules, not empty rules.
+
+        A gateway with nothing to say may send an empty string or drop the key,
+        and both have to land in the same state: the built-in behavior, and a
+        rules key that carries no digest of nothing.
+        """
+        if v is None:
+            return None
+        return v.strip() or None
 
 
 # =============================================================================
