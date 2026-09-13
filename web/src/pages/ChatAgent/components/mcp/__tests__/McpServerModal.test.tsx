@@ -262,11 +262,12 @@ describe('McpServerModal — backdrop dismissal', () => {
     return backdrop;
   };
 
-  it('closes on a press and a click that both land on the backdrop', () => {
+  it('closes on a press and a release that both land on the backdrop', () => {
     const onClose = vi.fn();
     const { container } = render(<McpServerModal {...baseProps} onClose={onClose} />);
     const backdrop = backdropOf(container);
     fireEvent.mouseDown(backdrop);
+    fireEvent.mouseUp(backdrop);
     fireEvent.click(backdrop);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -277,8 +278,10 @@ describe('McpServerModal — backdrop dismissal', () => {
     // onClick there threw away everything the user had typed.
     const onClose = vi.fn();
     const { container } = render(<McpServerModal {...baseProps} onClose={onClose} />);
+    const backdrop = backdropOf(container);
     fireEvent.mouseDown(screen.getByPlaceholderText('my_server'));
-    fireEvent.click(backdropOf(container));
+    fireEvent.mouseUp(backdrop);
+    fireEvent.click(backdrop);
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -287,7 +290,42 @@ describe('McpServerModal — backdrop dismissal', () => {
     render(<McpServerModal {...baseProps} onClose={onClose} />);
     const field = screen.getByPlaceholderText('my_server');
     fireEvent.mouseDown(field);
+    fireEvent.mouseUp(field);
     fireEvent.click(field);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Closing mid-save used to be allowed, and the save still finished: a failure
+ * landed in a form that was no longer there, and a success closed whichever
+ * modal the user had opened in the meantime. Each route is its own mechanism,
+ * so each is asserted, against a baseline that proves the route works at all.
+ */
+describe('McpServerModal — dismissal while saving', () => {
+  const dismissAllWays = (container: HTMLElement) => {
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    const backdrop = container.firstElementChild as HTMLElement;
+    fireEvent.mouseDown(backdrop);
+    fireEvent.mouseUp(backdrop);
+    fireEvent.click(backdrop);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  };
+
+  it('offers Escape, the backdrop, the X and Cancel while idle', () => {
+    const onClose = vi.fn();
+    const { container } = render(<McpServerModal {...baseProps} onClose={onClose} />);
+    dismissAllWays(container);
+    expect(onClose).toHaveBeenCalledTimes(4);
+  });
+
+  it('holds every route until the save settles', () => {
+    const onClose = vi.fn();
+    const { container } = render(<McpServerModal {...baseProps} onClose={onClose} saving />);
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    dismissAllWays(container);
     expect(onClose).not.toHaveBeenCalled();
   });
 });
