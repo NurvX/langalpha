@@ -1,6 +1,7 @@
 import React, { useDeferredValue, useMemo, useState } from 'react';
 import { X, Download, CheckCircle2, AlertTriangle, KeyRound } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
+import { useBackdropDismiss } from '@/hooks/useDialogA11y';
 import { parseMcpServersJson } from './mcpImport';
 import { formatApiErrorDetail, type McpImportResult, type McpImportResultRow } from '../../utils/api';
 
@@ -30,6 +31,7 @@ export interface McpImportModalProps {
 }
 
 export function McpImportModal({ onClose, onImport, onImported }: McpImportModalProps) {
+  const backdrop = useBackdropDismiss<HTMLDivElement>(onClose);
   const [text, setText] = useState('');
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<McpImportResult | null>(null);
@@ -69,7 +71,7 @@ export function McpImportModal({ onClose, onImport, onImported }: McpImportModal
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center p-4"
       style={{ backgroundColor: 'var(--color-bg-overlay-strong)' }}
-      onClick={onClose}
+      {...backdrop}
     >
       <div
         className="relative w-full max-w-lg rounded-lg p-5"
@@ -81,7 +83,6 @@ export function McpImportModal({ onClose, onImport, onImported }: McpImportModal
           flexDirection: 'column',
           overflow: 'hidden',
         }}
-        onClick={(e) => e.stopPropagation()}
       >
         <button
           onClick={onClose}

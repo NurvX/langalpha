@@ -2,7 +2,7 @@ import { useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Upload, X } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
-import { useDialogA11y } from '@/hooks/useDialogA11y';
+import { useBackdropDismiss, useDialogA11y } from '@/hooks/useDialogA11y';
 import { formatApiErrorDetail } from '@/pages/ChatAgent/utils/api';
 
 /**
@@ -27,6 +27,7 @@ export function SkillUploadModal({
   const { t } = useTranslation();
   const titleId = useId();
   const dialogRef = useDialogA11y<HTMLDivElement>(onClose);
+  const backdrop = useBackdropDismiss<HTMLDivElement>(onClose);
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -66,7 +67,7 @@ export function SkillUploadModal({
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center p-4"
       style={{ backgroundColor: 'var(--color-bg-overlay-strong)' }}
-      onClick={onClose}
+      {...backdrop}
     >
       <div
         ref={dialogRef}
@@ -79,7 +80,6 @@ export function SkillUploadModal({
           backgroundColor: 'var(--color-bg-elevated)',
           border: '1px solid var(--color-border-muted)',
         }}
-        onClick={(e) => e.stopPropagation()}
       >
         <button
           onClick={onClose}

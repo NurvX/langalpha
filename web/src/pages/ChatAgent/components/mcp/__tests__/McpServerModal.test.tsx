@@ -251,3 +251,43 @@ describe('McpServerModal — validation gating', () => {
     expect(nameInput).toBeDisabled();
   });
 });
+
+describe('McpServerModal — backdrop dismissal', () => {
+  // The backdrop is the form's ground: `fixed inset-0`, the modal root. Checked
+  // rather than assumed, so a wrapper added above it fails here instead of
+  // letting the negative tests below pass without ever reaching the handler.
+  const backdropOf = (container: HTMLElement) => {
+    const backdrop = container.firstElementChild as HTMLElement;
+    expect(backdrop).toHaveClass('fixed', 'inset-0');
+    return backdrop;
+  };
+
+  it('closes on a press and a click that both land on the backdrop', () => {
+    const onClose = vi.fn();
+    const { container } = render(<McpServerModal {...baseProps} onClose={onClose} />);
+    const backdrop = backdropOf(container);
+    fireEvent.mouseDown(backdrop);
+    fireEvent.click(backdrop);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('survives a drag that starts in a field and releases past the card edge', () => {
+    // Selecting text and releasing outside makes the browser fire click on the
+    // nearest common ancestor of press and release — the backdrop. A bare
+    // onClick there threw away everything the user had typed.
+    const onClose = vi.fn();
+    const { container } = render(<McpServerModal {...baseProps} onClose={onClose} />);
+    fireEvent.mouseDown(screen.getByPlaceholderText('my_server'));
+    fireEvent.click(backdropOf(container));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not close when a click inside the card bubbles to the backdrop', () => {
+    const onClose = vi.fn();
+    render(<McpServerModal {...baseProps} onClose={onClose} />);
+    const field = screen.getByPlaceholderText('my_server');
+    fireEvent.mouseDown(field);
+    fireEvent.click(field);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});

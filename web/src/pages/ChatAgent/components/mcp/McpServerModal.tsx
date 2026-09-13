@@ -1,6 +1,7 @@
 import React, { useCallback, useDeferredValue, useMemo, useState } from 'react';
 import { X, Plus, Trash2, Zap, ClipboardPaste } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
+import { useBackdropDismiss } from '@/hooks/useDialogA11y';
 import { VaultSecretPicker } from './VaultSecretPicker';
 import { McpDiscoverResult } from './McpDiscoverResult';
 import { parseMcpServersJson } from './mcpImport';
@@ -89,6 +90,7 @@ export function McpServerModal({
   saving = false,
   submitError = null,
 }: McpServerModalProps) {
+  const backdrop = useBackdropDismiss<HTMLDivElement>(onClose);
   const isEdit = !!initial;
   const [name, setName] = useState(initial?.name ?? '');
   const [transport, setTransport] = useState<McpTransport>(initial?.transport ?? 'stdio');
@@ -237,7 +239,7 @@ export function McpServerModal({
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center p-4"
       style={{ backgroundColor: 'var(--color-bg-overlay-strong)' }}
-      onClick={onClose}
+      {...backdrop}
     >
       <div
         className="relative w-full max-w-lg rounded-lg p-5"
@@ -249,7 +251,6 @@ export function McpServerModal({
           flexDirection: 'column',
           overflow: 'hidden',
         }}
-        onClick={(e) => e.stopPropagation()}
       >
         <button
           onClick={onClose}
