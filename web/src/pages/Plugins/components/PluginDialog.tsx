@@ -9,8 +9,8 @@ import { useBackdropDismiss, useDialogA11y } from '@/hooks/useDialogA11y';
  * straight onto its outcome — and a second hand-rolled overlay would be a
  * second focus trap to keep correct.
  *
- * It sits above the house z-[60] modal layer: an update's outcome opens over
- * the plugin detail overlay that launched it, which is already at z-[60].
+ * It sits just above the house z-[1010] modal layer: an update's outcome opens
+ * over the plugin detail overlay that launched it, which is already there.
  */
 
 /** Every dismissal route is gated on one flag, so a non-dismissable step
@@ -41,7 +41,7 @@ export function PluginDialog({
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+      className="fixed inset-0 z-[1015] flex items-center justify-center p-4"
       style={{ backgroundColor: 'var(--color-bg-overlay-strong)' }}
       {...backdrop}
     >

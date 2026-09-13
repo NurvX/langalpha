@@ -405,8 +405,11 @@ function ChatAgent(): React.ReactElement | null {
 
   return (
     <div style={{ height: '100%', position: 'relative' }}>
-      {/* Gallery views — animated transitions (R6: z-index:1 so exit fades above chat) */}
-      <div style={{ position: threadId ? 'absolute' : 'relative', height: threadId ? 0 : '100%', width: '100%', zIndex: 1, overflow: 'hidden' }}>
+      {/* Gallery views — animated transitions. No z-index on this wrapper: it
+          would make it a stacking context, and every dialog the gallery opens
+          (sandbox settings and the MCP and skill forms inside it) would paint
+          under the app sidebar however high its own layer. */}
+      <div style={{ position: threadId ? 'absolute' : 'relative', height: threadId ? 0 : '100%', width: '100%', overflow: 'hidden' }}>
         <AnimatePresence mode="wait" custom={navDirection}>
           {!threadId && (
             <motion.div

@@ -1,6 +1,7 @@
 import React, { useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { useBackdropDismiss } from '@/hooks/useDialogA11y';
 
 interface ImageLightboxProps {
   src: string;
@@ -23,12 +24,14 @@ function ImageLightbox({ src, alt, open, onClose }: ImageLightboxProps) {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [open, handleKeyDown]);
 
+  const backdrop = useBackdropDismiss<HTMLDivElement>(onClose);
+
   if (!open) return null;
 
   return createPortal(
     <div
       className="fixed inset-0 z-[1020] flex items-center justify-center bg-black/90 animate-in fade-in-0 duration-200"
-      onClick={onClose}
+      {...backdrop}
     >
       <button
         onClick={onClose}
@@ -41,6 +44,9 @@ function ImageLightbox({ src, alt, open, onClose }: ImageLightboxProps) {
         src={src}
         alt={alt}
         className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg"
+        // Not for the backdrop, which checks its own target: the lightbox is a
+        // portal, so a click on the image would otherwise bubble up the React
+        // tree into the chat message that rendered it.
         onClick={(e) => e.stopPropagation()}
       />
     </div>,
