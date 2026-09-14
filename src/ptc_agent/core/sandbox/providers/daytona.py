@@ -22,6 +22,7 @@ from daytona import (
 from ptc_agent.config.core import DaytonaConfig
 from ptc_agent.core.sandbox._defaults import (
     DEFAULT_DEPENDENCIES,
+    SANDBOX_IMAGE_ENV,
     SANDBOX_NODE_VERSION,
     SNAPSHOT_PYTHON_VERSION,
 )
@@ -566,7 +567,12 @@ class DaytonaProvider(SandboxProvider):
             # labels — they stay identical when the pinned Node version or the baked
             # Playwright browser layout changes, so hash those explicitly to force a
             # rebuild of existing snapshots when either changes.
-            "playwright_browsers_path": "/usr/local/ms-playwright",
+            #
+            # The image env is hashed whole rather than by hand-picked key: an
+            # env-only edit changes no other hashed input, so without this the
+            # name is unchanged, the existing snapshot is reused verbatim, and
+            # the new variable is simply never built.
+            "image_env": SANDBOX_IMAGE_ENV,
             "node_version": SANDBOX_NODE_VERSION,
             "mcp_packages": sorted(mcp_packages or []),
             "apt_packages": [
@@ -631,7 +637,8 @@ class DaytonaProvider(SandboxProvider):
                 " && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1"
                 " && rm /tmp/node.tar.xz",
                 *[f"npm install -g {pkg}" for pkg in pkgs],
-                "npm install -g docx pptxgenjs",
+                # Same pin as Dockerfile.sandbox: the pptx skill and its checks target 4.0.1.
+                "npm install -g docx pptxgenjs@4.0.1",
                 "GH_ARCH=$(dpkg --print-architecture)"
                 " && curl -fsSL https://github.com/cli/cli/releases/download/"
                 "v2.87.3/gh_2.87.3_linux_${GH_ARCH}.tar.gz -o /tmp/gh.tar.gz"
@@ -647,7 +654,8 @@ class DaytonaProvider(SandboxProvider):
                 " && mv /tmp/polymarket /usr/local/bin/polymarket"
                 " && rm -rf /tmp/polymarket.tar.gz",
                 "npm install -g playwright"
-                " && PLAYWRIGHT_BROWSERS_PATH=/usr/local/ms-playwright"
+                " && PLAYWRIGHT_BROWSERS_PATH="
+                f"{SANDBOX_IMAGE_ENV['PLAYWRIGHT_BROWSERS_PATH']}"
                 " npx playwright install --with-deps chromium",
                 # -- Docker Engine (for interactive-dashboard complex tier) --
                 "install -m 0755 -d /etc/apt/keyrings"
@@ -664,15 +672,10 @@ class DaytonaProvider(SandboxProvider):
                 "apt-get clean",
                 "rm -rf /var/lib/apt/lists/*",
             )
-            .env(
-                # Persist a single Playwright browser dir shared by both the
-                # npm-side `playwright` (npx, installed above) and the Python
-                # `playwright` that Scrapling drives at runtime. With this set,
-                # `scrapling install` below and the live sandbox resolve
-                # Chromium at the same path npx populated, instead of the
-                # default ~/.cache — the missing-executable split behind #149.
-                {"PLAYWRIGHT_BROWSERS_PATH": "/usr/local/ms-playwright"}
-            )
+            # Same values Dockerfile.sandbox sets with ENV, and the same ones
+            # PTCSandbox injects per sandbox at create time. Both layers are
+            # load-bearing; see SANDBOX_IMAGE_ENV.
+            .env(SANDBOX_IMAGE_ENV)
             .run_commands(
                 # yfinance pins curl_cffi<0.14 but scrapling[all] requires >=0.14.
                 # Override resolves the conflict (tested, yfinance works with 0.14+).

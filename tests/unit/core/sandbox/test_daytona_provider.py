@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ptc_agent.config.core import DaytonaConfig
+from ptc_agent.core.sandbox._defaults import SANDBOX_IMAGE_ENV
 from ptc_agent.core.sandbox.runtime import (
     CodeRunResult,
     ExecResult,
@@ -259,6 +260,40 @@ class TestDaytonaProvider:
         )
         assert baseline == stable
         assert baseline != retuned_cpu
+
+    def test_snapshot_hash_covers_image_env(self):
+        """An env-only edit must move the hash. Nothing else in the hash changes
+        when a variable is added to SANDBOX_IMAGE_ENV, so without this the name
+        is unchanged, the old snapshot is reused verbatim, and the new variable
+        is never built (NODE_PATH shipped dead this way)."""
+        from daytona import Resources
+
+        from ptc_agent.core.sandbox.providers.daytona import DaytonaProvider
+
+        provider = DaytonaProvider.__new__(DaytonaProvider)
+        provider._working_dir = "/home/workspace"
+        res = Resources(cpu=1, memory=1, disk=3)
+
+        baseline = provider._get_snapshot_hash([], resources=res)
+        with patch(
+            "ptc_agent.core.sandbox.providers.daytona.SANDBOX_IMAGE_ENV",
+            {**SANDBOX_IMAGE_ENV, "NEW_VAR": "/somewhere"},
+        ):
+            with_added = provider._get_snapshot_hash([], resources=res)
+
+        assert baseline != with_added
+
+    def test_snapshot_image_bakes_every_shared_env_var(self):
+        """Both delivery layers carry the same values: the image ENV here, and
+        the create-time injection in PTCSandbox._build_sandbox_env_vars."""
+        from ptc_agent.core.sandbox.providers.daytona import DaytonaProvider
+
+        provider = DaytonaProvider.__new__(DaytonaProvider)
+        provider._working_dir = "/home/workspace"
+
+        dockerfile = provider._create_snapshot_image([]).dockerfile()
+        for key, value in SANDBOX_IMAGE_ENV.items():
+            assert f"ENV {key}={value}" in dockerfile
 
     def test_config_rejects_default_tier_missing_from_tiers(self):
         """C4a: the default tier must be present in resource_tiers, else the

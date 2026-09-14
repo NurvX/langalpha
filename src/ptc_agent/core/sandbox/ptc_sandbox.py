@@ -14,7 +14,11 @@ import structlog
 
 
 from ptc_agent.config.core import CoreConfig
-from ptc_agent.core.sandbox._defaults import DEFAULT_DEPENDENCIES, SNAPSHOT_PYTHON_VERSION
+from ptc_agent.core.sandbox._defaults import (
+    DEFAULT_DEPENDENCIES,
+    SANDBOX_IMAGE_ENV,
+    SNAPSHOT_PYTHON_VERSION,
+)
 from ptc_agent.core.sandbox.platform_secrets import build_platform_secret_bindings
 from ptc_agent.core.sandbox.providers import create_provider
 from ptc_agent.core.sandbox.retry import RetryPolicy, async_retry_with_backoff
@@ -300,9 +304,9 @@ class PTCSandbox:
         import os
 
         env_vars: dict[str, str] = {
-            # Playwright browsers are installed to /usr/local/ms-playwright
-            # in the snapshot image; tell the Python package where to find them.
-            "PLAYWRIGHT_BROWSERS_PATH": "/usr/local/ms-playwright",
+            # Paths baked into the sandbox image, repeated here so a sandbox born
+            # on a snapshot built before one of them was added still gets it.
+            **SANDBOX_IMAGE_ENV,
             # Tell the in-sandbox ginlix-data client the exact path the host
             # uploads the token file to. It must not key off $HOME — Daytona
             # runs as root ($HOME=/root) while the working dir is /home/workspace.
