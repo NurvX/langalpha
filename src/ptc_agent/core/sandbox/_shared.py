@@ -153,3 +153,11 @@ def _get_sandbox_eligible_skills() -> tuple[set[str], set[str]]:
 
     return get_sandbox_skill_names(), set(SKILL_REGISTRY.keys())
 
+
+def _resolve_disabled_skills(disabled: frozenset[str]) -> frozenset[str]:
+    """Disables as the sync must read them: a skill another enabled skill
+    declares in ``requires`` keeps its files in the sandbox."""
+    from ptc_agent.agent.middleware.skills import resolve_disabled_skills
+
+    return resolve_disabled_skills(disabled)
+

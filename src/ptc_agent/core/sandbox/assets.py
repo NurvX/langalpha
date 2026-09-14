@@ -39,6 +39,7 @@ from ptc_agent.core.sandbox._shared import (
     _internal_package_files,
     _resolve_local_path,
     _get_sandbox_eligible_skills,
+    _resolve_disabled_skills,
 )
 from typing import TYPE_CHECKING
 
@@ -126,6 +127,7 @@ async def _compute_skills_module(
         installs stay protected. ``disabled`` names are excluded entirely, so
         a disabled builtin leaves the local set (and hence the sandbox).
         """
+    disabled = _resolve_disabled_skills(disabled)
 
     skills_base = f"{sandbox._work_dir}/.agents/skills"
 
@@ -550,6 +552,8 @@ async def sync_sandbox_assets(
                 know which root is managed to stamp the right lock ownership.
             disabled_skills: Builtin skill names this user disabled — excluded
                 from the local set, so the prune removes them from the sandbox.
+                One an enabled skill declares in ``requires`` is kept: the
+                dependent's mandated read would otherwise miss.
             reusing_sandbox: Whether reconnecting to an existing sandbox.
             force_refresh: Force re-upload of all modules regardless of manifest.
             tokens: Pre-minted OAuth tokens (from workspace_manager).
@@ -805,6 +809,8 @@ async def _collect_local_skill_names(
     *,
     disabled: frozenset[str] = frozenset(),
 ) -> set[str]:
+    disabled = _resolve_disabled_skills(disabled)
+
     def build() -> set[str]:
         sandbox_skill_names, all_registry_names = _get_sandbox_eligible_skills()
 
@@ -979,6 +985,8 @@ async def _upload_skills(
             folds these into the module version so the skipped upload retries).
         """
     from ptc_agent.agent.middleware.skills.lock import is_agent_installed, is_linked
+
+    disabled = _resolve_disabled_skills(disabled)
 
     assert sandbox.runtime is not None
     runtime = sandbox.runtime
