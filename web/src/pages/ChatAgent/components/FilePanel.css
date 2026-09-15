@@ -544,3 +544,92 @@
       padding-bottom: var(--bottom-tab-height);
     }
   }
+/* A reference's target inside the open file. The tint is annotation, so it
+   stays flat amber on the target; arrival fades it in once from a stronger mix. */
+.file-focus-line {
+  display: block;
+  background-color: var(--color-accent-soft);
+}
+.file-focus-block {
+  border-radius: 4px;
+  background-color: var(--color-accent-soft);
+  box-shadow: 0 0 0 4px var(--color-accent-soft);
+}
+.file-focus-enter {
+  animation: file-focus-in 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.file-focus-block.file-focus-enter {
+  animation-name: file-focus-in-block;
+}
+@keyframes file-focus-in {
+  from { background-color: color-mix(in srgb, var(--color-accent-primary) 34%, transparent); }
+  to { background-color: var(--color-accent-soft); }
+}
+@keyframes file-focus-in-block {
+  from {
+    background-color: color-mix(in srgb, var(--color-accent-primary) 34%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent-primary) 34%, transparent);
+  }
+  to {
+    background-color: var(--color-accent-soft);
+    box-shadow: 0 0 0 4px var(--color-accent-soft);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .file-focus-enter { animation: none; }
+}
+
+.file-focus-chip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  max-width: 14rem;
+  height: 22px;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.file-focus-chip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 2px 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.file-focus-chip-label:hover {
+  color: var(--color-text-primary);
+}
+.file-focus-chip-label.is-missing {
+  cursor: default;
+  color: var(--color-text-tertiary);
+}
+.file-focus-chip-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--color-accent-primary);
+}
+.file-focus-chip-close {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 100%;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.file-focus-chip-close:hover {
+  color: var(--color-text-primary);
+}

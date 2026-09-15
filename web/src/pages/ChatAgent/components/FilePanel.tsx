@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 import { readWorkspaceFile, readWorkspaceFileFull, writeWorkspaceFile, downloadWorkspaceFile, downloadWorkspaceFileAsArrayBuffer, triggerFileDownload, listWorkspaceFiles } from '../utils/api';
 import { basename, isSystemPath, linkCandidates, nameGlob, normalizeRefPath, pickUnambiguous, rankNameMatches, resolveByName, resolveExact } from '../utils/fileRefResolver';
 import { useStableHandler } from '@/hooks/useStableHandler';
+import { parseFragment, type FileLocation, type OpenFileHandler } from '../utils/fileLocation';
 import { stripLineNumbers } from './toolDisplayConfig';
 import Markdown from './Markdown';
 import ImageLightbox from './ImageLightbox';
@@ -44,6 +45,8 @@ import { useFileEdit } from './filePanel/useFileEdit';
 import { useSelectionContext } from './filePanel/useSelectionContext';
 import { useFileSelection } from './filePanel/useFileSelection';
 import { useFileBackup } from './filePanel/useFileBackup';
+import { useFileFocus, type FocusViewer } from './filePanel/useFileFocus';
+import { FocusChip } from './filePanel/FocusChip';
 
 // --- FilePanel ---
 
@@ -51,11 +54,13 @@ interface FilePanelProps {
   workspaceId: string;
   onClose: () => void;
   targetFile?: string | null;
+  /** Where in `targetFile` the reference pointed (a line, page or heading). */
+  targetLocation?: FileLocation | null;
   onTargetFileHandled?: () => void;
   targetDirectory?: string | null;
   onTargetDirHandled?: () => void;
   /** Opens a reference to another workspace (a `__wsref__` link inside a viewed file). */
-  onOpenFile?: ((path: string, workspaceId?: string) => void) | null;
+  onOpenFile?: OpenFileHandler | null;
   /** This thread's Write/Edit paths, newest first, for resolving a reference by name. */
   getRecentWritePaths?: (() => string[]) | null;
   files?: string[];
@@ -83,6 +88,7 @@ function FilePanel({
   workspaceId,
   onClose,
   targetFile,
+  targetLocation = null,
   onTargetFileHandled,
   targetDirectory,
   onTargetDirHandled,
@@ -144,6 +150,8 @@ function FilePanel({
   const [imageLightboxOpen, setImageLightboxOpen] = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState<FileError | null>(null);
+  const [fileTruncated, setFileTruncated] = useState(false);
+  const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
 
   // Tree search, and the landing a reference that did not resolve opens on:
   // the query is its file name, `missedRef` names what was asked for, and
@@ -205,6 +213,28 @@ function FilePanel({
     handleEditorTextSelect,
     handleAddSelectionContext,
   } = useSelectionContext({ selectedFile, fileContent, onAddContext });
+
+  // Mirrors the viewer branches in the render below.
+  const focusViewer: FocusViewer = (() => {
+    if (!selectedFile || isEditing) return 'other';
+    const ext = getFileExtension(selectedFile);
+    if (fileMime === 'pdf') return 'pdf';
+    if (fileMime === 'excel' || fileMime === 'image' || ext === 'csv') return 'other';
+    if (ext === 'html' || ext === 'htm') return 'html';
+    if (selectedFile.startsWith('/large_tool_results/')) return 'other';
+    if (fileMime?.includes('markdown') || ext === 'md') return 'markdown';
+    return 'code';
+  })();
+  const fileFocus = useFileFocus({
+    selectedFile,
+    viewer: focusViewer,
+    ready: !fileLoading && !fileError,
+    editing: isEditing,
+    content: fileContent,
+    truncated: fileTruncated,
+    pageCount: pdfPageCount,
+    containerRef: contentWrapperRef,
+  });
 
   const handleAddToMemo = useAddToMemo({
     workspaceId,
@@ -371,7 +401,7 @@ function FilePanel({
 
   useEffect(() => {
     if (targetFile) {
-      void openFileRef(targetFile);
+      void openFileRef(targetFile, { location: targetLocation });
       onTargetFileHandled?.();
     }
   }, [targetFile]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -418,6 +448,7 @@ function FilePanel({
         setSelectedFile(filePath);
         setFileLoading(true);
         setFileMime('pdf');
+        setPdfPageCount(null);
         try {
           const buf = await downloadFileAsArrayBufferFn(workspaceId, filePath);
           setFileArrayBuffer(buf);
@@ -475,6 +506,7 @@ function FilePanel({
       const data = await readFileFn(workspaceId, filePath);
       setFileContent(data.content || '');
       setFileMime(data.mime || 'text/plain');
+      setFileTruncated(!!data.truncated);
     } catch (err) {
       console.error('[FilePanel] Failed to read file:', err);
       setFileError(categorizeFileError(err, wsData?.status));
@@ -508,25 +540,32 @@ function FilePanel({
    * open at once; otherwise a name search over the workspace decides between
    * opening the one hit and landing on the tree filtered to the name.
    */
-  const openFileRef = async (rawRef: string, { fromFile = null }: { fromFile?: string | null } = {}) => {
+  const openFileRef = async (
+    rawRef: string,
+    { fromFile = null, location = null }: { fromFile?: string | null; location?: FileLocation | null } = {},
+  ) => {
     const candidates = fromFile ? linkCandidates(rawRef, fromFile) : [normalizeRefPath(rawRef)];
     const primary = candidates[0];
     if (!primary) return;
+    const openAt = (path: string) => {
+      void handleFileClick(path);
+      fileFocus.focusAt(path, location);
+    };
     const writes = getRecentWritePaths?.() ?? [];
 
     const exact = resolveExact(candidates, files, writes);
-    if (exact) return handleFileClick(exact);
+    if (exact) return openAt(exact);
     // Absolute and system paths are not in the default listing, and the
     // agent names them exactly (tool rows, skill files), so read them directly.
     const direct = candidates.find((c) => c.startsWith('/') || isSystemPath(c));
-    if (direct) return handleFileClick(direct);
+    if (direct) return openAt(direct);
     // A bare name matching a file this thread wrote is the cheap, likely case.
     if (!primary.includes('/')) {
       const written = resolveByName(primary, [], writes);
-      if (written) return handleFileClick(written);
+      if (written) return openAt(written);
     }
     if (!searchFilesFn) {
-      return handleFileClick(resolveByName(primary, files, writes) ?? primary);
+      return openAt(resolveByName(primary, files, writes) ?? primary);
     }
 
     const seq = ++openSeqRef.current;
@@ -547,24 +586,29 @@ function FilePanel({
     }
     if (seq !== openSeqRef.current) return;
 
-    if (!hits) return handleFileClick(resolveByName(primary, files, writes) ?? primary);
+    if (!hits) return openAt(resolveByName(primary, files, writes) ?? primary);
     const exactHit = candidates.find((c) => hits!.includes(c));
-    if (exactHit) return handleFileClick(exactHit);
+    if (exactHit) return openAt(exactHit);
     const ranked = rankNameMatches(candidates, hits);
     const pick = pickUnambiguous(candidates, ranked);
-    if (pick) return handleFileClick(pick);
+    if (pick) return openAt(pick);
     // Name the reference as written; the joined reading is only our guess.
     landOnSearch(candidates[candidates.length - 1], ranked);
   };
 
   // Links inside a viewed file resolve against that file's directory first.
   // Stable identity: Markdown memoizes its renderers on this handler.
-  const handleViewerLink = useStableHandler((path: string, linkWorkspaceId?: string) => {
+  const handleViewerLink = useStableHandler((path: string, linkWorkspaceId?: string, location?: FileLocation) => {
     if (linkWorkspaceId && linkWorkspaceId !== workspaceId && onOpenFile) {
-      onOpenFile(path, linkWorkspaceId);
+      onOpenFile(path, linkWorkspaceId, location);
       return;
     }
-    void openFileRef(path, { fromFile: selectedFile });
+    void openFileRef(path, { fromFile: selectedFile, location });
+  });
+
+  // `[Valuation](#valuation)` inside the open file moves within it, no reload.
+  const handleAnchorLink = useStableHandler((fragment: string) => {
+    if (selectedFile) fileFocus.focusAt(selectedFile, parseFragment(fragment));
   });
 
   const handleDownloadSelected = () => {
@@ -650,6 +694,9 @@ function FilePanel({
           <span className="text-sm font-semibold truncate" style={{ color: 'var(--color-text-primary)' }}>
             {showSettings ? t('chat.workspaceSettings') : selectedFile ? (<>{fileName}{hasUnsavedChanges && <span style={{ color: 'var(--color-text-tertiary)' }}> *</span>}</>) : targetDirectory ? `${targetDirectory}/` : t('chat.workspaceFiles')}
           </span>
+          {!showSettings && fileFocus.chip && (
+            <FocusChip state={fileFocus.chip} onJump={fileFocus.jump} onDismiss={fileFocus.dismiss} />
+          )}
         </div>
         <div className="flex items-center gap-1">
           {!showSettings && !selectedFile && !selectMode && (
@@ -1020,7 +1067,7 @@ function FilePanel({
             ) : fileMime === 'pdf' ? (
               <Suspense fallback={<DocumentLoadingFallback />}>
                 <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))} />}>
-                  <PdfViewer data={fileArrayBuffer!} />
+                  <PdfViewer data={fileArrayBuffer!} focusPage={fileFocus.focusPage} focusSeq={fileFocus.seq} onPageCount={setPdfPageCount} />
                 </DocumentErrorBoundary>
               </Suspense>
             ) : fileMime === 'excel' ? (
@@ -1052,6 +1099,8 @@ function FilePanel({
                     workspaceId={workspaceId}
                     filePath={selectedFile}
                     servedUrlOverride={apiAdapter?.buildServedUrl?.(selectedFile, { injectTheme: true })}
+                    anchor={fileFocus.htmlAnchor}
+                    anchorSeq={fileFocus.seq}
                     onCopyShareLink={onCopyShareLink ?? undefined}
                     onTriggerDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))}
                   />
@@ -1076,7 +1125,7 @@ function FilePanel({
                   </div>
                 ) : fileMime?.includes('markdown') || getFileExtension(selectedFile) === 'md' ? (
                   <div className="markdown-print-content">
-                    <Markdown variant="panel" content={fileContent ?? ''} className="text-sm" onOpenFile={handleViewerLink} />
+                    <Markdown variant="panel" content={fileContent ?? ''} className="text-sm" onOpenFile={handleViewerLink} onAnchorLink={handleAnchorLink} />
                   </div>
                 ) : (
                   <SyntaxHighlighter
@@ -1087,7 +1136,11 @@ function FilePanel({
                     showLineNumbers
                     lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1em', color: 'var(--color-text-tertiary)', userSelect: 'none', fontSize: '0.6875rem', opacity: 0.5 }}
                     wrapLines
-                    lineProps={(lineNumber: number) => ({ 'data-line': lineNumber } as React.HTMLProps<HTMLElement>)}
+                    lineProps={(lineNumber: number) => {
+                      const range = fileFocus.lineRange;
+                      const focused = !!range && lineNumber >= range[0] && lineNumber <= range[1];
+                      return { 'data-line': lineNumber, ...(focused ? { className: 'file-focus-line' } : {}) } as React.HTMLProps<HTMLElement>;
+                    }}
                     wrapLongLines
                   >
                     {fileContent!}

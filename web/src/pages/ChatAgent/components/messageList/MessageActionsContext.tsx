@@ -16,10 +16,11 @@
 import React from 'react';
 import type { FeedbackResult, SubagentInfo, ToolCallProcessRecord } from './types';
 import type { ToolApprovalPosition } from '@/types/chat';
+import type { OpenFileHandler } from '../../utils/fileLocation';
 
 export interface MessageActions {
   onOpenSubagentTask?: (info: SubagentInfo) => void;
-  onOpenFile?: (filePath: string, workspaceId?: string) => void;
+  onOpenFile?: OpenFileHandler;
   onOpenSources?: (messageId: string) => void;
   onOpenDir?: (dirPath: string) => void;
   onToolCallDetailClick?: (proc: ToolCallProcessRecord) => void;

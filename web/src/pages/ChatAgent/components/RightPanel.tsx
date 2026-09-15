@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { AnimatedTabs } from '@/components/ui/animated-tabs';
 import type { ContextPayload } from './FilePanel';
 import type { MemoryTier } from '../utils/agentPaths';
+import type { FileLocation, OpenFileHandler } from '../utils/fileLocation';
 import type { MarketWatchState } from '../hooks/utils/streamEventHandlers';
 import type { ProvenanceRecord } from '@/types/chat';
 
@@ -22,7 +23,7 @@ export type RightPanelTab = 'files' | 'memory' | 'memo' | 'sources' | 'status';
  * so exactly one target can be set at a time (no sibling-nulling dance).
  */
 export type PanelTarget =
-  | { kind: 'file'; path?: string | null; dir?: string | null }
+  | { kind: 'file'; path?: string | null; dir?: string | null; location?: FileLocation | null }
   | { kind: 'memory'; key: string; tier: MemoryTier }
   | { kind: 'memo'; key: string }
   | { kind: 'sources'; messageId: string }
@@ -47,7 +48,7 @@ interface RightPanelProps {
   /** Routes a clicked file/memory/memo path through ChatView's path-aware
    * router. Lets in-panel markdown links (e.g., a sibling memory entry
    * referenced from memory.md) jump to the right tab + entry. */
-  onOpenFile?: (path: string, workspaceId?: string) => void;
+  onOpenFile?: OpenFileHandler;
   /** This thread's Write/Edit paths, newest first; read when a file reference
    * has to be resolved. */
   getRecentWritePaths?: () => string[];
@@ -100,6 +101,7 @@ export default function RightPanel({
   const kind = panelTarget?.kind;
   const targetFile = panelTarget?.kind === 'file' ? panelTarget.path ?? null : null;
   const targetDirectory = panelTarget?.kind === 'file' ? panelTarget.dir ?? null : null;
+  const targetLocation = panelTarget?.kind === 'file' ? panelTarget.location ?? null : null;
   const targetMemoryKey = panelTarget?.kind === 'memory' ? panelTarget.key : null;
   const targetMemoryTier = panelTarget?.kind === 'memory' ? panelTarget.tier : null;
   const targetMemoKey = panelTarget?.kind === 'memo' ? panelTarget.key : null;
@@ -185,6 +187,7 @@ export default function RightPanel({
               workspaceId={workspaceId}
               onClose={onClose}
               targetFile={targetFile}
+              targetLocation={targetLocation}
               onTargetFileHandled={onTargetFileHandled}
               targetDirectory={targetDirectory}
               onTargetDirHandled={onTargetDirHandled}

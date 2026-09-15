@@ -2,6 +2,7 @@
 import React from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { FileText, FileCode, Image, Table, ExternalLink, Folder } from 'lucide-react';
+import { hasLineSuffix } from '../utils/fileLocation';
 import './FileCard.css';
 
 const EXT_ICONS: Record<string, LucideIcon> = {
@@ -41,10 +42,13 @@ export function parseWsPath(href: string | undefined): { workspaceId: string; pa
  * itself in a new tab. The file panel owns resolving it, so a name with
  * an unfamiliar extension or none at all still opens. A root-absolute href
  * still needs an extension, since `/settings` style links are app routes.
+ * A `name.py:42` line suffix is checked before the scheme test, which would
+ * otherwise read `name.py:` as a URL scheme.
  */
 export function isFilePath(href: string | undefined): boolean {
   if (!href) return false;
   if (href.startsWith(WSREF_PREFIX)) return !!parseWsPath(href);
+  if (hasLineSuffix(href) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(href)) return !/^www\./i.test(href);
   if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//') || href.startsWith('#') || href.startsWith('?')) return false;
   if (/^www\./i.test(href)) return false;
   if (href.startsWith('/')) return /\.[a-z0-9]{1,8}(?:[?#].*)?$/i.test(href);

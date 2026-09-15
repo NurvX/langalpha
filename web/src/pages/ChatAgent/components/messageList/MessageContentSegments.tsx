@@ -3,6 +3,7 @@ import ActivityBlock from '../ActivityBlock';
 import { INLINE_ARTIFACT_MAP } from '../charts/InlineArtifactCards';
 import { extractFilePaths, FileMentionCards } from '../FileCard';
 import { normalizeFileRefs } from '../../utils/normalizeFileRefs';
+import type { OpenFileHandler } from '../../utils/fileLocation';
 import ReasoningMessageContent from '../ReasoningMessageContent';
 import PlanApprovalCard from '../PlanApprovalCard';
 import UserQuestionCard from '../UserQuestionCard';
@@ -84,7 +85,7 @@ interface TextBlockProps {
   isSubagentView: boolean;
   /** The message's last prose block: where a turn-end landing puts the viewport top. */
   isReplyStart: boolean;
-  onOpenFile?: (path: string, workspaceId?: string) => void;
+  onOpenFile?: OpenFileHandler;
 }
 
 function TextBlock({ block, isFirst, isStreaming, hasError, structuredError, isSubagentView, isReplyStart, onOpenFile }: TextBlockProps): React.ReactElement | null {

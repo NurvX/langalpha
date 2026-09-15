@@ -8,6 +8,7 @@ import { useStableHandler } from '@/hooks/useStableHandler';
 import { isValidUuid } from '../../utils/uuid';
 import { clampPanelWidth as clampPanelWidthUtil } from '@/lib/panelUtils';
 import type { PanelTarget } from '../RightPanel';
+import type { FileLocation } from '../../utils/fileLocation';
 import type { PreviewData } from '../../hooks/utils/types';
 import type { ProvenanceRecord } from '@/types/chat';
 import type { PlanData, ToolCallProcessRecord } from './types';
@@ -235,7 +236,7 @@ export function useRightPanel({
    * its domain. The pure decision is computed by computeAgentArtifactRouting;
    * we apply the result atomically (clear everything, then set).
    */
-  const handleOpenAgentArtifactFromChat = useCallback((rawPath: string, targetWorkspaceId?: string) => {
+  const handleOpenAgentArtifactFromChat = useCallback((rawPath: string, targetWorkspaceId?: string, location?: FileLocation) => {
     const r = computeAgentArtifactRouting(rawPath, targetWorkspaceId);
     if (r.setWorkspaceId && !isValidUuid(r.setWorkspaceId)) {
       console.warn('[ChatView] ignoring artifact ref with invalid workspace id', r.setWorkspaceId);
@@ -251,7 +252,7 @@ export function useRightPanel({
     } else if (r.targetMemoKey != null) {
       target = { kind: 'memo', key: r.targetMemoKey };
     } else {
-      target = { kind: 'file', path: r.targetFile };
+      target = { kind: 'file', path: r.targetFile, location: location ?? null };
     }
     setPanelTarget(target);
     if (r.clearWorkspaceId) {

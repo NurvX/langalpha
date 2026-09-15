@@ -65,7 +65,10 @@ function wrapSpacedDestination(match: string, open: string, dest: string): strin
   const trimmed = dest.trim();
   if (!/\s/.test(trimmed)) return match;
   if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return match;
-  if (!/\.[A-Za-z0-9]{1,8}$/.test(trimmed)) return match;
+  // A fragment may hold spaces, because `findHeadingIndex` takes a heading as
+  // written and not only its slug, so `report.md#Valuation Assumptions` is a
+  // reference the panel can already open and the link has to survive to reach it.
+  if (!/\.[A-Za-z0-9]{1,8}(?:#[^<>\n]*|:\d+(?:-\d+|:\d+)?)?$/.test(trimmed)) return match;
   return `${open}<${trimmed}>)`;
 }
 

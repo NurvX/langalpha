@@ -155,6 +155,22 @@ describe('normalizeFileRefs', () => {
     expect(normalizeFileRefs('[copy](results/memo (1).docx)')).toBe('[copy](<results/memo (1).docx>)');
   });
 
+  it('wraps a spaced destination that points inside the file', () => {
+    expect(normalizeFileRefs('[v](results/Q3 notes.md#valuation)')).toBe('[v](<results/Q3 notes.md#valuation>)');
+    expect(normalizeFileRefs('[l](work/my model.py:40-55)')).toBe('[l](<work/my model.py:40-55>)');
+  });
+
+  it('wraps a destination whose only space is in the heading it names', () => {
+    // `findHeadingIndex` reads an anchor as written before it tries the slug, so
+    // a hand-written heading is a reference the panel opens. Requiring the
+    // fragment to be space-free stopped CommonMark at that space instead, and
+    // the reader got the link's text with nothing to click.
+    expect(normalizeFileRefs('[s](results/report.md#Valuation Assumptions)'))
+      .toBe('[s](<results/report.md#Valuation Assumptions>)');
+    expect(normalizeFileRefs('[s](results/Q3 notes.md#Valuation Assumptions)'))
+      .toBe('[s](<results/Q3 notes.md#Valuation Assumptions>)');
+  });
+
   it('leaves URLs, titles and non-file destinations alone', () => {
     const untouched = [
       '[a](results/a(1).md)',

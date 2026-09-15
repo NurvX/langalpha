@@ -74,6 +74,13 @@ describe('isFilePath', () => {
   it('accepts a root-absolute path that names a file', () => {
     expect(isFilePath('/tmp/output.csv')).toBe(true);
   });
+
+  it('reads a line suffix as a file, not a URL scheme', () => {
+    expect(isFilePath('model.py:42')).toBe(true);
+    expect(isFilePath('work/code/model.py:40-55')).toBe(true);
+    expect(isFilePath('https://example.com/model.py:42')).toBe(false);
+    expect(isFilePath('www.example.com/model.py:42')).toBe(false);
+  });
 });
 
 describe('normalizeFilePath fragments', () => {

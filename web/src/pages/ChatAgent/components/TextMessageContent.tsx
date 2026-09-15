@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import Markdown from './Markdown';
 import { useAnimatedText } from '@/components/ui/animated-text';
 import { parseErrorMessage, type ParsedError } from '../utils/parseErrorMessage';
+import type { OpenFileHandler } from '../utils/fileLocation';
 import { UPSTREAM_HINT_I18N_KEY, type StructuredError } from '@/utils/rateLimitError';
 
 interface TextMessageContentProps {
@@ -14,7 +15,7 @@ interface TextMessageContentProps {
    *  internal errors render at the chat-input banner, not inline), use the
    *  structured fields instead of re-parsing the raw message text. */
   structuredError?: StructuredError;
-  onOpenFile?: (path: string, workspaceId?: string) => void;
+  onOpenFile?: OpenFileHandler;
 }
 
 /**
