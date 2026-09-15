@@ -1742,6 +1742,8 @@
     "focusLine": "第 {{line}} 行",
     "focusLines": "第 {{start}}–{{end}} 行",
     "focusPage": "第 {{page}} 页",
+    "focusLineNear": "第 {{line}} 行附近",
+    "focusLineBeyond": "第 {{line}} 行超出已加载的预览",
     "focusLineMissing": "此文件中没有第 {{line}} 行",
     "focusPageMissing": "此文件中没有第 {{page}} 页",
     "focusSectionMissing": "找不到章节 {{anchor}}",

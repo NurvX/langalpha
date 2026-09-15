@@ -33,12 +33,16 @@ export function useFileEdit({ workspaceId, selectedFile, fileContent, setFileCon
   }, []);
 
   const hasUnsavedChanges = isEditing && editContent !== null && editContent !== fileContent;
+  const selectedFileRef = useRef(selectedFile);
+  selectedFileRef.current = selectedFile;
 
   const handleStartEdit = useCallback(async () => {
     if (!selectedFile || !workspaceId) return;
     setSaveError(null);
     try {
       const data = await readFileFullFn(workspaceId, selectedFile);
+      // Another file opened while the full read was in flight.
+      if (selectedFileRef.current !== selectedFile) return;
       const fullContent = data.content || '';
       if (fullContent.length > 500 * 1024) {
         setSaveError(t('filePanel.fileTooLarge'));

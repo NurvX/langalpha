@@ -11,6 +11,7 @@ import {
 import Markdown from './Markdown';
 import type { MemoryEntry } from '../utils/api';
 import { MEMORY_USER_DIR, MEMORY_WORKSPACE_DIR } from '../utils/agentPaths';
+import type { FileLocation, OpenFileHandler } from '../utils/fileLocation';
 
 type Tier = 'user' | 'workspace';
 
@@ -25,7 +26,7 @@ interface MemoryPanelProps {
    * parent's path-aware router. The panel resolves bare sibling refs
    * (e.g. `feedback_visualization_preference.md`) against the current
    * memory tier's dir before calling. */
-  onOpenFile?: (path: string, workspaceId?: string) => void;
+  onOpenFile?: OpenFileHandler;
 }
 
 function formatBytes(n: number): string {
@@ -82,7 +83,7 @@ export default function MemoryPanel({
   // them through to file routing instead of forcing them into the memory
   // store path (where they'd 404).
   const handleBodyLinkOpen = useCallback(
-    (href: string, wsId?: string) => {
+    (href: string, wsId?: string, location?: FileLocation) => {
       if (!onOpenFile || !href) return;
       const isAlreadyQualified =
         href.startsWith('.agents/') ||
@@ -90,7 +91,7 @@ export default function MemoryPanel({
         href.startsWith('/') ||
         /^[a-z][a-z0-9+.-]*:/i.test(href);
       if (isAlreadyQualified) {
-        onOpenFile(href, wsId);
+        onOpenFile(href, wsId, location);
         return;
       }
       const clean = href.replace(/^\.\//, '');
@@ -99,11 +100,11 @@ export default function MemoryPanel({
       const SIBLING_EXTS = new Set(['md', 'markdown']);
       if (!SIBLING_EXTS.has(ext)) {
         // Not a memory entry — let file routing decide where it belongs.
-        onOpenFile(clean, wsId);
+        onOpenFile(clean, wsId, location);
         return;
       }
       const dir = tier === 'user' ? MEMORY_USER_DIR : MEMORY_WORKSPACE_DIR;
-      onOpenFile(`${dir}/${clean}`, wsId);
+      onOpenFile(`${dir}/${clean}`, wsId, location);
     },
     [onOpenFile, tier],
   );

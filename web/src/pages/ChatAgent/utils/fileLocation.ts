@@ -11,11 +11,14 @@ export interface FileLocation {
 
 export type OpenFileHandler = (path: string, workspaceId?: string, location?: FileLocation) => void;
 
-const LINE_FRAGMENT_RE = /^L(\d+)(?:-L?(\d+))?$/i;
+// Uppercase only, as GitHub writes it: `#l2` is a heading slug ("L2"), not line 2.
+const LINE_FRAGMENT_RE = /^L(\d+)(?:-L?(\d+))?$/;
 const PAGE_FRAGMENT_RE = /(?:^|&)page=(\d+)(?:&|$)/i;
 // `name.ext:42`, `name.ext:40-55`, `name.ext:42:7` (the column is ignored).
-// The extension is required so a URL port or a drive letter never reads as a line.
-const LINE_SUFFIX_RE = /(\.[a-z0-9]{1,8}):(\d+)(?:-(\d+)|:\d+)?$/i;
+// The extension must hold a letter, so `localhost:8000` and `127.0.0.1:8000`
+// stay ports. A host with a lettered TLD (`example.com:8080`) still matches,
+// so only call this on a destination already known not to be a URL.
+const LINE_SUFFIX_RE = /(\.(?=[a-z0-9]{0,7}[a-z])[a-z0-9]{1,8}):(\d+)(?:-(\d+)|:\d+)?$/i;
 
 function lineRange(start: string, end?: string): FileLocation | null {
   const a = Number(start);
@@ -84,7 +87,12 @@ export function findHeadingIndex(texts: string[], anchor: string): number {
   const wanted = anchor.replace(/^user-content-/, '');
   const slugs = headingSlugs(texts);
   const exact = slugs.indexOf(wanted.toLowerCase());
-  return exact >= 0 ? exact : slugs.indexOf(slugifyHeading(wanted));
+  if (exact >= 0) return exact;
+  const slug = slugs.indexOf(slugifyHeading(wanted));
+  if (slug >= 0) return slug;
+  // "Revenue & Margin" slugs to `revenue--margin`; a hand-written anchor has one hyphen.
+  const collapse = (s: string) => s.replace(/-+/g, '-');
+  return slugs.map(collapse).indexOf(collapse(slugifyHeading(wanted)));
 }
 
 export function countLines(content: string): number {
@@ -93,26 +101,62 @@ export function countLines(content: string): number {
   return content.endsWith('\n') ? n - 1 : n;
 }
 
-const FENCE_RE = /^\s{0,3}(```|~~~)/;
+// A fence run, with the character and length a closer has to match, and
+// whatever follows on the line.
+const FENCE_RE = /^\s{0,3}((`|~)\2{2,})([^\n]*)$/;
 const ATX_HEADING_RE = /^\s{0,3}#{1,6}\s+\S/;
+const BLOCK_START_RE = /^\s{0,3}(?:[-*+]\s|\d+[.)]\s|\||>)/;
 const MARKUP_SPLIT_RE = /[*_`~$<>[\]()|\\]+/;
+const MARKUP_GLOBAL_RE = /[*_`~$<>[\]()|\\]+/g;
 
 interface SourceLine {
   text: string;
+  index: number;
+  /** Inside a fenced code block (the fence lines themselves are not). */
   inFence: boolean;
+  isFence: boolean;
+  heading: boolean;
+  /** Begins a block of its own in the rendered view, rather than continuing the one above. */
+  startsBlock: boolean;
 }
 
-/** The markdown source line at `line` (or the next non-blank one), plus fence state. */
-function sourceLineAt(source: string, line: number): SourceLine | null {
+/**
+ * Source lines as the renderer reads them, with a leading front-matter block
+ * left out (Markdown strips it), so a YAML `# comment` never counts as a heading.
+ */
+function scanLines(source: string): (SourceLine | null)[] {
   const lines = source.split('\n');
-  let inFence = false;
-  for (let i = 0; i < lines.length; i++) {
-    const isFence = FENCE_RE.test(lines[i]);
-    if (i >= line - 1 && lines[i].trim() && !isFence) {
-      return { text: lines[i], inFence };
-    }
-    if (isFence) inFence = !inFence;
-    if (i > line + 2) break;
+  let body = 0;
+  if (lines[0]?.replace(/\r$/, '') === '---') {
+    const close = lines.findIndex((l, i) => i > 0 && l.startsWith('---'));
+    if (close > 0) body = close + 1;
+  }
+  // The opener's own run, because CommonMark closes a block only on a run of
+  // the same character, at least as long, carrying no info string. Toggling on
+  // any fence-like line ended a ```` block at the first ``` example inside it,
+  // and the example's headings then counted as rendered ones, so a `#L`
+  // reference landed in the wrong section or reported the line missing. The
+  // secretary's `_CODE_RE` reads the same rule on the other side of the wire.
+  let fence: string | null = null;
+  return lines.map((text, index) => {
+    if (index < body) return null;
+    const run = FENCE_RE.exec(text);
+    const closes = !!run && fence !== null
+      && run[2] === fence[0] && run[1].length >= fence.length && !run[3].trim();
+    const isFence = !!run && (fence === null || closes);
+    const heading = !fence && !isFence && ATX_HEADING_RE.test(text);
+    const startsBlock = isFence || heading || !text.trim() || (!fence && BLOCK_START_RE.test(text));
+    const line = { text, index, inFence: !!fence && !isFence, isFence, heading, startsBlock };
+    if (isFence) fence = fence === null ? run![1] : null;
+    return line;
+  });
+}
+
+/** The markdown source line at `line` (or the next non-blank one). */
+function sourceLineAt(scan: (SourceLine | null)[], line: number): SourceLine | null {
+  for (let i = Math.max(0, line - 1); i < Math.min(scan.length, line + 3); i++) {
+    const at = scan[i];
+    if (at && at.text.trim() && !at.isFence) return at;
   }
   return null;
 }
@@ -123,38 +167,82 @@ function sourceLineAt(source: string, line: number): SourceLine | null {
  * longest remaining piece is kept, since inline formatting splits the rest.
  */
 export function markdownLineProbe(source: string, line: number): string | null {
-  const at = sourceLineAt(source, line);
-  if (!at) return null;
+  const at = sourceLineAt(scanLines(source), line);
+  return at ? probeOf(at) : null;
+}
+
+function probeOf(at: SourceLine): string | null {
   if (at.inFence) {
     const code = at.text.trim().replace(/\s+/g, ' ');
     return code.length >= 3 ? code : null;
   }
-  const text = at.text
+  const pieces = plainText(at.text).split(MARKUP_SPLIT_RE).map((p) => p.replace(/\s+/g, ' ').trim());
+  const longest = pieces.reduce((best, p) => (p.length > best.length ? p : best), '');
+  return longest.length >= 3 ? longest : null;
+}
+
+function plainText(raw: string): string {
+  return raw
     .trim()
     .replace(/^#{1,6}\s+/, '')
     .replace(/^(?:>\s*)+/, '')
     .replace(/^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, '')
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1');
-  const pieces = text.split(MARKUP_SPLIT_RE).map((p) => p.replace(/\s+/g, ' ').trim());
-  const longest = pieces.reduce((best, p) => (p.length > best.length ? p : best), '');
-  return longest.length >= 3 ? longest : null;
+}
+
+/**
+ * What to look for in the rendered view for a markdown source line: its probe
+ * text, and how many earlier blocks also contain that text, counted from the
+ * start of its section and of the document. The rendered blocks carry no line
+ * numbers, so a repeated sentence is told apart by its position among repeats.
+ */
+export interface MarkdownLineTarget {
+  probe: string;
+  /** Index among ATX headings of the section holding the line, or -1 before the first. */
+  section: number;
+  repeatsInSection: number;
+  repeatsInDocument: number;
+}
+
+export function markdownLineTarget(source: string, line: number): MarkdownLineTarget | null {
+  const scan = scanLines(source);
+  const at = sourceLineAt(scan, line);
+  const probe = at ? probeOf(at) : null;
+  if (!at || !probe) return null;
+  let section = -1;
+  let inSection = 0;
+  let inDocument = 0;
+  // A paragraph wrapped over several lines is one rendered block, so it counts once.
+  let blockCounted = false;
+  for (const l of scan.slice(0, at.index + 1)) {
+    if (!l) continue;
+    if (l.startsBlock) blockCounted = false;
+    if (l.heading) {
+      section += 1;
+      inSection = 0;
+    }
+    if (l === at) break;
+    const text = l.inFence ? l.text : plainText(l.text).replace(MARKUP_GLOBAL_RE, '');
+    if (!blockCounted && !l.isFence && text.replace(/\s+/g, ' ').includes(probe)) {
+      inSection += 1;
+      inDocument += 1;
+      blockCounted = true;
+    }
+  }
+  const sameBlock = blockCounted ? 1 : 0;
+  return {
+    probe,
+    section,
+    repeatsInSection: Math.max(0, inSection - sameBlock),
+    repeatsInDocument: Math.max(0, inDocument - sameBlock),
+  };
+}
+
+export function countHeadings(source: string): number {
+  return headingIndexAbove(source, Infinity) + 1;
 }
 
 /** Position, among the document's ATX headings, of the last one at or above `line`. */
 export function headingIndexAbove(source: string, line: number): number {
-  const lines = source.split('\n');
-  let inFence = false;
-  let count = 0;
-  let index = -1;
-  for (let i = 0; i < Math.min(line, lines.length); i++) {
-    if (FENCE_RE.test(lines[i])) {
-      inFence = !inFence;
-      continue;
-    }
-    if (!inFence && ATX_HEADING_RE.test(lines[i])) {
-      index = count;
-      count += 1;
-    }
-  }
-  return index;
+  return scanLines(source).slice(0, Math.max(0, line)).filter((l) => l?.heading).length - 1;
 }

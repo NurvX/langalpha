@@ -11,6 +11,8 @@
  * Runs once per message render as a content-level pre-processing step.
  */
 
+import { mapOutsideCode } from './markdownSegments';
+
 /**
  * Step 1: Unwrap backtick-wrapped markdown links.
  *
@@ -65,12 +67,24 @@ function wrapSpacedDestination(match: string, open: string, dest: string): strin
   const trimmed = dest.trim();
   if (!/\s/.test(trimmed)) return match;
   if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return match;
+  // An extension holds a letter, so a parenthetical like `(up 2.5)` stays prose.
   // A fragment may hold spaces, because `findHeadingIndex` takes a heading as
   // written and not only its slug, so `report.md#Valuation Assumptions` is a
   // reference the panel can already open and the link has to survive to reach it.
-  if (!/\.[A-Za-z0-9]{1,8}(?:#[^<>\n]*|:\d+(?:-\d+|:\d+)?)?$/.test(trimmed)) return match;
-  return `${open}<${trimmed}>)`;
+  if (!/\.(?=[A-Za-z0-9]{0,7}[A-Za-z])[A-Za-z0-9]{1,8}(?:#[^<>\n]*|:\d+(?:-\d+|:\d+)?)?$/.test(trimmed)) return match;
+  // Same reason as step 6: with no slash before the colon, `my model.py:` reads as a scheme.
+  const anchored = /^[^/:#?]+:\d+(?:-\d+|:\d+)?$/.test(trimmed) ? `./${trimmed}` : trimmed;
+  return `${open}<${anchored}>)`;
 }
+
+/**
+ * Step 6: Anchor a bare `name.ext:42` destination with `./`.
+ *
+ * With no slash before the colon, the markdown URL filter reads `model.py:`
+ * as a scheme and drops the href, so the link renders with nothing to click.
+ *   [model](model.py:42) → [model](./model.py:42)
+ */
+const BARE_LINE_DEST_RE = /(!?\[[^\]\n]*\]\()([^\s()<>/:#?]+\.(?=[A-Za-z0-9]{0,7}[A-Za-z])[A-Za-z0-9]{1,8}:\d+(?:-\d+|:\d+)?)\)/g;
 
 /**
  * Normalize all file references in a markdown string.
@@ -85,7 +99,11 @@ export function normalizeFileRefs(content: string): string {
   content = content.replace(FILE_PROTO_RE, '$1');         // step 2
   content = content.replace(ABS_SANDBOX_RE, '$1');        // step 3
   content = content.replace(WSREF_INNER_RE, '$1');        // step 4
-  content = content.replace(LINK_DEST_RE, wrapSpacedDestination); // step 5
+  // Steps 5 and 6 rewrite a destination's text, which inside code would change
+  // what the reader copies.
+  content = mapOutsideCode(content, (prose) => prose
+    .replace(LINK_DEST_RE, wrapSpacedDestination)          // step 5
+    .replace(BARE_LINE_DEST_RE, '$1./$2)'));               // step 6
 
   return content;
 }

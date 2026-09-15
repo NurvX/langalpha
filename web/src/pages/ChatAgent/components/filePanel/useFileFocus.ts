@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import {
+  countHeadings,
   countLines,
   findHeadingIndex,
   headingIndexAbove,
-  markdownLineProbe,
+  markdownLineTarget,
   type FileLocation,
+  type MarkdownLineTarget,
 } from '../../utils/fileLocation';
 
 /** Which viewer is showing the selected file, as far as a location can reach into it. */
@@ -26,6 +28,10 @@ export interface FocusChipState {
   anchor?: string;
   title?: string;
   missing: boolean;
+  /** The line's text wasn't found, so the highlight marks the section holding it. */
+  near?: boolean;
+  /** Past the part of a long file that was loaded, so there is nothing to show. */
+  beyond?: boolean;
 }
 
 interface UseFileFocusArgs {
@@ -46,17 +52,40 @@ const BLOCK_SELECTOR = `${HEADING_SELECTOR},p,li,td,th,pre,blockquote,dt,dd`;
 const BLOCK_CLASS = 'file-focus-block';
 const ENTER_CLASS = 'file-focus-enter';
 const MAX_ANIMATED_LINES = 200;
-const MAX_WAIT_FRAMES = 30;
+// The code highlighter's grammar loads on first use and renders unnumbered until then.
+const CODE_WAIT_MS = 4000;
+const MARKDOWN_WAIT_MS = 1000;
 
 const normalizeText = (s: string | null) => (s ?? '').replace(/\s+/g, ' ').trim();
 
 interface MarkdownTarget {
   el: HTMLElement;
   title?: string;
+  near?: boolean;
 }
 
-function findMarkdownTarget(root: HTMLElement, location: FileLocation, source: string): MarkdownTarget | null {
-  const headings = Array.from(root.querySelectorAll<HTMLElement>(HEADING_SELECTOR));
+/** What a markdown location needs from the source, worked out once rather than per frame. */
+interface MarkdownQuery {
+  location: FileLocation;
+  line: MarkdownLineTarget | null;
+  headingCount: number;
+  sectionAbove: number;
+}
+
+function inSection(el: HTMLElement, headings: HTMLElement[], section: number): boolean {
+  const start = headings[section];
+  const end = headings[section + 1];
+  const afterStart = !start || start === el || !!(start.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const beforeEnd = !end || !!(end.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING);
+  return afterStart && beforeEnd;
+}
+
+function findMarkdownTarget(root: HTMLElement, query: MarkdownQuery): MarkdownTarget | null {
+  const { location, line } = query;
+  // GFM's footnote section carries a visually hidden heading the source never wrote.
+  const headings = Array.from(root.querySelectorAll<HTMLElement>(HEADING_SELECTOR))
+    .filter((h) => !h.closest('[data-footnotes], .footnotes'));
+  const scoped = headings.length === query.headingCount;
   if (location.anchor) {
     const i = findHeadingIndex(headings.map((h) => h.textContent ?? ''), location.anchor);
     if (i >= 0) return { el: headings[i], title: normalizeText(headings[i].textContent) };
@@ -67,23 +96,22 @@ function findMarkdownTarget(root: HTMLElement, location: FileLocation, source: s
     return raw ? { el: raw } : null;
   }
   if (location.line) {
-    // The rendered view has no line numbers, so find the smallest block whose
-    // text contains the source line, and fall back to the section it sits in.
-    const probe = markdownLineProbe(source, location.line);
-    if (probe) {
-      let best: HTMLElement | null = null;
-      let bestLength = Infinity;
-      for (const el of root.querySelectorAll<HTMLElement>(BLOCK_SELECTOR)) {
-        const text = normalizeText(el.textContent);
-        if (text.length < bestLength && text.includes(probe)) {
-          best = el;
-          bestLength = text.length;
-        }
+    // The rendered view has no line numbers. Find the innermost blocks holding
+    // the line's text, keep those in its section when the headings line up with
+    // the source, and take the one at the line's position among the repeats.
+    if (line) {
+      const matches = Array.from(root.querySelectorAll<HTMLElement>(BLOCK_SELECTOR)).filter((el) =>
+        normalizeText(el.textContent).includes(line.probe)
+        && !Array.from(el.querySelectorAll<HTMLElement>(BLOCK_SELECTOR)).some((inner) => normalizeText(inner.textContent).includes(line.probe))
+        && (!scoped || inSection(el, headings, line.section)));
+      if (matches.length) {
+        const nth = scoped ? line.repeatsInSection : line.repeatsInDocument;
+        const el = matches[Math.min(nth, matches.length - 1)];
+        return { el: el.closest<HTMLElement>('tr') ?? el };
       }
-      if (best) return { el: best.closest<HTMLElement>('tr') ?? best };
     }
-    const heading = headings[headingIndexAbove(source, location.line)];
-    if (heading) return { el: heading };
+    const heading = scoped ? headings[query.sectionAbove] : undefined;
+    if (heading) return { el: heading, near: true };
   }
   return null;
 }
@@ -99,18 +127,20 @@ function playEnter(elements: HTMLElement[]) {
     el.classList.remove(ENTER_CLASS);
     void el.offsetWidth; // restart the animation on a repeat visit
     el.classList.add(ENTER_CLASS);
-    el.addEventListener('animationend', () => el.classList.remove(ENTER_CLASS), { once: true });
+    const done = () => el.classList.remove(ENTER_CLASS);
+    el.addEventListener('animationend', done, { once: true });
+    el.addEventListener('animationcancel', done, { once: true });
   }
 }
 
 /** Retry a DOM lookup across frames, since lazy viewers commit after the effect runs. */
-function whenPresent<T>(find: () => T | null, onFound: (found: T) => void, onGiveUp: () => void): () => void {
-  let frame = 0;
+function whenPresent<T>(find: () => T | null, onFound: (found: T) => void, onGiveUp: () => void, budgetMs: number): () => void {
+  const deadline = performance.now() + budgetMs;
   let raf = 0;
   const tick = () => {
     const found = find();
     if (found) return onFound(found);
-    if (++frame > MAX_WAIT_FRAMES) return onGiveUp();
+    if (performance.now() > deadline) return onGiveUp();
     raf = requestAnimationFrame(tick);
   };
   tick();
@@ -132,7 +162,8 @@ export function useFileFocus({
   containerRef,
 }: UseFileFocusArgs) {
   const [focus, setFocus] = useState<FileFocus | null>(null);
-  const [section, setSection] = useState<{ seq: number; title?: string; found: boolean } | null>(null);
+  // What the markdown lookup landed on, for the chip: a section's title, or a line found only near.
+  const [landing, setLanding] = useState<{ seq: number; title?: string; found: boolean; near?: boolean } | null>(null);
   const seqRef = useRef(0);
 
   const focusAt = useCallback((path: string, location: FileLocation | null | undefined) => {
@@ -147,22 +178,20 @@ export function useFileFocus({
 
   const active = focus && focus.path === selectedFile && ready ? focus : null;
   const loc = active?.location;
-  const lineCount = content != null ? countLines(content) : 0;
+  const lineCount = useMemo(() => (content != null ? countLines(content) : 0), [content]);
+  const result = landing?.seq === active?.seq ? landing : null;
 
   let chip: FocusChipState | null = null;
   let lineRange: [number, number] | null = null;
   if (active && loc) {
     if (loc.line && (viewer === 'code' || viewer === 'markdown')) {
-      const missing = !truncated && loc.line > lineCount;
-      chip = { kind: 'line', line: loc.line, lineEnd: loc.lineEnd, missing };
-      if (!missing && viewer === 'code') {
-        const end = loc.lineEnd ?? loc.line;
-        lineRange = [loc.line, truncated ? end : Math.min(end, lineCount)];
-      }
+      const beyond = loc.line > lineCount && truncated;
+      const missing = loc.line > lineCount;
+      chip = { kind: 'line', line: loc.line, lineEnd: loc.lineEnd, missing, beyond, near: !missing && !!result?.near };
+      if (!missing && viewer === 'code') lineRange = [loc.line, Math.min(loc.lineEnd ?? loc.line, lineCount)];
     } else if (loc.page && viewer === 'pdf') {
       chip = { kind: 'page', page: loc.page, missing: pageCount != null && loc.page > pageCount };
     } else if (loc.anchor && viewer === 'markdown') {
-      const result = section?.seq === active.seq ? section : null;
       chip = { kind: 'section', anchor: loc.anchor, title: result?.title, missing: result ? !result.found : false };
     }
   }
@@ -182,32 +211,39 @@ export function useFileFocus({
         () => container.querySelector<HTMLElement>(`[data-line="${rangeStart}"]`),
         (first) => {
           scrollIntoPanel(container, first);
-          const lines: HTMLElement[] = [];
-          for (let n = rangeStart; n <= Math.min(rangeEnd, rangeStart + MAX_ANIMATED_LINES); n++) {
-            const el = container.querySelector<HTMLElement>(`[data-line="${n}"]`);
-            if (el) lines.push(el);
-          }
+          const last = Math.min(rangeEnd, rangeStart + MAX_ANIMATED_LINES);
+          const lines = Array.from(container.querySelectorAll<HTMLElement>('[data-line]')).filter((el) => {
+            const n = Number(el.dataset.line);
+            return n >= rangeStart && n <= last;
+          });
           playEnter(lines);
         },
         () => {},
+        CODE_WAIT_MS,
       );
     }
 
     if (viewer === 'markdown' && (location.anchor || (location.line && !lineMissing))) {
       let target: HTMLElement | null = null;
       const seq = active.seq;
+      const source = content ?? '';
+      const query: MarkdownQuery = {
+        location,
+        line: location.line ? markdownLineTarget(source, location.line) : null,
+        headingCount: countHeadings(source),
+        sectionAbove: location.line ? headingIndexAbove(source, location.line) : -1,
+      };
       const cancel = whenPresent(
-        () => findMarkdownTarget(container, location, content ?? ''),
+        () => findMarkdownTarget(container, query),
         (found) => {
           target = found.el;
           found.el.classList.add(BLOCK_CLASS);
           scrollIntoPanel(container, found.el);
           playEnter([found.el]);
-          if (location.anchor) setSection({ seq, title: found.title, found: true });
+          setLanding({ seq, title: found.title, found: true, near: found.near });
         },
-        () => {
-          if (location.anchor) setSection({ seq, found: false });
-        },
+        () => setLanding({ seq, found: false }),
+        MARKDOWN_WAIT_MS,
       );
       return () => {
         cancel();

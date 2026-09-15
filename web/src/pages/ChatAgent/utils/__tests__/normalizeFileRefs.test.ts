@@ -171,12 +171,30 @@ describe('normalizeFileRefs', () => {
       .toBe('[s](<results/Q3 notes.md#Valuation Assumptions>)');
   });
 
+  it('leaves a destination written inside code as the agent wrote it', () => {
+    const fenced = '```python\nexpected = "[deck](results/Q3 deck.pptx)"\n```';
+    expect(normalizeFileRefs(fenced)).toBe(fenced);
+    expect(normalizeFileRefs('`x = [m](model.py:42)` then')).toBe('`x = [m](model.py:42)` then');
+  });
+
+  // ── Step 6: bare line-suffix destinations ────────────────────
+
+  it('anchors a bare name with a line suffix so the URL filter keeps it', () => {
+    expect(normalizeFileRefs('[m](model.py:42)')).toBe('[m](./model.py:42)');
+    expect(normalizeFileRefs('[m](model.py:40-55)')).toBe('[m](./model.py:40-55)');
+    expect(normalizeFileRefs('[m](my model.py:42)')).toBe('[m](<./my model.py:42>)');
+    expect(normalizeFileRefs('[m](work/model.py:42)')).toBe('[m](work/model.py:42)');
+    expect(normalizeFileRefs('[s](localhost:8000)')).toBe('[s](localhost:8000)');
+    expect(normalizeFileRefs('[s](127.0.0.1:8000)')).toBe('[s](127.0.0.1:8000)');
+  });
+
   it('leaves URLs, titles and non-file destinations alone', () => {
     const untouched = [
       '[a](results/a(1).md)',
       '[t](https://example.com/a b.md)',
       '[t](results/a.md "a title")',
       '[x](notes about things)',
+      '[expanded](up 2.5)',
       '[foo](bar) baz (qux one.md)',
     ];
     for (const input of untouched) expect(normalizeFileRefs(input)).toBe(input);

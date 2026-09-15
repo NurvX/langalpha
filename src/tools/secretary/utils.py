@@ -23,7 +23,7 @@ _TURN_SEPARATOR = "\n\n---\n\n"
 # File extensions recognized as workspace file references (mirrors frontend KNOWN_EXTS)
 _FILE_EXTS = (
     r"md|txt|pdf|doc|docx|rtf|"
-    r"py|js|jsx|ts|tsx|html|css|sh|bash|sql|r|ipynb|"
+    r"py|js|jsx|ts|tsx|html|css|sh|bash|sql|r|ipynb|pptx|ppt|"
     r"csv|json|yaml|yml|xml|toml|ini|cfg|log|env|xlsx|xls|"
     r"png|jpg|jpeg|gif|svg|webp|bmp|"
     r"zip|tar|gz"
@@ -36,12 +36,13 @@ _WSREF_PREFIX = "__wsref__"
 # Matches markdown links: [text](path) and ![text](path)
 # Captures: group(1)=prefix "![text](" or "[text](", group(2)=path, group(3)=")"
 # Path must be relative (no http/https/mailto/#), contain at least one "/",
-# and end with a known extension.
+# and end with a known extension, optionally followed by an #anchor or :line.
 _MD_LINK_RE = re.compile(
     r"(!?\[[^\]]*\]\()"  # prefix: ![...]( or [...](
     r"((?!https?://|mailto:|#|__wsref__/|[a-zA-Z][a-zA-Z0-9+.-]*:)"  # not URL scheme or already qualified
     r"(?:/home/(?:workspace|daytona)/)?[a-zA-Z_][^\s)]*/"  # at least one dir segment
-    r"[^\s)]*\.(?:" + _FILE_EXTS + r"))"  # filename.ext
+    r"[^\s)]*\.(?:" + _FILE_EXTS + r")"  # filename.ext
+    r"(?:#[^\s)]*|:\d+(?:-\d+|:\d+)?)?)"  # optional #anchor or :line the reference points at
     r"(\))",  # closing paren
     re.IGNORECASE,
 )

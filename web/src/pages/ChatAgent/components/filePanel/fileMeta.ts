@@ -18,7 +18,7 @@ export const EDITABLE_EXTENSIONS = new Set([
 /** Files with no in-browser viewer: opening one shows a download card rather
  *  than reading bytes as text or starting a download the user never asked for. */
 export const DOWNLOAD_ONLY_EXTENSIONS = new Set([
-  'doc', 'docx', 'ppt', 'pptx', 'key', 'numbers', 'pages',
+  'doc', 'docx', 'ppt', 'pptx', 'numbers', 'pages',
   'zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', '7z', 'rar',
   'parquet', 'feather', 'pkl', 'pickle', 'npy', 'npz', 'h5', 'hdf5', 'db', 'sqlite',
   'mp3', 'wav', 'mp4', 'mov', 'webm',

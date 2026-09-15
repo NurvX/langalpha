@@ -6,7 +6,10 @@ import {
   findHeadingIndex,
   countLines,
   markdownLineProbe,
+  markdownLineTarget,
   headingIndexAbove,
+  countHeadings,
+  hasLineSuffix,
 } from '../fileLocation';
 
 describe('parseFragment', () => {
@@ -22,6 +25,10 @@ describe('parseFragment', () => {
     expect(parseFragment('page=12')).toEqual({ page: 12 });
     expect(parseFragment('zoom=100&page=3')).toEqual({ page: 3 });
     expect(parseFragment('page=0')).toBeNull();
+  });
+
+  it('reads a lowercase l-number as a heading anchor, not a line', () => {
+    expect(parseFragment('l2')).toEqual({ anchor: 'l2' });
   });
 
   it('keeps anything else as a decoded anchor', () => {
@@ -51,6 +58,12 @@ describe('splitFileLocation', () => {
     expect(splitFileLocation('localhost:8000')).toEqual({ path: 'localhost:8000', location: null });
     expect(splitFileLocation('Makefile:12')).toEqual({ path: 'Makefile:12', location: null });
   });
+
+  it('never reads a numeric host and port as a line', () => {
+    expect(hasLineSuffix('127.0.0.1:8000')).toBe(false);
+    expect(hasLineSuffix('10.0.0.12:443')).toBe(false);
+    expect(hasLineSuffix('notes.v2:12')).toBe(true);
+  });
 });
 
 describe('heading anchors', () => {
@@ -61,6 +74,10 @@ describe('heading anchors', () => {
       'risks-1',
       'risks-2',
     ]);
+  });
+
+  it('finds a heading whose slug doubles a hyphen from a single-hyphen anchor', () => {
+    expect(findHeadingIndex(['Overview', 'Revenue & Margin'], 'revenue-margin')).toBe(1);
   });
 
   it('finds a heading by slug, by written text, or through the sanitizer prefix', () => {
@@ -113,5 +130,105 @@ describe('markdown line mapping', () => {
     expect(headingIndexAbove(source, 7)).toBe(1);
     expect(headingIndexAbove(source, 11)).toBe(1);
     expect(headingIndexAbove(source, 0)).toBe(-1);
+  });
+});
+
+describe('a fence closes only on its own run', () => {
+  // CommonMark closes a block on a run of the opener's own character, at least
+  // as long, carrying no info string. Toggling on any fence-like line ended the
+  // outer block at the first example inside it, and the example's headings then
+  // counted as rendered ones, so a `#L` reference landed in the wrong section.
+  const shorterRunInside = [
+    '# Report',             // 1
+    '',                     // 2
+    '````md',               // 3
+    '```python',            // 4
+    '# not a heading',      // 5
+    '```',                  // 6
+    '````',                 // 7
+    '',                     // 8
+    '## Risks',             // 9
+    '',                     // 10
+    'Exposure is limited.', // 11
+  ].join('\n');
+
+  const otherFenceCharacter = [
+    '# Report',             // 1
+    '```',                  // 2
+    '~~~',                  // 3
+    '# not a heading',      // 4
+    '~~~',                  // 5
+    '```',                  // 6
+    '',                     // 7
+    '## Risks',             // 8
+  ].join('\n');
+
+  const runWithAnInfoString = [
+    '# Report',             // 1
+    '```',                  // 2
+    '```python',            // 3
+    '# not a heading',      // 4
+    '```',                  // 5
+    '',                     // 6
+    '## Risks',             // 7
+  ].join('\n');
+
+  it('keeps a ``` example inside a ```` block', () => {
+    expect(countHeadings(shorterRunInside)).toBe(2);
+    expect(headingIndexAbove(shorterRunInside, 5)).toBe(0);
+    expect(headingIndexAbove(shorterRunInside, 11)).toBe(1);
+  });
+
+  it('keeps a ~~~ run inside a ``` block', () => {
+    expect(countHeadings(otherFenceCharacter)).toBe(2);
+    expect(headingIndexAbove(otherFenceCharacter, 4)).toBe(0);
+  });
+
+  it('does not close on a run carrying an info string', () => {
+    expect(countHeadings(runWithAnInfoString)).toBe(2);
+    expect(headingIndexAbove(runWithAnInfoString, 5)).toBe(0);
+  });
+
+  it('still closes on a longer run of the same character', () => {
+    // The control: the rule is at-least-as-long, not exactly-as-long, so this
+    // block ends and the heading after it is a heading.
+    const source = ['# Report', '````', 'x', '``````', '', '## Risks'].join('\n');
+    expect(countHeadings(source)).toBe(2);
+  });
+});
+
+describe('markdownLineTarget', () => {
+  const source = [
+    '# FY2024', // 1
+    'Revenue grew 12% year over year.', // 2
+    '# FY2025', // 3
+    'Margins held.', // 4
+    'Revenue grew 12% year over year.', // 5
+    '', // 6
+    'Revenue grew 12% year over year.', // 7
+  ].join('\n');
+
+  it('places a repeated sentence by its section and its position among repeats', () => {
+    expect(markdownLineTarget(source, 2)).toEqual({
+      probe: 'Revenue grew 12% year over year.', section: 0, repeatsInSection: 0, repeatsInDocument: 0,
+    });
+    expect(markdownLineTarget(source, 5)).toMatchObject({ section: 1, repeatsInSection: 0, repeatsInDocument: 1 });
+    expect(markdownLineTarget(source, 6)).toMatchObject({ section: 1, repeatsInSection: 1, repeatsInDocument: 2 });
+  });
+
+  it('counts a paragraph wrapped over several lines as one block', () => {
+    const wrapped = ['Revenue grew 12%', 'Revenue grew 12% again', '', 'Revenue grew 12%'].join('\n');
+    expect(markdownLineTarget(wrapped, 2)).toMatchObject({ repeatsInDocument: 0 });
+    expect(markdownLineTarget(wrapped, 4)).toMatchObject({ repeatsInDocument: 1 });
+  });
+
+  it('leaves front matter out of the heading count', () => {
+    const withFrontMatter = ['---', '# owner: research', '---', '# Summary', 'Body text here.'].join('\n');
+    expect(headingIndexAbove(withFrontMatter, 5)).toBe(0);
+    expect(markdownLineTarget(withFrontMatter, 5)).toMatchObject({ section: 0 });
+  });
+
+  it('counts a heading line as the start of its own section', () => {
+    expect(markdownLineTarget(source, 3)).toMatchObject({ probe: 'FY2025', section: 1, repeatsInSection: 0 });
   });
 });

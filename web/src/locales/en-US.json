@@ -1744,6 +1744,8 @@
     "focusLine": "Line {{line}}",
     "focusLines": "Lines {{start}}–{{end}}",
     "focusPage": "Page {{page}}",
+    "focusLineNear": "Near line {{line}}",
+    "focusLineBeyond": "Line {{line}} is past the loaded preview",
     "focusLineMissing": "Line {{line}} isn't in this file",
     "focusPageMissing": "Page {{page}} isn't in this file",
     "focusSectionMissing": "No section named {{anchor}}",

@@ -15,7 +15,8 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import SyntaxHighlighter, { oneDark, oneLight } from './SyntaxHighlighter';
 import { useTranslation } from 'react-i18next';
 import { readWorkspaceFile, readWorkspaceFileFull, writeWorkspaceFile, downloadWorkspaceFile, downloadWorkspaceFileAsArrayBuffer, triggerFileDownload, listWorkspaceFiles } from '../utils/api';
-import { basename, isSystemPath, linkCandidates, nameGlob, normalizeRefPath, pickUnambiguous, rankNameMatches, resolveByName, resolveExact } from '../utils/fileRefResolver';
+import { basename, isSystemPath, linkCandidates, nameGlob, normalizeRefPath, pickUnambiguous, rankNameMatches, resolveByName, resolveBySuffix, resolveExact } from '../utils/fileRefResolver';
+import { classifyAgentPath } from '../utils/agentPaths';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { parseFragment, type FileLocation, type OpenFileHandler } from '../utils/fileLocation';
 import { stripLineNumbers } from './toolDisplayConfig';
@@ -298,8 +299,9 @@ function FilePanel({
   }, []);
 
   const listedFiles = useMemo(
-    () => (extraMatches.length ? [...new Set([...files, ...extraMatches])] : files),
-    [files, extraMatches],
+    // Search hits outside the listing belong to the reference search that found them.
+    () => (extraMatches.length && searchQuery ? [...new Set([...files, ...extraMatches])] : files),
+    [files, extraMatches, searchQuery],
   );
   const availableTypes = useMemo(() => getAvailableTypes(listedFiles), [listedFiles]);
   const trimmedQuery = searchQuery.trim().toLowerCase();
@@ -406,11 +408,44 @@ function FilePanel({
     }
   }, [targetFile]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleFileClick = async (filePath: string) => {
+  // A folder opened from chat supersedes a reference still being searched for.
+  useEffect(() => {
+    if (!targetDirectory) return;
     openSeqRef.current += 1;
+    dropLanding();
+  }, [targetDirectory]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Leave edit mode without saving, so the next file never opens in the last one's editor. */
+  const resetEdit = () => {
+    setIsEditing(false);
+    setEditContent(null);
+    setShowDiff(false);
+    setOriginalContent(null);
+    editorRef.current = null;
+    setCanUndo(false);
+    setCanRedo(false);
+    setSaveError(null);
+  };
+
+  /** Clear the tree filter a missed reference set, so it does not outlive the miss. */
+  const dropLanding = () => {
+    if (!missedRef) return;
+    setSearchQuery('');
+    setExtraMatches([]);
+    setMissedRef(null);
+  };
+
+  /**
+   * Open a file in the viewer. Resolves to the read's error, or null once it
+   * loaded or a later open took over; a read that finishes after a later open
+   * started is dropped, so a slow file never lands under another file's name.
+   */
+  const handleFileClick = async (filePath: string): Promise<FileError | null> => {
+    const seq = ++openSeqRef.current;
+    const current = () => seq === openSeqRef.current;
     const ext = getFileExtension(filePath);
     setFileError(null);
-    setMissedRef(null);
+    resetEdit();
 
     if (DOWNLOAD_ONLY_EXTENSIONS.has(ext)) {
       setSelectedFile(filePath);
@@ -419,102 +454,67 @@ function FilePanel({
       setFileMime(null);
       setFileLoading(false);
       setFileError({ category: 'binary_file' });
-      return;
+      return null;
     }
 
-    // Binary files
-    if (['pdf', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'xlsx', 'xlsm', 'xls'].includes(ext)) {
-      if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) {
-        if (fileMime === 'image' && fileContent) {
-          URL.revokeObjectURL(fileContent);
-        }
-        setSelectedFile(filePath);
-        setFileLoading(true);
-        setFileMime('image');
-        try {
-          const blobUrl = await downloadFileFn(workspaceId, filePath);
-          setFileContent(blobUrl);
-        } catch (err) {
-          console.error('[FilePanel] Failed to download image:', err);
-          setFileError(categorizeFileError(err, wsData?.status));
-          setFileContent(null);
-          setFileMime(null);
-        } finally {
-          setFileLoading(false);
-        }
-        return;
+    const load = async (read: () => Promise<void>, label: string, onError?: () => void): Promise<FileError | null> => {
+      setSelectedFile(filePath);
+      setFileLoading(true);
+      try {
+        await read();
+        return null;
+      } catch (err) {
+        if (!current()) return null;
+        console.error(`[FilePanel] Failed to load ${label}:`, err);
+        const error = categorizeFileError(err, wsData?.status);
+        setFileError(error);
+        onError?.();
+        return error;
+      } finally {
+        if (current()) setFileLoading(false);
       }
-      if (ext === 'pdf') {
-        setSelectedFile(filePath);
-        setFileLoading(true);
-        setFileMime('pdf');
-        setPdfPageCount(null);
-        try {
-          const buf = await downloadFileAsArrayBufferFn(workspaceId, filePath);
-          setFileArrayBuffer(buf);
-        } catch (err) {
-          console.error('[FilePanel] Failed to load PDF:', err);
-          setFileError(categorizeFileError(err, wsData?.status));
-          setFileMime(null);
-        } finally {
-          setFileLoading(false);
-        }
-        return;
+    };
+
+    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) {
+      if (fileMime === 'image' && fileContent) {
+        URL.revokeObjectURL(fileContent);
       }
-      if (ext === 'xlsx' || ext === 'xlsm' || ext === 'xls') {
-        setSelectedFile(filePath);
-        setFileLoading(true);
-        setFileMime('excel');
-        try {
-          const buf = await downloadFileAsArrayBufferFn(workspaceId, filePath);
-          setFileArrayBuffer(buf);
-        } catch (err) {
-          console.error('[FilePanel] Failed to load Excel file:', err);
-          setFileError(categorizeFileError(err, wsData?.status));
-          setFileMime(null);
-        } finally {
-          setFileLoading(false);
-        }
-        return;
-      }
+      setFileMime('image');
+      return load(async () => {
+        const blobUrl = await downloadFileFn(workspaceId, filePath);
+        if (!current()) return URL.revokeObjectURL(blobUrl);
+        setFileContent(blobUrl);
+      }, 'image', () => { setFileContent(null); setFileMime(null); });
+    }
+
+    if (ext === 'pdf' || ext === 'xlsx' || ext === 'xlsm' || ext === 'xls') {
+      setFileMime(ext === 'pdf' ? 'pdf' : 'excel');
+      if (ext === 'pdf') setPdfPageCount(null);
+      return load(async () => {
+        const buf = await downloadFileAsArrayBufferFn(workspaceId, filePath);
+        if (current()) setFileArrayBuffer(buf);
+      }, ext === 'pdf' ? 'PDF' : 'Excel file', () => setFileMime(null));
     }
 
     // HTML files: read the full source (the viewer renders via the served URL,
     // but the Source tab needs untruncated content — the paginated read caps at 20k lines).
     if (['html', 'htm'].includes(ext)) {
-      setSelectedFile(filePath);
-      setFileLoading(true);
-      try {
+      return load(async () => {
         const data = await readFileFullFn(workspaceId, filePath);
+        if (!current()) return;
         setFileContent(data.content || '');
         setFileMime('text/html');
-      } catch (err) {
-        console.error('[FilePanel] Failed to read HTML file:', err);
-        setFileError(categorizeFileError(err, wsData?.status));
-        setFileContent(null);
-        setFileMime(null);
-      } finally {
-        setFileLoading(false);
-      }
-      return;
+      }, 'HTML file', () => { setFileContent(null); setFileMime(null); });
     }
 
     // Text files - read content
-    setSelectedFile(filePath);
-    setFileLoading(true);
-    try {
+    return load(async () => {
       const data = await readFileFn(workspaceId, filePath);
+      if (!current()) return;
       setFileContent(data.content || '');
       setFileMime(data.mime || 'text/plain');
       setFileTruncated(!!data.truncated);
-    } catch (err) {
-      console.error('[FilePanel] Failed to read file:', err);
-      setFileError(categorizeFileError(err, wsData?.status));
-      setFileContent(null);
-      setFileMime(null);
-    } finally {
-      setFileLoading(false);
-    }
+    }, 'file', () => { setFileContent(null); setFileMime(null); });
   };
 
   /** Leave any open file and show the tree filtered to a reference's name. */
@@ -526,7 +526,7 @@ function FilePanel({
     setFileMime(null);
     setFileError(null);
     setFileLoading(false);
-    setIsEditing(false);
+    resetEdit();
     setShowSettings(false);
     setFilterType('All');
     setSearchQuery(basename(ref));
@@ -547,25 +547,43 @@ function FilePanel({
     const candidates = fromFile ? linkCandidates(rawRef, fromFile) : [normalizeRefPath(rawRef)];
     const primary = candidates[0];
     if (!primary) return;
+    if (hasUnsavedChanges && !window.confirm(t('filePanel.discardUnsaved'))) return;
+    resetEdit();
+    dropLanding();
     const openAt = (path: string) => {
-      void handleFileClick(path);
       fileFocus.focusAt(path, location);
+      return handleFileClick(path);
+    };
+    const tried = new Set<string>();
+    // Resolves true once the path opened (or failed for a reason a search cannot fix).
+    // A stopped workspace reports a missing path as not backed up.
+    const landed = async (path: string) => {
+      tried.add(path);
+      const category = (await openAt(path))?.category;
+      return category !== 'not_found' && category !== 'not_backed_up';
     };
     const writes = getRecentWritePaths?.() ?? [];
 
+    // A known path can still be stale (the agent moved it), so a miss falls through to the search.
     const exact = resolveExact(candidates, files, writes);
-    if (exact) return openAt(exact);
-    // Absolute and system paths are not in the default listing, and the
-    // agent names them exactly (tool rows, skill files), so read them directly.
+    if (exact && await landed(exact)) return;
+    // Absolute and system paths are not in the default listing, and the agent
+    // names them exactly (tool rows, skill files), so read them first.
     const direct = candidates.find((c) => c.startsWith('/') || isSystemPath(c));
-    if (direct) return openAt(direct);
-    // A bare name matching a file this thread wrote is the cheap, likely case.
-    if (!primary.includes('/')) {
-      const written = resolveByName(primary, [], writes);
-      if (written) return openAt(written);
+    if (direct) {
+      // A system-looking path can still be a folder inside the work tree.
+      if (!tried.has(direct) && await landed(direct)) return;
+    } else if (!primary.includes('/')) {
+      // A bare name that exactly one of this thread's writes carries is the cheap, likely case.
+      const written = writes.filter((p) => basename(p) === primary);
+      if (written.length === 1 && !tried.has(written[0]) && await landed(written[0])) return;
     }
+    // Without a live search, guessing from the listing beats a certain miss.
+    const guess = () => resolveBySuffix(candidates, files, writes) ?? resolveByName(primary, files, writes) ?? primary;
     if (!searchFilesFn) {
-      return openAt(resolveByName(primary, files, writes) ?? primary);
+      const fallback = guess();
+      if (!tried.has(fallback)) void openAt(fallback);
+      return;
     }
 
     const seq = ++openSeqRef.current;
@@ -586,12 +604,14 @@ function FilePanel({
     }
     if (seq !== openSeqRef.current) return;
 
-    if (!hits) return openAt(resolveByName(primary, files, writes) ?? primary);
+    // A path names its folder, so a same-named file elsewhere is not a guess worth opening;
+    // reading the path itself shows the sandbox error with a retry.
+    if (!hits) return void openAt(primary.includes('/') ? resolveBySuffix(candidates, files, writes) ?? primary : guess());
     const exactHit = candidates.find((c) => hits!.includes(c));
-    if (exactHit) return openAt(exactHit);
+    if (exactHit) return void openAt(exactHit);
     const ranked = rankNameMatches(candidates, hits);
     const pick = pickUnambiguous(candidates, ranked);
-    if (pick) return openAt(pick);
+    if (pick) return void openAt(pick);
     // Name the reference as written; the joined reading is only our guess.
     landOnSearch(candidates[candidates.length - 1], ranked);
   };
@@ -599,8 +619,11 @@ function FilePanel({
   // Links inside a viewed file resolve against that file's directory first.
   // Stable identity: Markdown memoizes its renderers on this handler.
   const handleViewerLink = useStableHandler((path: string, linkWorkspaceId?: string, location?: FileLocation) => {
-    if (linkWorkspaceId && linkWorkspaceId !== workspaceId && onOpenFile) {
-      onOpenFile(path, linkWorkspaceId, location);
+    const otherWorkspace = !!linkWorkspaceId && linkWorkspaceId !== workspaceId;
+    // Memory and memo entries live outside the sandbox and open in their own tabs.
+    if (otherWorkspace || classifyAgentPath(path).kind !== 'file') {
+      // Resolving here would open a namesake from the wrong place.
+      onOpenFile?.(path, linkWorkspaceId, location);
       return;
     }
     void openFileRef(path, { fromFile: selectedFile, location });
@@ -645,6 +668,8 @@ function FilePanel({
     if (hasUnsavedChanges) {
       if (!window.confirm(t('filePanel.discardUnsaved'))) return;
     }
+    // A reference search still pending must not reopen the file just left.
+    openSeqRef.current += 1;
     if (fileMime === 'image' && fileContent) {
       URL.revokeObjectURL(fileContent);
     }
@@ -654,14 +679,7 @@ function FilePanel({
     setFileMime(null);
     setFileError(null);
     setExportModalOpen(false);
-    setIsEditing(false);
-    setEditContent(null);
-    setShowDiff(false);
-    setOriginalContent(null);
-    editorRef.current = null;
-    setCanUndo(false);
-    setCanRedo(false);
-    setSaveError(null);
+    resetEdit();
   };
 
   const fileName = selectedFile?.split('/').pop() || '';
@@ -891,13 +909,13 @@ function FilePanel({
               style={{ color: 'var(--color-text-primary)' }}
             />
             {searchQuery && (
-              <button type="button" onClick={clearSearch} className="file-panel-icon-btn" title={t('filePanel.clearSearch')} style={{ padding: 2 }}>
+              <button type="button" onClick={clearSearch} className="file-panel-icon-btn" title={t('filePanel.clearSearch')} aria-label={t('filePanel.clearSearch')} style={{ margin: '-0.25rem' }}>
                 <X className="h-3 w-3" />
               </button>
             )}
           </div>
           {missedRef && (
-            <p className="mt-1.5 text-xs break-all" style={{ color: 'var(--color-text-tertiary)' }}>
+            <p className="mt-1.5 text-xs break-all" style={{ color: 'var(--color-text-secondary)' }}>
               {extraMatches.length > 1
                 ? t('filePanel.refAmbiguous', { path: missedRef })
                 : t('filePanel.refNotFound', { path: missedRef })}

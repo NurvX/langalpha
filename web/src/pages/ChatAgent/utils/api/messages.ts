@@ -563,7 +563,7 @@ export async function listWorkspaceFiles(
   const { data } = await api.get(`/api/v1/workspaces/${workspaceId}/files`, {
     params: { path: dirPath, include_system: includeSystem, auto_start: autoStart, wait_for_sandbox: autoStart, ...(pattern ? { pattern } : {}) },
   });
-  return data; // { workspace_id, path, files: [...] }
+  return data; // { workspace_id, path, files: [...], sandbox_ready, source }
 }
 
 /**

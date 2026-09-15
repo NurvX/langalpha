@@ -2,7 +2,7 @@
 import React from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { FileText, FileCode, Image, Table, ExternalLink, Folder } from 'lucide-react';
-import { hasLineSuffix } from '../utils/fileLocation';
+import { hasLineSuffix, splitFileLocation, type OpenFileHandler } from '../utils/fileLocation';
 import './FileCard.css';
 
 const EXT_ICONS: Record<string, LucideIcon> = {
@@ -122,7 +122,7 @@ interface FileCardProps {
 function FileCard({ path, onOpen }: FileCardProps): React.ReactElement {
   // Strip __wsref__/{workspaceId}/ prefix for display
   const wsRef = parseWsPath(path);
-  const displayPath = wsRef ? wsRef.path : path;
+  const displayPath = splitFileLocation(wsRef ? wsRef.path : path).path;
   const ext = displayPath.split('.').pop()!.toLowerCase();
   const fileName = displayPath.split('/').pop();
   const dirPath = displayPath.split('/').slice(0, -1).join('/');
@@ -161,18 +161,15 @@ function DirCard({ dir, fileCount, onOpen }: DirCardProps): React.ReactElement {
 
 interface FileMentionCardsProps {
   filePaths: string[] | null;
-  onOpenFile: (path: string, workspaceId?: string) => void;
+  onOpenFile: OpenFileHandler;
   onOpenDir?: (dir: string) => void;
 }
 
 /** Open a file card — parses __wsref__ prefix to extract workspace context. */
-function openFileCard(path: string, onOpenFile: (path: string, workspaceId?: string) => void) {
+function openFileCard(path: string, onOpenFile: OpenFileHandler) {
   const wsRef = parseWsPath(path);
-  if (wsRef) {
-    onOpenFile(wsRef.path, wsRef.workspaceId);
-  } else {
-    onOpenFile(path);
-  }
+  const { path: filePath, location } = splitFileLocation(wsRef ? wsRef.path : path);
+  onOpenFile(filePath, wsRef?.workspaceId, location ?? undefined);
 }
 
 /**

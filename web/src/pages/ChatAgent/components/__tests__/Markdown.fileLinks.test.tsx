@@ -29,8 +29,12 @@ describe('Markdown file links', () => {
     expect(html).not.toContain('target="_blank"');
   });
 
+  it('renders a bare name with a line suffix as a link', () => {
+    expect(render('[model](model.py:42)')).toContain('<a class="underline hover:opacity-80');
+  });
+
   it('makes links inside a file viewed in the panel clickable', () => {
-    const html = render('[appendix](appendix.docx)', 'panel');
+    const html = render('[appendix](appendix)', 'panel');
     expect(html).toContain('cursor-pointer');
     expect(html).not.toContain('target="_blank"');
   });

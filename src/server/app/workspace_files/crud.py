@@ -318,9 +318,11 @@ async def read_workspace_file(
     # Apply line range (skip when unlimited=True for edit mode)
     if unlimited:
         content = text_content
+        truncated = False
     else:
         lines = text_content.splitlines()
         content = "\n".join(lines[offset : offset + limit])
+        truncated = len(lines) > offset + limit
 
     client_path = _to_client_path(sandbox, normalized)
     if _is_always_hidden_path(client_path):
@@ -337,7 +339,7 @@ async def read_workspace_file(
         "limit": limit,
         "content": content,
         "mime": mime,
-        "truncated": False,  # limit is enforced; UI can request more with offset.
+        "truncated": truncated,
     }
 
 

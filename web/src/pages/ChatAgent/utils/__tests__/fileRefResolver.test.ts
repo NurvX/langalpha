@@ -7,6 +7,7 @@ import {
   pickUnambiguous,
   rankNameMatches,
   resolveByName,
+  resolveBySuffix,
   resolveExact,
 } from '../fileRefResolver';
 
@@ -46,18 +47,26 @@ describe('resolveExact', () => {
     expect(resolveExact(['results/new.md'], files, ['results/new.md'])).toBe('results/new.md');
   });
 
+  it('leaves a path that is only a suffix of a listed file to the live search', () => {
+    expect(resolveExact(['results/summary.md'], files, [])).toBeNull();
+  });
+});
+
+describe('resolveBySuffix', () => {
+  const files = ['results/report.md', 'work/task/results/summary.md', 'data/x.csv'];
+
   it('opens the unique file whose path ends with the reference', () => {
-    expect(resolveExact(['results/summary.md'], files, [])).toBe('work/task/results/summary.md');
+    expect(resolveBySuffix(['results/summary.md'], files, [])).toBe('work/task/results/summary.md');
   });
 
   it('never matches a bare name here', () => {
-    expect(resolveExact(['summary.md'], files, [])).toBeNull();
+    expect(resolveBySuffix(['summary.md'], files, [])).toBeNull();
   });
 
   it('prefers a written file when several paths end with the reference', () => {
     const many = ['a/results/summary.md', 'b/results/summary.md'];
-    expect(resolveExact(['results/summary.md'], many, [])).toBeNull();
-    expect(resolveExact(['results/summary.md'], many, ['b/results/summary.md'])).toBe('b/results/summary.md');
+    expect(resolveBySuffix(['results/summary.md'], many, [])).toBeNull();
+    expect(resolveBySuffix(['results/summary.md'], many, ['b/results/summary.md'])).toBe('b/results/summary.md');
   });
 });
 

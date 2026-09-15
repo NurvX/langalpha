@@ -59,19 +59,26 @@ export function isSystemPath(path: string): boolean {
   return SYSTEM_DIR_PREFIXES.includes(first);
 }
 
-/**
- * Matches that are certain enough to open without a server round trip: the
- * exact path, or a unique file whose path ends with the reference.
- */
+/** The one match certain enough to open without a server round trip: the exact path. */
 export function resolveExact(
   candidates: readonly string[],
   files: readonly string[],
   recentWrites: readonly string[],
 ): string | null {
   const known = new Set([...files, ...recentWrites]);
-  for (const c of candidates) {
-    if (known.has(c)) return c;
-  }
+  return candidates.find((c) => known.has(c)) ?? null;
+}
+
+/**
+ * A unique known file whose path ends with the reference. Only a guess for
+ * when no live search can answer: the listing may predate a file the agent
+ * just made at the named path, and this would open an older namesake instead.
+ */
+export function resolveBySuffix(
+  candidates: readonly string[],
+  files: readonly string[],
+  recentWrites: readonly string[],
+): string | null {
   const pool = [...new Set([...recentWrites, ...files])];
   for (const c of candidates) {
     if (!c.includes('/') || c.startsWith('/')) continue;

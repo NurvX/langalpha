@@ -38,6 +38,7 @@ import type { SharedThreadMetadata, SSEEvent } from './api';
 import type { TextSegment } from '@/types/chat';
 import { buildSharedServeUrl } from '../ChatAgent/components/viewers/html/wsfilesUrl';
 import { isTaskAgentId } from '../ChatAgent/utils/agentId';
+import type { FileLocation } from '../ChatAgent/utils/fileLocation';
 
 // Message record type compatible with historyEventHandlers
 type MessageRecord = Record<string, unknown>;
@@ -70,6 +71,7 @@ export default function SharedChatView() {
   const [files, setFiles] = useState<string[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filePanelTargetFile, setFilePanelTargetFile] = useState<string | null>(null);
+  const [filePanelTargetLocation, setFilePanelTargetLocation] = useState<FileLocation | null>(null);
   const [rightPanelWidth, setRightPanelWidth] = useState(750);
   const isDraggingRef = useRef(false);
   // Armed for the duration of a divider drag; unmount mid-drag would otherwise
@@ -387,10 +389,11 @@ export default function SharedChatView() {
   );
 
   // Open file from chat (tool call artifacts, file mention cards)
-  const handleOpenFile = useCallback(async (filePath: string) => {
+  const handleOpenFile = useCallback(async (filePath: string, _workspaceId?: string, location?: FileLocation) => {
     if (!canBrowseFiles) return;
     setShowFilePanel(true);
     setFilePanelTargetFile(filePath);
+    setFilePanelTargetLocation(location ?? null);
     // Ensure files are loaded
     if (files.length === 0) {
       setFilesLoading(true);
@@ -616,6 +619,7 @@ export default function SharedChatView() {
               files={files}
               filesLoading={filesLoading}
               targetFile={filePanelTargetFile}
+              targetLocation={filePanelTargetLocation}
               onTargetFileHandled={() => setFilePanelTargetFile(null)}
             />
           </div>
