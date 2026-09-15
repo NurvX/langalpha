@@ -15,6 +15,15 @@ export const EDITABLE_EXTENSIONS = new Set([
   'md', 'txt', 'csv', 'env', 'toml', 'cfg', 'ini', 'log',
 ]);
 
+/** Files with no in-browser viewer: opening one shows a download card rather
+ *  than reading bytes as text or starting a download the user never asked for. */
+export const DOWNLOAD_ONLY_EXTENSIONS = new Set([
+  'doc', 'docx', 'ppt', 'pptx', 'key', 'numbers', 'pages',
+  'zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', '7z', 'rar',
+  'parquet', 'feather', 'pkl', 'pickle', 'npy', 'npz', 'h5', 'hdf5', 'db', 'sqlite',
+  'mp3', 'wav', 'mp4', 'mov', 'webm',
+]);
+
 export function getFileIcon(fileName: string): LucideIcon {
   const ext = fileName.split('.').pop()?.toLowerCase();
   if (['md', 'txt', 'csv', 'json', 'py', 'js', 'html'].includes(ext!)) return FileText;

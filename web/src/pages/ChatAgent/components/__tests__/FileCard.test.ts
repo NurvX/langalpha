@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeFilePath, parseWsPath } from '../FileCard';
+import { isFilePath, normalizeFilePath, parseWsPath } from '../FileCard';
 
 describe('normalizeFilePath', () => {
   it('returns ASCII paths unchanged', () => {
@@ -45,5 +45,44 @@ describe('parseWsPath', () => {
   it('returns null for non-wsref paths', () => {
     expect(parseWsPath('results/r.md')).toBeNull();
     expect(parseWsPath(undefined)).toBeNull();
+  });
+});
+
+describe('isFilePath', () => {
+  it('treats relative links as files whatever the extension', () => {
+    expect(isFilePath('results/deck.pptx')).toBe(true);
+    expect(isFilePath('results/model.xlsm')).toBe(true);
+    expect(isFilePath('data/prices.parquet')).toBe(true);
+    expect(isFilePath('results/README')).toBe(true);
+    expect(isFilePath('report.md#summary')).toBe(true);
+  });
+
+  it('treats a workspace-qualified link as a file whatever the extension', () => {
+    expect(isFilePath('__wsref__/ws-1/results/deck.pptx')).toBe(true);
+  });
+
+  it('keeps URLs, anchors and app routes external', () => {
+    expect(isFilePath('https://example.com/report.md')).toBe(false);
+    expect(isFilePath('mailto:someone@example.com')).toBe(false);
+    expect(isFilePath('//example.com/a.md')).toBe(false);
+    expect(isFilePath('#section')).toBe(false);
+    expect(isFilePath('?tab=files')).toBe(false);
+    expect(isFilePath('www.example.com')).toBe(false);
+    expect(isFilePath('/settings')).toBe(false);
+  });
+
+  it('accepts a root-absolute path that names a file', () => {
+    expect(isFilePath('/tmp/output.csv')).toBe(true);
+  });
+});
+
+describe('normalizeFilePath fragments', () => {
+  it('drops a fragment or query the link carried', () => {
+    expect(normalizeFilePath('results/report.md#risks')).toBe('results/report.md');
+    expect(normalizeFilePath('results/report.md?v=2')).toBe('results/report.md');
+  });
+
+  it('keeps an encoded # that belongs to the name', () => {
+    expect(normalizeFilePath('results/issue%231.md')).toBe('results/issue#1.md');
   });
 });

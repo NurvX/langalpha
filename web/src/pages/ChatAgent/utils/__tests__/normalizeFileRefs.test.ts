@@ -144,6 +144,28 @@ describe('normalizeFileRefs', () => {
     expect(normalizeFileRefs(undefined as unknown as string)).toBe(undefined);
   });
 
+  // ── Step 5: destinations with spaces ─────────────────────────
+
+  it('wraps a spaced file destination so it still parses as a link', () => {
+    expect(normalizeFileRefs('[deck](results/Q3 deck.pptx)')).toBe('[deck](<results/Q3 deck.pptx>)');
+    expect(normalizeFileRefs('![fig](charts/my fig.png)')).toBe('![fig](<charts/my fig.png>)');
+  });
+
+  it('wraps a spaced destination that holds balanced parens', () => {
+    expect(normalizeFileRefs('[copy](results/memo (1).docx)')).toBe('[copy](<results/memo (1).docx>)');
+  });
+
+  it('leaves URLs, titles and non-file destinations alone', () => {
+    const untouched = [
+      '[a](results/a(1).md)',
+      '[t](https://example.com/a b.md)',
+      '[t](results/a.md "a title")',
+      '[x](notes about things)',
+      '[foo](bar) baz (qux one.md)',
+    ];
+    for (const input of untouched) expect(normalizeFileRefs(input)).toBe(input);
+  });
+
   // ── Real-world agent output ──────────────────────────────────
 
   it('handles PTC agent table with file:// links', () => {

@@ -48,6 +48,9 @@ interface RightPanelProps {
    * router. Lets in-panel markdown links (e.g., a sibling memory entry
    * referenced from memory.md) jump to the right tab + entry. */
   onOpenFile?: (path: string, workspaceId?: string) => void;
+  /** This thread's Write/Edit paths, newest first; read when a file reference
+   * has to be resolved. */
+  getRecentWritePaths?: () => string[];
   files?: string[];
   filesLoading?: boolean;
   filesError?: string | null;
@@ -75,6 +78,7 @@ export default function RightPanel({
   allSourcesRecords,
   marketWatch,
   onOpenFile,
+  getRecentWritePaths,
   files,
   filesLoading,
   filesError,
@@ -184,6 +188,8 @@ export default function RightPanel({
               onTargetFileHandled={onTargetFileHandled}
               targetDirectory={targetDirectory}
               onTargetDirHandled={onTargetDirHandled}
+              onOpenFile={onOpenFile}
+              getRecentWritePaths={getRecentWritePaths}
               files={files}
               filesLoading={filesLoading}
               filesError={filesError}

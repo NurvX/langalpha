@@ -86,6 +86,12 @@
     opacity: 1;
   }
 
+  /* ====== Search ====== */
+  .file-panel-search {
+    padding: 8px 12px 6px;
+    flex-shrink: 0;
+  }
+
   /* ====== Filter & Sort Toolbar ====== */
   .file-panel-toolbar {
     display: flex;

@@ -11,14 +11,6 @@ const EXT_ICONS: Record<string, LucideIcon> = {
   png: Image, jpg: Image, jpeg: Image, svg: Image, gif: Image, webp: Image,
 };
 
-export const KNOWN_EXTS = new Set([
-  'md', 'txt', 'pdf', 'doc', 'docx', 'rtf',
-  'py', 'js', 'jsx', 'ts', 'tsx', 'html', 'css', 'sh', 'bash', 'sql', 'r', 'ipynb',
-  'csv', 'json', 'yaml', 'yml', 'xml', 'toml', 'ini', 'cfg', 'log', 'env', 'xlsx', 'xls',
-  'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp',
-  'zip', 'tar', 'gz',
-]);
-
 /** Prefix used for cross-workspace file references: __wsref__/{workspaceId}/path */
 const WSREF_PREFIX = '__wsref__/';
 
@@ -40,30 +32,30 @@ export function parseWsPath(href: string | undefined): { workspaceId: string; pa
   };
 }
 
-function hasKnownExt(path: string): boolean {
-  const ext = path.split('.').pop()?.split(/[?#]/)[0]?.toLowerCase();
-  return !!ext && KNOWN_EXTS.has(ext);
-}
-
 /**
  * Check if an href looks like a sandbox file path (not an external URL).
  *
  * Expects pre-normalized input (normalizeFileRefs already stripped file://
- * and /home/workspace/ prefixes). Only needs to distinguish relative paths
- * and __wsref__/ paths from external URLs.
+ * and /home/workspace/ prefixes). Any relative href is a file: the agent has
+ * no other use for one, and a relative link left to the browser opens the app
+ * itself in a new tab. The file panel owns resolving it, so a name with
+ * an unfamiliar extension or none at all still opens. A root-absolute href
+ * still needs an extension, since `/settings` style links are app routes.
  */
 export function isFilePath(href: string | undefined): boolean {
   if (!href) return false;
-  if (href.startsWith(WSREF_PREFIX)) {
-    const parsed = parseWsPath(href);
-    return !!parsed && hasKnownExt(parsed.path);
-  }
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//') || href.startsWith('#')) return false;
-  return hasKnownExt(href);
+  if (href.startsWith(WSREF_PREFIX)) return !!parseWsPath(href);
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//') || href.startsWith('#') || href.startsWith('?')) return false;
+  if (/^www\./i.test(href)) return false;
+  if (href.startsWith('/')) return /\.[a-z0-9]{1,8}(?:[?#].*)?$/i.test(href);
+  return true;
 }
 
 /**
  * Normalize a file path for API calls: strip __wsref__ prefix, return relative path.
+ *
+ * Drops a `#fragment` or `?query`, which a link can carry but a file path
+ * never does (a literal `#` in a name arrives percent-encoded).
  *
  * Also percent-decodes the path so an LLM-emitted markdown link like
  * `[name](results/%E9%95%BF...md)` reaches the API as raw Unicode and gets
@@ -75,7 +67,7 @@ export function isFilePath(href: string | undefined): boolean {
  */
 export function normalizeFilePath(path: string): string {
   const ws = parseWsPath(path);
-  const raw = ws ? ws.path : path;
+  const raw = (ws ? ws.path : path).replace(/[?#].*$/, '');
   try {
     return decodeURIComponent(raw);
   } catch {

@@ -1734,6 +1734,11 @@
     "cancelEditing": "取消编辑",
     "close": "关闭",
     "sortFiles": "排序文件",
+    "searchFiles": "搜索文件",
+    "clearSearch": "清除搜索",
+    "noSearchMatches": "没有匹配的文件",
+    "refNotFound": "在此工作区中找不到 {{path}}。",
+    "refAmbiguous": "有多个文件与 {{path}} 匹配，请在下方选择。",
     "memoBanner": {
       "fresh": "已在备忘录中 — 内容一致。",
       "stale": "已在备忘录中 — 工作区版本与备忘录已不一致。",

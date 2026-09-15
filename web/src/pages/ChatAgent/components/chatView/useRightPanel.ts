@@ -3,6 +3,8 @@ import type { Dispatch, SetStateAction } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getPreviewUrl } from '../../utils/api';
 import { computeAgentArtifactRouting } from '../../utils/agentPaths';
+import { collectRecentWritePaths } from '../../utils/fileRefResolver';
+import { useStableHandler } from '@/hooks/useStableHandler';
 import { isValidUuid } from '../../utils/uuid';
 import { clampPanelWidth as clampPanelWidthUtil } from '@/lib/panelUtils';
 import type { PanelTarget } from '../RightPanel';
@@ -320,6 +322,11 @@ export function useRightPanel({
     return merged;
   }, [sourcesMessageId, messages]);
 
+  // Read at click time rather than derived per render: the file panel only
+  // needs this thread's Write/Edit paths when it resolves a reference, and a
+  // memo over `messages` would rebuild on every streamed chunk.
+  const getRecentWritePaths = useStableHandler(() => collectRecentWritePaths(messages));
+
   // Drop a sticky sources/status target whenever the right panel is closed or
   // switches to a non-file view (detail/preview), so a later file/memory click
   // doesn't reopen that tab. These two are the only kinds that persist while
@@ -559,5 +566,6 @@ export function useRightPanel({
     detailPlanData,
     sourcesRecords,
     allSourcesRecords,
+    getRecentWritePaths,
   };
 }

@@ -843,6 +843,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     detailPlanData,
     sourcesRecords,
     allSourcesRecords,
+    getRecentWritePaths,
   } = useRightPanel({
     isMobile,
     workspaceId,
@@ -1872,6 +1873,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                   allSourcesRecords={allSourcesRecords}
                   marketWatch={marketWatch}
                   onOpenFile={handleOpenFileFromChat}
+                  getRecentWritePaths={getRecentWritePaths}
                   files={workspaceFiles}
                   filesLoading={filesLoading}
                   filesError={filesError}
@@ -1931,6 +1933,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       allSourcesRecords={allSourcesRecords}
                       marketWatch={marketWatch}
                       onOpenFile={handleOpenFileFromChat}
+                      getRecentWritePaths={getRecentWritePaths}
                       files={workspaceFiles}
                       filesLoading={filesLoading}
                       filesError={filesError}

@@ -1736,6 +1736,11 @@
     "cancelEditing": "Cancel editing",
     "close": "Close",
     "sortFiles": "Sort files",
+    "searchFiles": "Search files",
+    "clearSearch": "Clear search",
+    "noSearchMatches": "No files match",
+    "refNotFound": "Couldn't find {{path}} in this workspace.",
+    "refAmbiguous": "More than one file matches {{path}}. Pick one below.",
     "memoBanner": {
       "fresh": "In memo — up to date.",
       "stale": "In memo — workspace version differs from the saved memo.",

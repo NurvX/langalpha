@@ -51,6 +51,25 @@ const ABS_SANDBOX_RE = /(!?\[[^\]]*\]\()\/home\/(?:workspace|daytona)\//g;
 const WSREF_INNER_RE = /(__wsref__\/[0-9a-f-]+\/)(?:file:\/\/)?\/home\/(?:workspace|daytona)\//g;
 
 /**
+ * Step 5: Wrap link destinations that contain spaces in angle brackets.
+ *
+ * CommonMark ends a bare destination at the first space, so
+ * `[deck](results/Q3 deck.pptx)` renders as plain text with nothing to click.
+ * `<...>` is the destination form that allows spaces. Only file-like
+ * destinations (ending in an extension, no scheme, no title) are rewritten.
+ *   [deck](results/Q3 deck.pptx) → [deck](<results/Q3 deck.pptx>)
+ */
+const LINK_DEST_RE = /(!?\[[^\]\n]*\]\()((?:[^()<>"'\n]|\([^()\n]*\))+)\)/g;
+
+function wrapSpacedDestination(match: string, open: string, dest: string): string {
+  const trimmed = dest.trim();
+  if (!/\s/.test(trimmed)) return match;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return match;
+  if (!/\.[A-Za-z0-9]{1,8}$/.test(trimmed)) return match;
+  return `${open}<${trimmed}>)`;
+}
+
+/**
  * Normalize all file references in a markdown string.
  *
  * Run this ONCE before markdown parsing. After normalization, all file hrefs
@@ -63,6 +82,7 @@ export function normalizeFileRefs(content: string): string {
   content = content.replace(FILE_PROTO_RE, '$1');         // step 2
   content = content.replace(ABS_SANDBOX_RE, '$1');        // step 3
   content = content.replace(WSREF_INNER_RE, '$1');        // step 4
+  content = content.replace(LINK_DEST_RE, wrapSpacedDestination); // step 5
 
   return content;
 }
