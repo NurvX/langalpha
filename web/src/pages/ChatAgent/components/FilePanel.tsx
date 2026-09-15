@@ -474,7 +474,7 @@ function FilePanel({
       }
     };
 
-    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) {
+    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp'].includes(ext)) {
       if (fileMime === 'image' && fileContent) {
         URL.revokeObjectURL(fileContent);
       }

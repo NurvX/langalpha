@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isFilePath, normalizeFilePath, parseWsPath } from '../FileCard';
+import { isFilePath, normalizeFilePath, parseWsPath } from '../filePaths';
 
 describe('normalizeFilePath', () => {
   it('returns ASCII paths unchanged', () => {

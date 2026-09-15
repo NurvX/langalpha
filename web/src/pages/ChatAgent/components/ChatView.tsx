@@ -831,7 +831,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     handleOpenFileFromChat,
     handleOpenSourcesFromChat,
     handleOpenStatusFromChat,
-    handleOpenDirFromChat,
     handleToolCallDetailClick,
     handlePlanDetailClick,
     handleCloseDetailPanel,
@@ -866,7 +865,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // math must read the current messages array, never a memoized snapshot.
   const stableOpenFile = useStableHandler(handleOpenFileFromChat);
   const stableOpenSources = useStableHandler(handleOpenSourcesFromChat);
-  const stableOpenDir = useStableHandler(handleOpenDirFromChat);
   const stableToolCallDetail = useStableHandler(handleToolCallDetailClick);
   const stableOpenSubagentTask = useStableHandler(handleOpenSubagentTask);
   const stableApprovePlan = useStableHandler(handleApproveInterrupt);
@@ -904,7 +902,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const messageActions = useMemo<MessageActions>(() => ({
     onOpenFile: stableOpenFile,
     onOpenSources: stableOpenSources,
-    onOpenDir: stableOpenDir,
     onToolCallDetailClick: stableToolCallDetail,
     onOpenSubagentTask: stableOpenSubagentTask,
     onApprovePlan: stableApprovePlan,
@@ -931,7 +928,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     onReportWithAgent: stableReportWithAgent,
     onWidgetSendPrompt: stableSendMessage,
   }), [
-    stableOpenFile, stableOpenSources, stableOpenDir, stableToolCallDetail,
+    stableOpenFile, stableOpenSources, stableToolCallDetail,
     stableOpenSubagentTask, stableApprovePlan, stableRejectPlan, stablePlanDetail,
     stableAnswerQuestion, stableSkipQuestion, stableApproveCreateWorkspace,
     stableRejectCreateWorkspace, stableApproveStartQuestion, stableRejectStartQuestion,

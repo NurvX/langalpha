@@ -14,7 +14,7 @@ import { SYSTEM_DIR_PREFIXES } from '../components/filePanel/fileMeta';
 const SANDBOX_ROOT_RE = /^(?:file:\/\/)?\/home\/(?:workspace|daytona)\//;
 
 /** The tools whose path argument names a file the agent created or changed. */
-const WRITE_TOOLS = new Set(['Write', 'Edit']);
+export const WRITE_TOOLS = new Set(['Write', 'Edit']);
 
 export function basename(path: string): string {
   const trimmed = path.replace(/\/+$/, '');
@@ -69,7 +69,7 @@ export function resolveExact(
   return candidates.find((c) => known.has(c)) ?? null;
 }
 
-interface ToolCallLike {
+export interface ToolCallLike {
   toolName?: string;
   toolCall?: { args?: Record<string, unknown> } | null;
   isFailed?: boolean;

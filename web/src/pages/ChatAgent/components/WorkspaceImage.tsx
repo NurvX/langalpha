@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useWorkspaceId, useWorkspaceDownloadFile } from '../contexts/WorkspaceContext';
 import { downloadWorkspaceFile } from '../utils/api';
-import { parseWsPath } from './FileCard';
+import { parseWsPath } from '../utils/filePaths';
 import ImageLightbox from './ImageLightbox';
 
 // Module-level cache: key:path → blobUrl

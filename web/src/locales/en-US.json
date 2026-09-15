@@ -1354,6 +1354,14 @@
       "regenerate": "Regenerate response",
       "retry": "Retry"
     },
+    "turnFiles": {
+      "open": "Open",
+      "openTitle": "Open {{path}}",
+      "rootDir": "Workspace root",
+      "more_one": "{{count}} more file",
+      "more_other": "{{count}} more files",
+      "less": "Show less"
+    },
     "modelTroubleSuggestion": "{{from}} is having trouble — this answer came from {{to}}",
     "switchToModel": "Switch to {{model}}",
     "modelSwitched": "Default model set to {{model}}",

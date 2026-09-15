@@ -21,6 +21,8 @@ import { useMessageActions } from './MessageActionsContext';
 import { useArrivalQuiet, useLiveToolRunning } from './useArrivalQuiet';
 import { isSteeringUserMessage } from './messagePredicates';
 import { assistantText } from './messageText';
+import { TurnFileCards } from './TurnFileCards';
+import type { TurnFile } from '../../utils/turnFiles';
 import { EMPTY_OBJ } from './types';
 import type { ContentSegmentRecord, FeedbackResult, MessageRecord, ToolCallProcessRecord } from './types';
 
@@ -43,6 +45,8 @@ interface MessageBubbleProps {
    *  turn (steering splits one turn across several bubbles). Regenerate renders
    *  only on the tail. Computed positionally in MessageList. */
   isTurnTail: boolean;
+  /** Files this whole turn wrote or pointed at, rendered as cards on the tail. */
+  turnFiles?: TurnFile[];
   /** This turn's stored rating, or null. */
   feedback?: FeedbackResult | null;
   isLoading?: boolean;
@@ -61,7 +65,7 @@ interface MessageBubbleProps {
  * MessageActionsContext (one identity-stable object per host), so a streamed
  * chunk never re-renders settled bubbles through a handler identity.
  */
-export const MessageBubble = memo(function MessageBubble({ message, turnIndex, isTurnTail, feedback, isLoading, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, isMobile, flashContext }: MessageBubbleProps): React.ReactElement {
+export const MessageBubble = memo(function MessageBubble({ message, turnIndex, isTurnTail, turnFiles, feedback, isLoading, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, isMobile, flashContext }: MessageBubbleProps): React.ReactElement {
   const { onOpenFile, onOpenSources, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, onReportWithAgent } = useMessageActions();
   const { t } = useTranslation();
   const { user } = useUser();
@@ -326,7 +330,6 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
               isStreaming={message.isStreaming as boolean}
               hasError={message.error as boolean}
               structuredError={message.structuredError as import('@/utils/rateLimitError').StructuredError | undefined}
-              isAssistant={isAssistant}
               compactToolCalls={compactToolCalls}
               isSubagentView={isSubagentView}
               ptcAgentProposals={(message.ptcAgentProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
@@ -335,7 +338,6 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
               toolApprovals={(message.toolApprovals as Record<string, ToolApprovalState>) || EMPTY_OBJ}
               htmlWidgetProcesses={(message.htmlWidgetProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
               readOnly={readOnly}
-              allowFiles={allowFiles}
               flashContext={flashContext}
             />
             </CreditPausePendingProvider>
@@ -409,6 +411,13 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
               {t('chat.sources.pill', { count: sourceCount })}
             </button>
           </div>
+        )}
+
+        {/* The turn's deliverables, on its last bubble. A long turn names its
+            files somewhere in the prose or only inside a tool call, so the
+            strip gathers them where the reader finishes reading. */}
+        {isAssistant && isTurnTail && !isStreaming && onOpenFile && (!readOnly || allowFiles) && turnFiles && turnFiles.length > 0 && (
+          <TurnFileCards files={turnFiles} onOpenFile={onOpenFile} />
         )}
 
         {/* Per-message "⏹ Stopped" marker — the turn was hard-stopped by the

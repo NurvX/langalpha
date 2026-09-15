@@ -101,7 +101,6 @@ const baseProps = {
   todoListProcesses: {},
   subagentTasks: {},
   hasError: false,
-  isAssistant: true,
 } satisfies Partial<SegmentsProps>;
 
 function fallbackSeg(order: number, toModel: string, over: Record<string, unknown> = {}) {

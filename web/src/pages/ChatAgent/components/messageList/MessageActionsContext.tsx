@@ -22,7 +22,6 @@ export interface MessageActions {
   onOpenSubagentTask?: (info: SubagentInfo) => void;
   onOpenFile?: OpenFileHandler;
   onOpenSources?: (messageId: string) => void;
-  onOpenDir?: (dirPath: string) => void;
   onToolCallDetailClick?: (proc: ToolCallProcessRecord) => void;
   onApprovePlan?: () => void;
   onRejectPlan?: () => void;

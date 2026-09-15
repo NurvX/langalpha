@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, memo } from 'react';
 import ActivityBlock from '../ActivityBlock';
 import { INLINE_ARTIFACT_MAP } from '../charts/InlineArtifactCards';
-import { extractFilePaths, FileMentionCards } from '../FileCard';
-import { normalizeFileRefs } from '../../utils/normalizeFileRefs';
 import type { OpenFileHandler } from '../../utils/fileLocation';
 import ReasoningMessageContent from '../ReasoningMessageContent';
 import PlanApprovalCard from '../PlanApprovalCard';
@@ -63,11 +61,9 @@ interface MessageContentSegmentsProps {
   /** Classified error data from the backend, used by TextMessageContent so
    *  inline error cards can render hints without re-parsing the raw text. */
   structuredError?: import('@/utils/rateLimitError').StructuredError;
-  isAssistant?: boolean;
   compactToolCalls?: boolean;
   isSubagentView?: boolean;
   readOnly?: boolean;
-  allowFiles?: boolean;
   ptcAgentProposals?: Record<string, Record<string, unknown>>;
   secretaryActionProposals?: Record<string, Record<string, unknown>>;
   creditPauses?: Record<string, CreditPauseState>;
@@ -122,9 +118,9 @@ function TextBlock({ block, isFirst, isStreaming, hasError, structuredError, isS
   return isReplyStart && textContent ? <div data-reply-start="">{el}</div> : el;
 }
 
-export const MessageContentSegments = memo(function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesses, todoListProcesses: _todoListProcesses, subagentTasks, planApprovals = EMPTY_OBJ, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, hasError, structuredError, isAssistant = false, compactToolCalls = false, isSubagentView = false, readOnly = false, allowFiles = false, ptcAgentProposals = EMPTY_OBJ, secretaryActionProposals = EMPTY_OBJ, creditPauses = EMPTY_OBJ, toolApprovals = EMPTY_OBJ, htmlWidgetProcesses = EMPTY_OBJ, flashContext }: MessageContentSegmentsProps): React.ReactElement {
+export const MessageContentSegments = memo(function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesses, todoListProcesses: _todoListProcesses, subagentTasks, planApprovals = EMPTY_OBJ, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, hasError, structuredError, compactToolCalls = false, isSubagentView = false, readOnly = false, ptcAgentProposals = EMPTY_OBJ, secretaryActionProposals = EMPTY_OBJ, creditPauses = EMPTY_OBJ, toolApprovals = EMPTY_OBJ, htmlWidgetProcesses = EMPTY_OBJ, flashContext }: MessageContentSegmentsProps): React.ReactElement {
   const {
-    onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick,
+    onOpenSubagentTask, onOpenFile, onToolCallDetailClick,
     onApprovePlan, onRejectPlan, onPlanDetailClick,
     onAnswerQuestion, onSkipQuestion,
     onApproveCreateWorkspace, onRejectCreateWorkspace,
@@ -201,10 +197,6 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
       }
     }
   }
-
-  const detectedFiles = isAssistant && !isStreaming
-    ? extractFilePaths(normalizeFileRefs(renderBlocks.filter(b => b.type === 'text').map(b => (b as TextRenderBlock).segment.content || '').join('\n')))
-    : [];
 
   return (
     <div className="space-y-1">
@@ -474,9 +466,6 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
           onToolCallClick={onToolCallDetailClick as any} // TODO: type properly
           onOpenFile={onOpenFile}
         />
-      )}
-      {detectedFiles.length > 0 && (!readOnly || allowFiles) && (
-        <FileMentionCards filePaths={detectedFiles} onOpenFile={((readOnly && !allowFiles) ? undefined : onOpenFile)!} onOpenDir={(readOnly && !allowFiles) ? undefined : onOpenDir} />
       )}
       {/* At the foot of the message, not beside the card that stopped. The
           agent's closing prose was written before the gate fired and still

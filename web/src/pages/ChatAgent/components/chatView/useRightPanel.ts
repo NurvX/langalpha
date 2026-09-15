@@ -362,16 +362,6 @@ export function useRightPanel({
     );
   }, [isActive, workspaceId, location.search, location.pathname, location.state, navigate, handleOpenFileFromChat]);
 
-  // Open file panel filtered to a specific directory. The single 'file' target
-  // (with `dir`) replaces any pending memory/memo/status pre-select, so nothing
-  // can snap-back hijack the dir click.
-  const handleOpenDirFromChat = useCallback((dirPath: string) => {
-    setRightPanelWidth(clampPanelWidth(850));
-    setRightPanelType('file');
-    setPanelTarget({ kind: 'file', dir: dirPath });
-    pushPanelHistory();
-  }, [clampPanelWidth, pushPanelHistory]);
-
   // Determine detail panel width based on content type
   const getDetailPanelWidth = useCallback((toolCallProcess: ToolCallProcessRecord | null) => {
     let desired = 650;
@@ -557,7 +547,6 @@ export function useRightPanel({
     handleOpenFileFromChat,
     handleOpenSourcesFromChat,
     handleOpenStatusFromChat,
-    handleOpenDirFromChat,
     handleToolCallDetailClick,
     handlePlanDetailClick,
     handleCloseDetailPanel,

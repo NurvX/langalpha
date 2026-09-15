@@ -1353,6 +1353,13 @@
       "regenerate": "重新生成回复",
       "retry": "重试"
     },
+    "turnFiles": {
+      "open": "打开",
+      "openTitle": "打开 {{path}}",
+      "rootDir": "工作区根目录",
+      "more_other": "还有 {{count}} 个文件",
+      "less": "收起"
+    },
     "modelTroubleSuggestion": "{{from}} 出现问题 — 本次回答由 {{to}} 完成",
     "switchToModel": "切换到 {{model}}",
     "modelSwitched": "默认模型已设为 {{model}}",
