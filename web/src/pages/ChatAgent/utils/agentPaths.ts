@@ -292,6 +292,8 @@ export interface AgentArtifactRouting {
   clearWorkspaceId: boolean;
   /** Workspace id to set on filePanelWorkspaceId (only for cross-workspace file links). */
   setWorkspaceId: string | null;
+  /** A folder to open the Files tab on, for a link ending in `/`; `''` is the workspace root. */
+  targetDirectory: string | null;
 }
 
 /**
@@ -329,6 +331,7 @@ export function computeAgentArtifactRouting(
     targetUserProfile: null,
     clearWorkspaceId: false,
     setWorkspaceId: null,
+    targetDirectory: null,
   };
   if (info.kind === 'memory') {
     if (info.tier === 'user') {
@@ -382,6 +385,14 @@ export function computeAgentArtifactRouting(
     };
   }
   // skill / file → Files tab; pass-through workspace id for cross-workspace links.
+  const inner = rawPath.replace(/^\/*__wsref__\/[^/]+\//, '').split(/[?#]/)[0];
+  if (inner.endsWith('/')) {
+    return {
+      ...base,
+      targetDirectory: workspaceRelativePath(inner).replace(/\/+$/, ''),
+      setWorkspaceId: resolvedWsid,
+    };
+  }
   return {
     ...base,
     targetFile: rawPath,

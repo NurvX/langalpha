@@ -4,6 +4,7 @@
  */
 
 import { buildSharedServeUrl } from '../ChatAgent/components/viewers/html/wsfilesUrl';
+import type { FileRefResolution } from '../ChatAgent/components/filePanel/types';
 
 const baseURL: string = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -124,6 +125,26 @@ export async function getSharedFiles(
     throw new Error(`Failed to list shared files (${res.status})`);
   }
   return res.json() as Promise<SharedFileListResponse>;
+}
+
+/**
+ * Resolve a file reference against the shared thread's file listing.
+ */
+export async function resolveSharedFile(
+  shareToken: string,
+  candidates: string[],
+  recentWrites: string[] = [],
+): Promise<FileRefResolution> {
+  const res = await fetch(`${baseURL}/api/v1/public/shared/${shareToken}/files/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ candidates, recent_writes: recentWrites }),
+  });
+  if (!res.ok) {
+    if (res.status === 403) throw new Error('File access not permitted');
+    throw new Error(`Failed to resolve shared file (${res.status})`);
+  }
+  return res.json() as Promise<FileRefResolution>;
 }
 
 /**

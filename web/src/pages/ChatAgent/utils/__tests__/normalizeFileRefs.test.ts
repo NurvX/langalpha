@@ -57,6 +57,11 @@ describe('normalizeFileRefs', () => {
     expect(normalizeFileRefs(input)).toBe(input);
   });
 
+  it('strips the sandbox prefix inside an angle-bracketed destination', () => {
+    expect(normalizeFileRefs('[d](<file:///home/workspace/results/Q3 deck.pptx>)')).toBe('[d](<results/Q3 deck.pptx>)');
+    expect(normalizeFileRefs('[d](</home/daytona/results/Q3 deck.pptx>)')).toBe('[d](<results/Q3 deck.pptx>)');
+  });
+
   // ── Step 3: /home/(workspace|daytona)/ absolute path stripping
 
   it('strips /home/workspace/ from link href', () => {
@@ -186,6 +191,12 @@ describe('normalizeFileRefs', () => {
     expect(normalizeFileRefs('[m](work/model.py:42)')).toBe('[m](work/model.py:42)');
     expect(normalizeFileRefs('[s](localhost:8000)')).toBe('[s](localhost:8000)');
     expect(normalizeFileRefs('[s](127.0.0.1:8000)')).toBe('[s](127.0.0.1:8000)');
+  });
+
+  it('anchors a bracketed bare name with a line suffix and leaves bracketed URLs alone', () => {
+    expect(normalizeFileRefs('[m](<my model.py:42>)')).toBe('[m](<./my model.py:42>)');
+    expect(normalizeFileRefs('[m](<work/my model.py:42>)')).toBe('[m](<work/my model.py:42>)');
+    expect(normalizeFileRefs('[s](<localhost:8000>)')).toBe('[s](<localhost:8000>)');
   });
 
   it('leaves URLs, titles and non-file destinations alone', () => {

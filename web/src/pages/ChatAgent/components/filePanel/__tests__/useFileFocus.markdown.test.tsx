@@ -22,6 +22,8 @@ const HTML = `<h1>FY2024</h1><p id="a">Revenue grew 12% year over year.</p>
 <h1>FY2025</h1><p id="b">Margins held.</p><p id="c">Revenue grew 12% year over year.</p><p id="d"><img alt=""></p>`;
 // One object per markup for every render: a fresh one makes React rewrite the markup and drop the highlight.
 const MARKUP = { __html: HTML };
+// Headings that do not line up with the source leave no section to fall back on.
+const UNALIGNED = { __html: '<p>Margins held.</p><p><img alt=""></p>' };
 const WITH_FOOTNOTES = {
   __html: `${HTML}<section data-footnotes class="footnotes"><h2 class="sr-only">Footnotes</h2><ol><li>Source.</li></ol></section>`,
 };
@@ -71,6 +73,12 @@ describe('useFileFocus on a markdown file', () => {
     let chip: unknown = null;
     render(<Viewer location={{ line: 25000 }} truncated onChip={(c) => { chip = c; }} />);
     expect(chip).toMatchObject({ kind: 'line', missing: true, beyond: true });
+  });
+
+  it('says a line it could not match stays unplaced instead of claiming a landing', async () => {
+    let chip: unknown = null;
+    render(<Viewer location={{ line: 6 }} markup={UNALIGNED} onChip={(c) => { chip = c; }} />);
+    await waitFor(() => expect(chip).toMatchObject({ kind: 'line', line: 6, missing: true, unplaced: true }), { timeout: 3000 });
   });
 
   it('marks the landing as near when only the section could be found', async () => {

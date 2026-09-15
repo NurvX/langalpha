@@ -7,6 +7,7 @@ import type { FocusChipState } from './useFileFocus';
 function chipLabel(state: FocusChipState, t: TFunction): string {
   if (state.kind === 'line') {
     if (state.beyond) return t('filePanel.focusLineBeyond', { line: state.line });
+    if (state.unplaced) return t('filePanel.focusLineUnplaced', { line: state.line });
     if (state.missing) return t('filePanel.focusLineMissing', { line: state.line });
     if (state.near) return t('filePanel.focusLineNear', { line: state.line });
     return state.lineEnd

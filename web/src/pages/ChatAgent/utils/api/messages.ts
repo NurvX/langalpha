@@ -558,12 +558,12 @@ export async function cancelSubagentTask(
 export async function listWorkspaceFiles(
   workspaceId: string,
   dirPath: string = 'results',
-  { autoStart = false, includeSystem = false, pattern }: { autoStart?: boolean; includeSystem?: boolean; pattern?: string } = {}
+  { autoStart = false, includeSystem = false }: { autoStart?: boolean; includeSystem?: boolean } = {}
 ) {
   const { data } = await api.get(`/api/v1/workspaces/${workspaceId}/files`, {
-    params: { path: dirPath, include_system: includeSystem, auto_start: autoStart, wait_for_sandbox: autoStart, ...(pattern ? { pattern } : {}) },
+    params: { path: dirPath, include_system: includeSystem, auto_start: autoStart, wait_for_sandbox: autoStart },
   });
-  return data; // { workspace_id, path, files: [...], sandbox_ready, source }
+  return data; // { workspace_id, path, files: [...] }
 }
 
 /**

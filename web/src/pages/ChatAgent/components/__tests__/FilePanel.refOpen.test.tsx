@@ -15,7 +15,7 @@ vi.mock('@/pages/ChatAgent/utils/api', async (importOriginal) => {
     downloadWorkspaceFile: vi.fn(),
     downloadWorkspaceFileAsArrayBuffer: vi.fn(),
     triggerFileDownload: vi.fn(),
-    listWorkspaceFiles: vi.fn(),
+    resolveWorkspaceFile: vi.fn(),
   };
 });
 vi.mock('@/hooks/useWorkspace', () => ({ useWorkspace: () => ({ data: { status: wsStatus.value, name: 'ws' } }) }));
@@ -36,6 +36,8 @@ vi.mock('@/pages/ChatAgent/components/viewers/CodeEditor', () => ({
 
 import * as api from '@/pages/ChatAgent/utils/api';
 import FilePanel from '@/pages/ChatAgent/components/FilePanel';
+
+const resolveMock = () => api.resolveWorkspaceFile as ReturnType<typeof vi.fn>;
 
 const CONTENT: Record<string, string> = {
   'notes.md': '# Notes\n\nMy private notes body.',
@@ -72,18 +74,43 @@ describe('FilePanel reference opens', () => {
     expect(screen.queryByTitle('Save (Cmd+S)')).toBeNull();
   });
 
-  it('searches for a known path that is no longer there', async () => {
-    (api.listWorkspaceFiles as ReturnType<typeof vi.fn>).mockResolvedValue({ files: ['results/report2.md'], sandbox_ready: true });
+  it('asks the server for a known path that is no longer there', async () => {
+    resolveMock().mockResolvedValue({ status: 'resolved', path: 'results/report2.md', matches: ['results/report2.md'] });
     renderWithProviders(
       <FilePanel workspaceId="ws" onClose={() => {}} files={[]} getRecentWritePaths={() => ['report2.md']} targetFile="report2.md" />,
     );
     await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('ws', 'results/report2.md'));
+    expect(api.resolveWorkspaceFile).toHaveBeenCalledWith('ws', ['report2.md'], ['report2.md']);
   });
 
-  it('searches when a stopped workspace reports the path as not backed up', async () => {
+  it('asks the server when a stopped workspace reports the path as not backed up', async () => {
     wsStatus.value = 'stopped';
-    (api.listWorkspaceFiles as ReturnType<typeof vi.fn>).mockResolvedValue({ files: ['results/tools/x.py'], source: 'database', sandbox_ready: false });
+    resolveMock().mockResolvedValue({ status: 'resolved', path: 'results/tools/x.py', matches: ['results/tools/x.py'] });
     renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={[]} targetFile="tools/x.py" />);
     await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('ws', 'results/tools/x.py'));
+  });
+
+  it('asks the server for a download-only reference the listing still remembers', async () => {
+    // A .docx opens with no read at all, so a listing hit is not evidence the
+    // path is live: the card would offer to save a name nothing occupies.
+    resolveMock().mockResolvedValue({ status: 'resolved', path: 'results/deck.docx', matches: ['results/deck.docx'] });
+    renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={['deck.docx']} targetFile="deck.docx" />,
+    );
+    await waitFor(() => expect(api.resolveWorkspaceFile).toHaveBeenCalledWith('ws', ['deck.docx'], []));
+    expect(api.readWorkspaceFile).not.toHaveBeenCalled();
+  });
+
+  it('lands on the matches when the server cannot pick one', async () => {
+    resolveMock().mockResolvedValue({ status: 'ambiguous', matches: ['a/model.py', 'b/model.py'] });
+    renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={['a/model.py', 'b/model.py']} targetFile="model.py" />);
+    await screen.findByText(/More than one file matches model\.py/);
+    expect(api.readWorkspaceFile).not.toHaveBeenCalled();
+  });
+
+  it('reads the path as written when the server cannot look yet', async () => {
+    resolveMock().mockResolvedValue({ status: 'unavailable', reason: 'sandbox_starting', matches: [] });
+    renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={[]} targetFile="results/new.csv" />);
+    await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('ws', 'results/new.csv'));
   });
 });

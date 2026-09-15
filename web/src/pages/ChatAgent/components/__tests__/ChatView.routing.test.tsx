@@ -20,6 +20,7 @@ describe('computeAgentArtifactRouting — per-kind routing', () => {
       targetUserProfile: null,
       clearWorkspaceId: true,
       setWorkspaceId: null,
+      targetDirectory: null,
     });
   });
 
@@ -45,6 +46,7 @@ describe('computeAgentArtifactRouting — per-kind routing', () => {
       targetUserProfile: null,
       clearWorkspaceId: true,
       setWorkspaceId: null,
+      targetDirectory: null,
     });
   });
 
@@ -132,6 +134,14 @@ describe('computeAgentArtifactRouting — per-kind routing', () => {
     const b = computeAgentArtifactRouting('home/workspace/.agents/user/memory/foo.md');
     expect(a.targetMemoryKey).toBe('foo.md');
     expect(b.targetMemoryKey).toBe('foo.md');
+  });
+
+  it('routes a folder link → Files tab on that folder instead of a file lookup', () => {
+    expect(computeAgentArtifactRouting('results/q3/')).toMatchObject({ targetFile: null, targetDirectory: 'results/q3' });
+    expect(computeAgentArtifactRouting('/home/workspace/results/')).toMatchObject({ targetFile: null, targetDirectory: 'results' });
+    expect(computeAgentArtifactRouting('/home/workspace/')).toMatchObject({ targetFile: null, targetDirectory: '' });
+    const ws = '20cc68e8-d057-41f4-9bb1-57aa8d310704';
+    expect(computeAgentArtifactRouting(`__wsref__/${ws}/work/`, ws)).toMatchObject({ targetDirectory: 'work', setWorkspaceId: ws });
   });
 
   it('falls back to file routing for unknown agent paths', () => {

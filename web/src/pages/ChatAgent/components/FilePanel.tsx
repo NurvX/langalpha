@@ -14,8 +14,8 @@ import { SandboxSettingsContent } from './SandboxSettingsPanel';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import SyntaxHighlighter, { oneDark, oneLight } from './SyntaxHighlighter';
 import { useTranslation } from 'react-i18next';
-import { readWorkspaceFile, readWorkspaceFileFull, writeWorkspaceFile, downloadWorkspaceFile, downloadWorkspaceFileAsArrayBuffer, triggerFileDownload, listWorkspaceFiles } from '../utils/api';
-import { basename, isSystemPath, linkCandidates, nameGlob, normalizeRefPath, pickUnambiguous, rankNameMatches, resolveByName, resolveBySuffix, resolveExact } from '../utils/fileRefResolver';
+import { readWorkspaceFile, readWorkspaceFileFull, writeWorkspaceFile, downloadWorkspaceFile, downloadWorkspaceFileAsArrayBuffer, triggerFileDownload, resolveWorkspaceFile } from '../utils/api';
+import { basename, isSystemPath, linkCandidates, normalizeRefPath, resolveExact } from '../utils/fileRefResolver';
 import { classifyAgentPath } from '../utils/agentPaths';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { parseFragment, type FileLocation, type OpenFileHandler } from '../utils/fileLocation';
@@ -33,7 +33,7 @@ const HtmlViewer = React.lazy(() => import('./viewers/HtmlViewer'));
 const CodeEditor = React.lazy(() => import('./viewers/CodeEditor'));
 const ExportPreviewModal = React.lazy(() => import('./ExportPreviewModal'));
 
-import type { ApiAdapter, ContextPayload } from './filePanel/types';
+import type { ApiAdapter, ContextPayload, FileRefResolution } from './filePanel/types';
 import type { FileError } from './filePanel/fileErrors';
 import { categorizeFileError, FileErrorDisplay } from './filePanel/fileErrors';
 import { DOWNLOAD_ONLY_EXTENSIONS, EDITABLE_EXTENSIONS, EXT_TO_LANG, getAvailableTypes, getFileExtension, getFileType, SORT_OPTIONS, sortFiles } from './filePanel/fileMeta';
@@ -131,11 +131,10 @@ function FilePanel({
   const readFileFullFn = apiAdapter?.readFileFull
     ? (_: string, path: string) => apiAdapter.readFileFull!(path)
     : readWorkspaceFileFull;
-  // Name search runs against the live workspace; an adapter-backed panel (a
-  // shared view) has no listing endpoint and resolves from `files` alone.
-  const searchFilesFn = apiAdapter
-    ? null
-    : (pattern: string) => listWorkspaceFiles(workspaceId, '.', { includeSystem: true, pattern });
+  // The server settles a reference against the real workspace (or a share's listing).
+  const resolveFileFn = apiAdapter
+    ? apiAdapter.resolveFile ?? null
+    : (candidates: string[], recentWrites: string[]) => resolveWorkspaceFile(workspaceId, candidates, recentWrites);
 
   // Workspace settings inline view
   const [showSettings, setShowSettings] = useState(false);
@@ -537,8 +536,8 @@ function FilePanel({
 
   /**
    * Open a file reference that may not name a real path. Certain matches
-   * open at once; otherwise a name search over the workspace decides between
-   * opening the one hit and landing on the tree filtered to the name.
+   * open at once; otherwise the server's lookup decides between opening the
+   * file it names and landing on the tree filtered to the name.
    */
   const openFileRef = async (
     rawRef: string,
@@ -558,31 +557,26 @@ function FilePanel({
     // Resolves true once the path opened (or failed for a reason a search cannot fix).
     // A stopped workspace reports a missing path as not backed up.
     const landed = async (path: string) => {
+      // A download-only file opens with no read, so opening one proves nothing
+      // about the path: a moved .docx would sit behind a download card built on
+      // a name the listing still remembers. Only the lookup settles it.
+      if (resolveFileFn && DOWNLOAD_ONLY_EXTENSIONS.has(getFileExtension(path))) return false;
       tried.add(path);
       const category = (await openAt(path))?.category;
       return category !== 'not_found' && category !== 'not_backed_up';
     };
     const writes = getRecentWritePaths?.() ?? [];
 
-    // A known path can still be stale (the agent moved it), so a miss falls through to the search.
+    // A known path can still be stale (the agent moved it), so a miss falls through to the lookup.
     const exact = resolveExact(candidates, files, writes);
     if (exact && await landed(exact)) return;
     // Absolute and system paths are not in the default listing, and the agent
-    // names them exactly (tool rows, skill files), so read them first.
+    // names them exactly (tool rows, skill files), so read them first. A
+    // system-looking path can still be a folder inside the work tree.
     const direct = candidates.find((c) => c.startsWith('/') || isSystemPath(c));
-    if (direct) {
-      // A system-looking path can still be a folder inside the work tree.
-      if (!tried.has(direct) && await landed(direct)) return;
-    } else if (!primary.includes('/')) {
-      // A bare name that exactly one of this thread's writes carries is the cheap, likely case.
-      const written = writes.filter((p) => basename(p) === primary);
-      if (written.length === 1 && !tried.has(written[0]) && await landed(written[0])) return;
-    }
-    // Without a live search, guessing from the listing beats a certain miss.
-    const guess = () => resolveBySuffix(candidates, files, writes) ?? resolveByName(primary, files, writes) ?? primary;
-    if (!searchFilesFn) {
-      const fallback = guess();
-      if (!tried.has(fallback)) void openAt(fallback);
+    if (direct && !tried.has(direct) && await landed(direct)) return;
+    if (!resolveFileFn) {
+      if (!tried.has(primary)) void openAt(primary);
       return;
     }
 
@@ -593,27 +587,20 @@ function FilePanel({
     setFileMime(null);
     setFileError(null);
     setFileLoading(true);
-    let hits: string[] | null = null;
+    let result: FileRefResolution | null = null;
     try {
-      const data = await searchFilesFn(nameGlob(primary));
-      // Only a live sandbox or the backup answers for the whole workspace; a
-      // sandbox still warming up returns an empty list that proves nothing.
-      if (data?.sandbox_ready || data?.source === 'database') hits = data.files ?? [];
+      result = await resolveFileFn(candidates, writes);
     } catch (err) {
-      console.error('[FilePanel] File name search failed:', err);
+      console.error('[FilePanel] File reference lookup failed:', err);
     }
     if (seq !== openSeqRef.current) return;
 
-    // A path names its folder, so a same-named file elsewhere is not a guess worth opening;
-    // reading the path itself shows the sandbox error with a retry.
-    if (!hits) return void openAt(primary.includes('/') ? resolveBySuffix(candidates, files, writes) ?? primary : guess());
-    const exactHit = candidates.find((c) => hits!.includes(c));
-    if (exactHit) return void openAt(exactHit);
-    const ranked = rankNameMatches(candidates, hits);
-    const pick = pickUnambiguous(candidates, ranked);
-    if (pick) return void openAt(pick);
+    // With no answer (sandbox starting, request failed), reading the path as
+    // written shows why, with a retry.
+    if (!result || result.status === 'unavailable') return void openAt(primary);
+    if (result.status === 'resolved' && result.path) return void openAt(result.path);
     // Name the reference as written; the joined reading is only our guess.
-    landOnSearch(candidates[candidates.length - 1], ranked);
+    landOnSearch(candidates[candidates.length - 1], result.matches);
   };
 
   // Links inside a viewed file resolve against that file's directory first.

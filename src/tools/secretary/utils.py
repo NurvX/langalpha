@@ -33,52 +33,53 @@ _FILE_EXTS = (
 # Uses a path-based encoding instead of ws:// protocol to survive HTML sanitizers.
 _WSREF_PREFIX = "__wsref__"
 
-# Matches markdown links: [text](path) and ![text](path)
-# Captures: group(1)=prefix "![text](" or "[text](", group(2)=path, group(3)=")"
-# Path must be relative (no http/https/mailto/#), contain at least one "/",
-# and end with a known extension, optionally followed by an #anchor or :line.
-_MD_LINK_RE = re.compile(
-    r"(!?\[[^\]]*\]\()"  # prefix: ![...]( or [...](
-    r"((?!https?://|mailto:|#|__wsref__/|[a-zA-Z][a-zA-Z0-9+.-]*:)"  # not URL scheme or already qualified
-    r"(?:/home/(?:workspace|daytona)/)?[a-zA-Z_][^\s)]*/"  # at least one dir segment
-    r"[^\s)]*\.(?:" + _FILE_EXTS + r")"  # filename.ext
-    r"(?:#[^\s)]*|:\d+(?:-\d+|:\d+)?)?)"  # optional #anchor or :line the reference points at
-    r"(\))",  # closing paren
-    re.IGNORECASE,
-)
+# A markdown link or image and its destination, bare or in angle brackets.
+# Bare destinations stop at parens; a title or a URL fails the file test below.
+_MD_LINK_RE = re.compile(r"(!?\[[^\]\n]*\]\()(<[^<>\n]+>|[^()\n]+)(\))")
 
-# Strip file:// protocol from sandbox paths in markdown links before qualification.
-_FILE_PROTO_RE = re.compile(
-    r"(!?\[[^\]]*\]\()"  # prefix: ![...]( or [...](
-    r"file:///home/(?:workspace|daytona)/",  # file:///home/workspace/ or /daytona/
-    re.IGNORECASE,
-)
+# The place inside a file a reference points at: #anchor, :line, :start-end, :line:col.
+_LOCATION_RE = re.compile(r"(#\S*|:\d+(?:-\d+|:\d+)?)$")
+_SANDBOX_ROOT_RE = re.compile(r"^(?:file://)?/home/(?:workspace|daytona)/", re.IGNORECASE)
+_FILE_NAME_RE = re.compile(r"\.(?:" + _FILE_EXTS + r")$", re.IGNORECASE)
 
 
 def _qualify_file_paths(text: str, workspace_id: str) -> str:
-    """Rewrite relative file paths in markdown links to __wsref__/{workspace_id}/path.
+    """Rewrite workspace file links to __wsref__/{workspace_id}/path.
 
     Transforms:
         [report.md](work/t/report.md) → [report.md](__wsref__/{wid}/work/t/report.md)
-        ![chart](work/t/charts/r.png)  → ![chart](__wsref__/{wid}/work/t/charts/r.png)
+        [model](./model.py:42)        → [model](__wsref__/{wid}/model.py:42)
+        [deck](<results/Q3 deck.pptx>) → [deck](<__wsref__/{wid}/results/Q3 deck.pptx>)
 
-    Uses a path-based prefix instead of a protocol (ws://) because HTML sanitizers
-    strip non-standard URL protocols. The __wsref__ prefix looks like a relative path
-    to the sanitizer and passes through untouched.
-
-    Leaves external URLs and already-qualified __wsref__ paths untouched.
+    The relayed text renders in the Flash thread, whose own workspace holds none
+    of these files, so every relative file link has to carry where it lives,
+    bare names included. A path-based prefix survives HTML sanitizers that strip
+    unknown protocols. URLs, in-page anchors, paths outside the workspace and
+    already-qualified links are left as written.
     """
     if not workspace_id or not text:
         return text
 
-    # Normalize file:///home/workspace/... → relative path in markdown links
-    text = _FILE_PROTO_RE.sub(r"\1", text)
-
     def _rewrite(m: re.Match) -> str:
-        prefix, path, suffix = m.group(1), m.group(2), m.group(3)
-        # Strip sandbox absolute prefix if present
-        path = re.sub(r"^/home/(?:workspace|daytona)/", "", path)
-        return f"{prefix}{_WSREF_PREFIX}/{workspace_id}/{path}{suffix}"
+        prefix, dest, suffix = m.group(1), m.group(2), m.group(3)
+        bracketed = dest.startswith("<")
+        path = (dest[1:-1] if bracketed else dest).strip()
+        location = _LOCATION_RE.search(path)
+        tail = location.group(1) if location else ""
+        path = _SANDBOX_ROOT_RE.sub("", path[: len(path) - len(tail)])
+        while path.startswith("./"):
+            path = path[2:]
+        if (
+            not path
+            or path.startswith(("/", "#", f"{_WSREF_PREFIX}/"))
+            or ":" in path
+            or not _FILE_NAME_RE.search(path)
+        ):
+            return m.group(0)
+        qualified = f"{_WSREF_PREFIX}/{workspace_id}/{path}{tail}"
+        if bracketed or any(c.isspace() for c in qualified):
+            qualified = f"<{qualified}>"
+        return f"{prefix}{qualified}{suffix}"
 
     return _MD_LINK_RE.sub(_rewrite, text)
 

@@ -69,70 +69,6 @@ export function resolveExact(
   return candidates.find((c) => known.has(c)) ?? null;
 }
 
-/**
- * A unique known file whose path ends with the reference. Only a guess for
- * when no live search can answer: the listing may predate a file the agent
- * just made at the named path, and this would open an older namesake instead.
- */
-export function resolveBySuffix(
-  candidates: readonly string[],
-  files: readonly string[],
-  recentWrites: readonly string[],
-): string | null {
-  const pool = [...new Set([...recentWrites, ...files])];
-  for (const c of candidates) {
-    if (!c.includes('/') || c.startsWith('/')) continue;
-    const matches = pool.filter((p) => p.endsWith(`/${c}`));
-    if (matches.length === 1) return matches[0];
-    const written = recentWrites.find((p) => matches.includes(p));
-    if (written) return written;
-  }
-  return null;
-}
-
-/**
- * Guess by file name, for use only after the named path has failed to read.
- * The newest write with that name wins (the agent most likely meant the file
- * it just produced); otherwise a name that is unique in the list.
- */
-export function resolveByName(
-  ref: string,
-  files: readonly string[],
-  recentWrites: readonly string[],
-): string | null {
-  const name = basename(ref);
-  if (!name) return null;
-  const written = recentWrites.find((p) => basename(p) === name);
-  if (written) return written;
-  const matches = files.filter((p) => basename(p) === name);
-  return matches.length === 1 ? matches[0] : null;
-}
-
-/**
- * Rank server search hits for a reference: same name required, and a hit
- * whose path ends with a full candidate sorts ahead of a bare namesake.
- * System-directory hits sort last unless the reference itself points there.
- */
-export function rankNameMatches(candidates: readonly string[], paths: readonly string[]): string[] {
-  const name = basename(candidates[0] ?? '');
-  const wantsSystem = candidates.some(isSystemPath);
-  const tail = (p: string) => candidates.some((c) => p === c || p.endsWith(`/${c}`));
-  const score = (p: string) => (tail(p) ? 0 : 2) + (!wantsSystem && isSystemPath(p) ? 1 : 0);
-  return [...new Set(paths)]
-    .filter((p) => basename(p) === name)
-    .sort((a, b) => score(a) - score(b) || a.length - b.length || a.localeCompare(b));
-}
-
-/**
- * The one hit to open without asking, or null when the choice is the user's:
- * a single namesake, or a single hit that carries the full reference.
- */
-export function pickUnambiguous(candidates: readonly string[], ranked: readonly string[]): string | null {
-  if (ranked.length === 1) return ranked[0];
-  const tails = ranked.filter((p) => candidates.some((c) => c.includes('/') && (p === c || p.endsWith(`/${c}`))));
-  return tails.length === 1 ? tails[0] : null;
-}
-
 interface ToolCallLike {
   toolName?: string;
   toolCall?: { args?: Record<string, unknown> } | null;
@@ -162,10 +98,4 @@ export function collectRecentWritePaths(messages: readonly unknown[]): string[] 
     }
   }
   return out;
-}
-
-/** A name is safe to send as a glob only when it holds no glob syntax. */
-export function nameGlob(ref: string): string {
-  const name = basename(ref);
-  return /[*?[\]{}]/.test(name) ? '**/*' : `**/${name}`;
 }

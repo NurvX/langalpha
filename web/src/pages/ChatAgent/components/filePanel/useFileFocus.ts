@@ -32,6 +32,8 @@ export interface FocusChipState {
   near?: boolean;
   /** Past the part of a long file that was loaded, so there is nothing to show. */
   beyond?: boolean;
+  /** In the file, but nothing in the rendered markdown could be matched to it. */
+  unplaced?: boolean;
 }
 
 interface UseFileFocusArgs {
@@ -187,7 +189,8 @@ export function useFileFocus({
     if (loc.line && (viewer === 'code' || viewer === 'markdown')) {
       const beyond = loc.line > lineCount && truncated;
       const missing = loc.line > lineCount;
-      chip = { kind: 'line', line: loc.line, lineEnd: loc.lineEnd, missing, beyond, near: !missing && !!result?.near };
+      const unplaced = !missing && viewer === 'markdown' && !!result && !result.found;
+      chip = { kind: 'line', line: loc.line, lineEnd: loc.lineEnd, missing: missing || unplaced, beyond, unplaced, near: !missing && !!result?.near };
       if (!missing && viewer === 'code') lineRange = [loc.line, Math.min(loc.lineEnd ?? loc.line, lineCount)];
     } else if (loc.page && viewer === 'pdf') {
       chip = { kind: 'page', page: loc.page, missing: pageCount != null && loc.page > pageCount };

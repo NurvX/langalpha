@@ -37,6 +37,14 @@ export interface EditorTextSelectData {
   rect: { left: number; top: number; width: number; height: number } | null;
 }
 
+/** How the server settled a file reference; `matches` are ranked best first. */
+export interface FileRefResolution {
+  status: 'resolved' | 'ambiguous' | 'missing' | 'unavailable';
+  path?: string;
+  matches: string[];
+  reason?: string;
+}
+
 export interface ApiAdapter {
   readFile?: (path: string) => Promise<{ content: string; mime?: string }>;
   readFileFull?: (path: string) => Promise<{ content: string }>;
@@ -44,6 +52,7 @@ export interface ApiAdapter {
   downloadFile?: (path: string) => Promise<string>;
   downloadFileAsArrayBuffer?: (path: string) => Promise<ArrayBuffer>;
   triggerDownload?: (path: string) => Promise<void>;
+  resolveFile?: (candidates: string[], recentWrites: string[]) => Promise<FileRefResolution>;
   /** Override the served URL for HTML preview (e.g. the public share serve URL,
    *  used on /s/:shareToken where the workspace UUID isn't available). */
   buildServedUrl?: (path: string, opts?: { injectTheme?: boolean }) => string;

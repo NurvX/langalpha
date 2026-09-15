@@ -33,15 +33,16 @@ const BACKTICK_LINK_RE = /`(!?\[[^\]]*\]\([^)]+\))`/g;
  * so we normalize to a relative path before parsing.
  *   [report.md](file:///home/workspace/results/report.md) → [report.md](results/report.md)
  */
-const FILE_PROTO_RE = /(!?\[[^\]]*\]\()file:\/\/\/home\/(?:workspace|daytona)\//g;
+const FILE_PROTO_RE = /(!?\[[^\]]*\]\(<?)file:\/\/\/home\/(?:workspace|daytona)\//g;
 
 /**
  * Step 3: Strip bare /home/(workspace|daytona)/ absolute paths from hrefs.
  *
  * Handles agents that use absolute sandbox paths without the file:// protocol:
  *   [report.md](/home/workspace/results/report.md) → [report.md](results/report.md)
+ * Both steps also reach inside an angle-bracketed destination and keep the brackets.
  */
-const ABS_SANDBOX_RE = /(!?\[[^\]]*\]\()\/home\/(?:workspace|daytona)\//g;
+const ABS_SANDBOX_RE = /(!?\[[^\]]*\]\(<?)\/home\/(?:workspace|daytona)\//g;
 
 /**
  * Step 4: Clean stale prefixes inside __wsref__ paths.
@@ -82,9 +83,11 @@ function wrapSpacedDestination(match: string, open: string, dest: string): strin
  *
  * With no slash before the colon, the markdown URL filter reads `model.py:`
  * as a scheme and drops the href, so the link renders with nothing to click.
- *   [model](model.py:42) → [model](./model.py:42)
+ *   [model](model.py:42)     → [model](./model.py:42)
+ *   [model](<my model.py:42>) → [model](<./my model.py:42>)
  */
 const BARE_LINE_DEST_RE = /(!?\[[^\]\n]*\]\()([^\s()<>/:#?]+\.(?=[A-Za-z0-9]{0,7}[A-Za-z])[A-Za-z0-9]{1,8}:\d+(?:-\d+|:\d+)?)\)/g;
+const BRACKETED_LINE_DEST_RE = /(!?\[[^\]\n]*\]\(<)([^\n()<>/:#?]+\.(?=[A-Za-z0-9]{0,7}[A-Za-z])[A-Za-z0-9]{1,8}:\d+(?:-\d+|:\d+)?>\))/g;
 
 /**
  * Normalize all file references in a markdown string.
@@ -103,7 +106,8 @@ export function normalizeFileRefs(content: string): string {
   // what the reader copies.
   content = mapOutsideCode(content, (prose) => prose
     .replace(LINK_DEST_RE, wrapSpacedDestination)          // step 5
-    .replace(BARE_LINE_DEST_RE, '$1./$2)'));               // step 6
+    .replace(BARE_LINE_DEST_RE, '$1./$2)')                 // step 6
+    .replace(BRACKETED_LINE_DEST_RE, '$1./$2'));
 
   return content;
 }

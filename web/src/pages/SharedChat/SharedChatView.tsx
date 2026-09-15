@@ -30,6 +30,7 @@ import {
   replaySharedThread,
   getSharedFiles,
   readSharedFile,
+  resolveSharedFile,
   downloadSharedFileAs,
   fetchSharedServeObjectUrl,
   fetchSharedServeArrayBuffer,
@@ -39,6 +40,7 @@ import type { TextSegment } from '@/types/chat';
 import { buildSharedServeUrl } from '../ChatAgent/components/viewers/html/wsfilesUrl';
 import { isTaskAgentId } from '../ChatAgent/utils/agentId';
 import type { FileLocation } from '../ChatAgent/utils/fileLocation';
+import { computeAgentArtifactRouting } from '../ChatAgent/utils/agentPaths';
 
 // Message record type compatible with historyEventHandlers
 type MessageRecord = Record<string, unknown>;
@@ -72,6 +74,7 @@ export default function SharedChatView() {
   const [filesLoading, setFilesLoading] = useState(false);
   const [filePanelTargetFile, setFilePanelTargetFile] = useState<string | null>(null);
   const [filePanelTargetLocation, setFilePanelTargetLocation] = useState<FileLocation | null>(null);
+  const [filePanelTargetDir, setFilePanelTargetDir] = useState<string | null>(null);
   const [rightPanelWidth, setRightPanelWidth] = useState(750);
   const isDraggingRef = useRef(false);
   // Armed for the duration of a divider drag; unmount mid-drag would otherwise
@@ -379,6 +382,8 @@ export default function SharedChatView() {
     triggerDownload: (path: string) => downloadSharedFileAs(shareToken!, path, 'download'),
     buildServedUrl: (path: string, opts?: { injectTheme?: boolean }) =>
       buildSharedServeUrl(shareToken!, path, opts),
+    resolveFile: (candidates: string[], recentWrites: string[]) =>
+      resolveSharedFile(shareToken!, candidates, recentWrites),
   }), [shareToken]);
 
   // Inline markdown images render via the serve endpoint (allow_files) so they
@@ -392,7 +397,9 @@ export default function SharedChatView() {
   const handleOpenFile = useCallback(async (filePath: string, _workspaceId?: string, location?: FileLocation) => {
     if (!canBrowseFiles) return;
     setShowFilePanel(true);
-    setFilePanelTargetFile(filePath);
+    const dir = computeAgentArtifactRouting(filePath).targetDirectory;
+    setFilePanelTargetDir(dir || null);
+    setFilePanelTargetFile(dir == null ? filePath : null);
     setFilePanelTargetLocation(location ?? null);
     // Ensure files are loaded
     if (files.length === 0) {
@@ -621,6 +628,9 @@ export default function SharedChatView() {
               targetFile={filePanelTargetFile}
               targetLocation={filePanelTargetLocation}
               onTargetFileHandled={() => setFilePanelTargetFile(null)}
+              targetDirectory={filePanelTargetDir}
+              onTargetDirHandled={() => setFilePanelTargetDir(null)}
+              onOpenFile={handleOpenFile}
             />
           </div>
         </>

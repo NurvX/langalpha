@@ -251,6 +251,8 @@ export function useRightPanel({
       target = { kind: 'memory', key: r.targetMemoryKey, tier: r.targetMemoryTier };
     } else if (r.targetMemoKey != null) {
       target = { kind: 'memo', key: r.targetMemoKey };
+    } else if (r.targetDirectory != null) {
+      target = { kind: 'file', dir: r.targetDirectory || null };
     } else {
       target = { kind: 'file', path: r.targetFile, location: location ?? null };
     }

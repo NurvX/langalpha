@@ -1746,6 +1746,7 @@
     "focusPage": "Page {{page}}",
     "focusLineNear": "Near line {{line}}",
     "focusLineBeyond": "Line {{line}} is past the loaded preview",
+    "focusLineUnplaced": "Line {{line}} can't be pinpointed in this view",
     "focusLineMissing": "Line {{line}} isn't in this file",
     "focusPageMissing": "Page {{page}} isn't in this file",
     "focusSectionMissing": "No section named {{anchor}}",
