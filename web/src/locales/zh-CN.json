@@ -1358,7 +1358,7 @@
       "openTitle": "打开 {{path}}",
       "download": "下载",
       "moreActions": "更多操作",
-      "expand_other": "展开本轮的 {{count}} 个文件",
+      "expand_other": "{{name}}，展开本轮的 {{count}} 个文件",
       "kind": {
         "document": "文档",
         "presentation": "演示文稿",

@@ -1360,7 +1360,7 @@
       "download": "Download",
       "moreActions": "More actions",
       "expand_one": "Open {{count}} file from this turn",
-      "expand_other": "Show all {{count}} files from this turn",
+      "expand_other": "{{name}}, show all {{count}} files from this turn",
       "kind": {
         "document": "Document",
         "presentation": "Presentation",

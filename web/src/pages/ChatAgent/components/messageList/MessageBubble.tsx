@@ -201,6 +201,14 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
     }).catch(() => {});
   };
 
+  // Whether this bubble ends in a deck. The bubble above reads it too: its own
+  // bottom padding and the deck's top margin are one gap with two owners, and
+  // stacking both is what put ~29px between the reply and its first card.
+  const showTurnFiles = !!(
+    isAssistant && isTurnTail && !isStreaming && onOpenFile
+    && (!readOnly || allowFiles) && turnFiles && turnFiles.length > 0
+  );
+
   // The footer actions, built once and placed by role. An assistant bubble
   // shows them on the same line as its Sources pill, above the deliverables, so
   // the turn still ends on the deck rather than on a row of icons; a user
@@ -391,7 +399,7 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
           className={`rounded-lg ${
             isUser
               ? `${isMobile ? 'px-3 py-2' : 'px-4 py-3'} rounded-tr-none overflow-hidden`
-              : `pl-0 pr-0 ${isMobile ? 'pb-2' : 'pb-3'} rounded-tl-none`
+              : `pl-0 pr-0 ${showTurnFiles ? 'pb-0' : isMobile ? 'pb-2' : 'pb-3'} rounded-tl-none`
           }`}
           style={{
             backgroundColor: isUser
@@ -484,8 +492,40 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
           })()}
         </div>
 
+        {/* The turn's deliverables, on its last bubble, directly under the
+            reply. A long turn names its files somewhere in the prose or only
+            inside a tool call, so the deck gathers them where the reader
+            finishes reading, with nothing between. */}
+        {showTurnFiles && (
+          <TurnFileCards
+            files={turnFiles}
+            onOpenFile={onOpenFile}
+            onDownloadFile={onDownloadFile}
+            onReveal={() => onRevealFiles?.(message.id as string)}
+          />
+        )}
+
+        {/* Per-message "⏹ Stopped" marker — the turn was hard-stopped by the
+            user (live finalize or replay of a stopped turn). Quiet ink, not
+            red: a stop is the user's own action, not a loss/error state. */}
+        {isAssistant && (message.stopped as boolean) && (
+          <div
+            className="inline-flex items-center gap-1.5 self-start mt-1 text-xs"
+            style={{ color: 'var(--color-text-tertiary)' }}
+          >
+            <StopCircle className="h-3.5 w-3.5 flex-shrink-0" />
+            <span>{t('chat.stoppedChip')}</span>
+          </div>
+        )}
+
         {/* The assistant's meta row: what the turn drew on, and what you can do
-            with it, on one line above the deliverables.
+            with it, on one line closing the turn.
+
+            It comes last because the actions are hover-gated but always
+            mounted, and a row that reserves space it does not fill is a hole
+            wherever it sits mid-turn: between the reply and the deck it read as
+            40px of nothing until the pointer arrived. At the end of the turn
+            the same reserved space is just the gap before the next message.
 
             The Sources pill is always visible, while the actions beside it stay
             hover-gated, so the two keep their own opacity. The pill is mounted
@@ -496,7 +536,7 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
             button takes neither a click nor a tab stop. Clicking it opens the
             Sources tab in the right panel. */}
         {isAssistant && ((sourceCount > 0 && !isSubagentView) || actionsRow) && (
-          <div className="flex items-center gap-2 mt-1">
+          <div className={`flex items-center gap-2 ${showTurnFiles ? 'mt-2' : 'mt-1'}`}>
             {sourceCount > 0 && !isSubagentView && (
             <div
               className="transition-opacity duration-200"
@@ -519,31 +559,6 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
             </div>
             )}
             {actionsRow}
-          </div>
-        )}
-
-        {/* The turn's deliverables, on its last bubble. A long turn names its
-            files somewhere in the prose or only inside a tool call, so the
-            strip gathers them where the reader finishes reading. */}
-        {isAssistant && isTurnTail && !isStreaming && onOpenFile && (!readOnly || allowFiles) && turnFiles && turnFiles.length > 0 && (
-          <TurnFileCards
-            files={turnFiles}
-            onOpenFile={onOpenFile}
-            onDownloadFile={onDownloadFile}
-            onReveal={() => onRevealFiles?.(message.id as string)}
-          />
-        )}
-
-        {/* Per-message "⏹ Stopped" marker — the turn was hard-stopped by the
-            user (live finalize or replay of a stopped turn). Quiet ink, not
-            red: a stop is the user's own action, not a loss/error state. */}
-        {isAssistant && (message.stopped as boolean) && (
-          <div
-            className="inline-flex items-center gap-1.5 self-start mt-1 text-xs"
-            style={{ color: 'var(--color-text-tertiary)' }}
-          >
-            <StopCircle className="h-3.5 w-3.5 flex-shrink-0" />
-            <span>{t('chat.stoppedChip')}</span>
           </div>
         )}
 

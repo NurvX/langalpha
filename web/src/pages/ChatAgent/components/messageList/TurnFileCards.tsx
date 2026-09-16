@@ -6,7 +6,7 @@
  * where the reader finishes reading, and collapses to a single card carrying
  * the count, so a turn that wrote six files still ends on one object.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Download, PanelRight } from 'lucide-react';
 import {
@@ -15,16 +15,22 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { deckHeight, deckSlot, useDeckCollapse, type DeckGeometry } from '@/components/ui/cardDeck';
 import { fileExtension, fileKind, fileKindIcon } from '../../utils/filePaths';
 import type { OpenFileHandler } from '../../utils/fileLocation';
 import type { TurnFile } from '../../utils/turnFiles';
 import './TurnFileCards.css';
 
-/** Deck geometry. The fan motion is kept in step with the sources deck. */
-const CARD_HEIGHT = 68;
-const CARD_GAP = 8;
-const PEEK_STEP = 6;
-const MAX_PEEK_LAYERS = 2;
+/** Taller cards than the sources deck, since each carries a name and a meta line. */
+const GEOMETRY: DeckGeometry = {
+  cardHeight: 68,
+  cardGap: 8,
+  peekStep: 6,
+  maxPeekLayers: 2,
+  peekScaleStep: 0.02,
+  minPeekScale: 0.9,
+};
+
 interface TurnFileCardsProps {
   files: TurnFile[];
   onOpenFile: OpenFileHandler;
@@ -45,36 +51,8 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile, onReveal }: T
   // outside-click and Escape collapse: otherwise choosing Download would fold
   // the deck shut under the pointer, and Escape would close both at once.
   const [menuOpen, setMenuOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
   const n = files.length;
-
-  // Outside-click / Escape collapse while fanned, deferred one frame so the
-  // click that fanned the deck cannot immediately re-collapse it.
-  useEffect(() => {
-    if (!fanned || menuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (!target || !document.body.contains(target)) return;
-      if (rootRef.current?.contains(target)) return;
-      setFanned(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setFanned(false);
-    };
-    let attached = false;
-    const raf = requestAnimationFrame(() => {
-      document.addEventListener('mousedown', onDown);
-      document.addEventListener('keydown', onKey);
-      attached = true;
-    });
-    return () => {
-      cancelAnimationFrame(raf);
-      if (attached) {
-        document.removeEventListener('mousedown', onDown);
-        document.removeEventListener('keydown', onKey);
-      }
-    };
-  }, [fanned, menuOpen]);
+  const rootRef = useDeckCollapse({ open: fanned, onCollapse: () => setFanned(false), suspend: menuOpen });
 
   // Unfolding is two things: the deck opens, and the transcript makes room for
   // it. The second is the host's to do, so it is asked in the same breath.
@@ -82,11 +60,6 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile, onReveal }: T
     setFanned(true);
     onReveal?.();
   };
-
-  const peekLayers = Math.min(n - 1, MAX_PEEK_LAYERS);
-  const stackHeight = fanned
-    ? n * (CARD_HEIGHT + CARD_GAP) - CARD_GAP
-    : CARD_HEIGHT + peekLayers * PEEK_STEP;
 
   if (n === 0) return null;
 
@@ -96,18 +69,11 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile, onReveal }: T
       className="turn-files"
       data-testid="turn-files"
       data-fanned={fanned}
-      style={{ height: stackHeight }}
+      style={{ height: deckHeight(n, fanned, GEOMETRY) }}
     >
       {files.map((file, i) => {
-        const isTop = i === 0;
-        const interactive = fanned || isTop;
-        const summarizing = !fanned && isTop && n > 1;
-        // Collapsed, the stack shows at most MAX_PEEK_LAYERS behind the front
-        // and parks the rest under the deepest peek at zero opacity. They stay
-        // mounted so fanning is one continuous transition rather than a slide
-        // for some cards and an abrupt mount for the others.
-        const depth = Math.min(i, MAX_PEEK_LAYERS);
-        const buried = !fanned && i > MAX_PEEK_LAYERS;
+        const { style, interactive } = deckSlot(i, n, fanned, GEOMETRY);
+        const summarizing = !fanned && i === 0 && n > 1;
         const name = file.path.split('/').pop() || file.path;
         const kind = fileKind(file.path);
         const Icon = kind ? fileKindIcon(kind) : null;
@@ -123,16 +89,7 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile, onReveal }: T
             key={`${file.workspaceId ?? ''}/${file.path}`}
             aria-hidden={interactive ? undefined : true}
             className="turn-file-card"
-            style={{
-              height: CARD_HEIGHT,
-              // The whole offset rides the transform: `top` is not a
-              // transitionable step here, so a card moved by it teleports to
-              // its fanned slot while only the last few pixels animate.
-              transform: `translateY(${fanned ? i * (CARD_HEIGHT + CARD_GAP) : depth * PEEK_STEP}px) scale(${fanned ? 1 : Math.max(1 - depth * 0.02, 0.9)})`,
-              opacity: fanned ? 1 : buried ? 0 : isTop ? 1 : Math.max(0.85 - (depth - 1) * 0.2, 0.25),
-              zIndex: n - i,
-              pointerEvents: interactive ? 'auto' : 'none',
-            }}
+            style={{ height: GEOMETRY.cardHeight, ...style }}
           >
             {/* A peek card behind the front renders as a blank sheet: its name
                 would bleed out below the front card as a garbled tail. */}
@@ -152,9 +109,8 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile, onReveal }: T
                 <button
                   type="button"
                   className="turn-file-hit"
-                  tabIndex={interactive ? undefined : -1}
                   aria-label={summarizing
-                    ? t('chat.turnFiles.expand', { count: n })
+                    ? t('chat.turnFiles.expand', { count: n, name })
                     : t('chat.turnFiles.openTitle', { path: file.path })}
                   title={summarizing ? undefined : file.path}
                   onClick={() => (summarizing ? fan() : open())}

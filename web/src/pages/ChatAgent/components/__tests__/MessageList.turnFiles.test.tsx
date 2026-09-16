@@ -260,6 +260,25 @@ describe('turn deliverables deck', () => {
     expect(onRevealFiles).not.toHaveBeenCalled();
   });
 
+  /**
+   * The actions row is hover-gated but always mounted, so it reserves 22px it
+   * only fills under the pointer. Reserved space is invisible at the end of a
+   * turn and a hole anywhere before it, which is what put 40px of nothing
+   * between the reply and its deck. So the deck comes first and the chrome
+   * closes the turn.
+   */
+  it('puts the deck under the reply and leaves the hover-gated chrome last', () => {
+    const { container } = renderList(
+      [userMsg('u0'), assistant('a0', 'Built [the review](results/review.md).')],
+      { onOpenFile: vi.fn() },
+    );
+
+    const bubble = container.querySelector('[data-message-id="a0"]')!;
+    const deck = bubble.querySelector('[data-testid="turn-files"]')!;
+    const copy = bubble.querySelector('[title="chat.actions.copyMessage"]')!;
+    expect(deck.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('shows nothing for a turn whose only file is an image the reply already drew', () => {
     const { container } = renderList(
       [userMsg('u0'), assistant('a0', 'Here it is: ![chart](results/chart.png)', { toolCallProcesses: { w: write(0, 'results/chart.png') } })],
