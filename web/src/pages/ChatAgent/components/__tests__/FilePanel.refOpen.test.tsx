@@ -44,7 +44,23 @@ const CONTENT: Record<string, string> = {
   'report.py': 'print("report")\n',
   'results/report2.md': '# Report',
   'results/tools/x.py': 'x = 1\n',
+  // Two namesakes at two depths, which is what makes the reading matter.
+  'docs/index.md': [
+    '# Index',
+    '',
+    '[sandbox](/home/workspace/results/report.md)',
+    '[qualified](__wsref__/ws/results/report.md)',
+    '[sibling](results/report.md)',
+    '[up-folder](../data/)',
+    '[sub-folder](assets/)',
+    '[rooted-folder](__wsref__/ws/results/)',
+  ].join('\n'),
+  'docs/results/report.md': '# The nested one',
+  'results/report.md': '# The rooted one',
 };
+
+/** The three namesake files, plus the document whose links point at them. */
+const NAMESAKES = ['docs/index.md', 'docs/results/report.md', 'results/report.md'];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -112,5 +128,77 @@ describe('FilePanel reference opens', () => {
     resolveMock().mockResolvedValue({ status: 'unavailable', reason: 'sandbox_starting', matches: [] });
     renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={[]} targetFile="results/new.csv" />);
     await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('ws', 'results/new.csv'));
+  });
+
+  // A reference that named where it starts is not written relative to the file
+  // quoting it, so joining it against that file's directory opens a namesake.
+  const openDocAndClick = async (linkText: string) => {
+    renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={NAMESAKES} targetFile="docs/index.md" />,
+    );
+    await screen.findByText('Index');
+    (api.readWorkspaceFile as ReturnType<typeof vi.fn>).mockClear();
+    fireEvent.click(await screen.findByText(linkText));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    return (api.readWorkspaceFile as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1]);
+  };
+
+  it('opens the rooted file a sandbox-absolute link named, not the nearer namesake', async () => {
+    const read = await openDocAndClick('sandbox');
+    expect(read).toContain('results/report.md');
+    expect(read).not.toContain('docs/results/report.md');
+  });
+
+  it('opens the rooted file a same-workspace qualifier named', async () => {
+    const read = await openDocAndClick('qualified');
+    expect(read).toContain('results/report.md');
+    expect(read).not.toContain('docs/results/report.md');
+  });
+
+  it('still reads a bare link against the directory of the file quoting it', async () => {
+    // The control: a reference that named no starting point is the one case
+    // where the open file's own directory is the better guess.
+    const read = await openDocAndClick('sibling');
+    expect(read).toContain('docs/results/report.md');
+  });
+
+  // A folder is delegated to the router rather than resolved, because the
+  // lookup globs files and a directory never matches one. The router reads the
+  // path as given, so the reading a relative folder invited has to be applied
+  // before it is handed over, exactly as it is for a file.
+  const clickFolder = async (linkText: string) => {
+    const onOpenFile = vi.fn();
+    renderWithProviders(
+      <FilePanel
+        workspaceId="ws"
+        onClose={() => {}}
+        files={NAMESAKES}
+        targetFile="docs/index.md"
+        onOpenFile={onOpenFile}
+      />,
+    );
+    await screen.findByText('Index');
+    fireEvent.click(await screen.findByText(linkText));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    return onOpenFile;
+  };
+
+  it('opens a climbing folder at the directory it names from the viewed file', async () => {
+    expect(await clickFolder('up-folder'))
+      .toHaveBeenCalledWith('data/', undefined, undefined);
+  });
+
+  it('opens a sibling folder under the directory of the file quoting it', async () => {
+    expect(await clickFolder('sub-folder'))
+      .toHaveBeenCalledWith('docs/assets/', undefined, undefined);
+  });
+
+  it('leaves a rooted folder where it points, not one level down', async () => {
+    // The control for the join above: `docs/results/` exists, so joining a
+    // reference that named its own starting point would land on it. A sandbox
+    // root cannot stand in for the qualifier here, because `isFilePath` asks a
+    // rooted destination for an extension and a folder has none.
+    expect(await clickFolder('rooted-folder'))
+      .toHaveBeenCalledWith('results/', 'ws', undefined);
   });
 });

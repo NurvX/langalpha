@@ -15,8 +15,8 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import SyntaxHighlighter, { oneDark, oneLight } from './SyntaxHighlighter';
 import { useTranslation } from 'react-i18next';
 import { readWorkspaceFile, readWorkspaceFileFull, writeWorkspaceFile, downloadWorkspaceFile, downloadWorkspaceFileAsArrayBuffer, triggerFileDownload, resolveWorkspaceFile } from '../utils/api';
-import { basename, isSystemPath, linkCandidates, normalizeRefPath, resolveExact } from '../utils/fileRefResolver';
-import { classifyAgentPath } from '../utils/agentPaths';
+import { basename, isSystemPath, linkCandidates, resolveExact } from '../utils/fileRefResolver';
+import { classifyAgentPath, normalizeAgentPath, parseAgentPath } from '../utils/agentPaths';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { parseFragment, type FileLocation, type OpenFileHandler } from '../utils/fileLocation';
 import { stripLineNumbers } from './toolDisplayConfig';
@@ -548,7 +548,7 @@ function FilePanel({
     rawRef: string,
     { fromFile = null, location = null }: { fromFile?: string | null; location?: FileLocation | null } = {},
   ) => {
-    const candidates = fromFile ? linkCandidates(rawRef, fromFile) : [normalizeRefPath(rawRef)];
+    const candidates = fromFile ? linkCandidates(rawRef, fromFile) : [normalizeAgentPath(rawRef)];
     const primary = candidates[0];
     if (!primary) return;
     if (hasUnsavedChanges && !window.confirm(t('filePanel.discardUnsaved'))) return;
@@ -610,15 +610,36 @@ function FilePanel({
 
   // Links inside a viewed file resolve against that file's directory first.
   // Stable identity: Markdown memoizes its renderers on this handler.
-  const handleViewerLink = useStableHandler((path: string, linkWorkspaceId?: string, location?: FileLocation) => {
+  const handleViewerLink = useStableHandler((
+    path: string,
+    linkWorkspaceId?: string,
+    location?: FileLocation,
+    rooted?: boolean,
+  ) => {
     const otherWorkspace = !!linkWorkspaceId && linkWorkspaceId !== workspaceId;
+    const kind = classifyAgentPath(path).kind;
+    const directory = parseAgentPath(path).directory;
+    // A folder inside a viewed file is written relative to it, the same as a
+    // file link, but the router takes the path as given, so the join happens
+    // here: `../data/` read from `docs/index.md` names `data/`, and delegated
+    // unjoined it opened the tree at a prefix the workspace has no entry for.
+    // The join is the one `openFileRef` does below, skipped for exactly the
+    // references that named their own starting point.
+    const target = directory && kind === 'file' && !otherWorkspace
+      ? linkCandidates(path, rooted ? null : selectedFile)[0]
+      : path;
     // Memory and memo entries live outside the sandbox and open in their own tabs.
-    if (otherWorkspace || classifyAgentPath(path).kind !== 'file') {
+    // A folder goes with them: the router reads the trailing slash and opens the
+    // tree there, while resolving it here can only miss, because the lookup
+    // globs files and a directory never matches one.
+    if (otherWorkspace || kind !== 'file' || directory) {
       // Resolving here would open a namesake from the wrong place.
-      onOpenFile?.(path, linkWorkspaceId, location);
+      onOpenFile?.(target, linkWorkspaceId, location);
       return;
     }
-    void openFileRef(path, { fromFile: selectedFile, location });
+    // A rooted reference named where it starts, so the open file's directory is
+    // not a reading it invited: joining would prefer a namesake one level down.
+    void openFileRef(path, { fromFile: rooted ? null : selectedFile, location });
   });
 
   // `[Valuation](#valuation)` inside the open file moves within it, no reload.
@@ -658,7 +679,7 @@ function FilePanel({
     setExtraMatches([]);
   };
 
-  const selectedExt = selectedFile ? getFileExtension(selectedFile.split('/').pop() || '') : '';
+  const selectedExt = selectedFile ? getFileExtension(selectedFile) : '';
   const canEdit = !!(selectedFile
     && !readOnly
     && !fileError

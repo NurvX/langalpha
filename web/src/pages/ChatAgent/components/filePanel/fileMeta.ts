@@ -1,6 +1,10 @@
 import { File, FileImage, FileText } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { fileExtension } from '../../utils/filePaths';
 import type { SortOption } from './types';
+
+/** The one extension reader; re-exported here for the panel's own callers. */
+export { fileExtension as getFileExtension };
 
 // --- Constants ---
 
@@ -25,14 +29,10 @@ export const DOWNLOAD_ONLY_EXTENSIONS = new Set([
 ]);
 
 export function getFileIcon(fileName: string): LucideIcon {
-  const ext = fileName.split('.').pop()?.toLowerCase();
-  if (['md', 'txt', 'csv', 'json', 'py', 'js', 'html'].includes(ext!)) return FileText;
-  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext!)) return FileImage;
+  const ext = fileExtension(fileName);
+  if (['md', 'txt', 'csv', 'json', 'py', 'js', 'html'].includes(ext)) return FileText;
+  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp'].includes(ext)) return FileImage;
   return File;
-}
-
-export function getFileExtension(fileName: string): string {
-  return fileName.split('.').pop()?.toLowerCase() || '';
 }
 
 // Map extensions to human-readable type categories
@@ -41,14 +41,19 @@ const EXT_TO_TYPE: Record<string, string> = {
   py: 'Code', js: 'Code', jsx: 'Code', ts: 'Code', tsx: 'Code',
   html: 'Code', css: 'Code', sql: 'Code', sh: 'Code', bash: 'Code',
   java: 'Code', go: 'Code', rs: 'Code', rb: 'Code',
-  json: 'Data', csv: 'Data', yaml: 'Data', yml: 'Data', xml: 'Data',
-  xlsx: 'Data', xls: 'Data',
+  // An extension left out here is not unopenable, it is filed under `Other`,
+  // so the panel's type filter hides it from the category a reader looks in.
+  // The relay keeps a separate list (`_FILE_EXTS` in `src/tools/secretary/
+  // utils.py`) that has to cover everything this table names; the obligation
+  // runs that way only, so adding one here is what puts the pair out of step.
+  json: 'Data', jsonl: 'Data', csv: 'Data', yaml: 'Data', yml: 'Data', xml: 'Data',
+  xlsx: 'Data', xlsm: 'Data', xls: 'Data',
   png: 'Image', jpg: 'Image', jpeg: 'Image', gif: 'Image', svg: 'Image', webp: 'Image',
+  bmp: 'Image',
 };
 
 export function getFileType(filePath: string): string {
-  const ext = getFileExtension(filePath.split('/').pop() || '');
-  return EXT_TO_TYPE[ext] || 'Other';
+  return EXT_TO_TYPE[fileExtension(filePath)] || 'Other';
 }
 
 /** Derive available type categories from current file list */
@@ -82,8 +87,8 @@ export function sortFiles(filePaths: string[], sortBy: string): string[] {
       });
     case 'type':
       return sorted.sort((a, b) => {
-        const ea = getFileExtension(a.split('/').pop() || '');
-        const eb = getFileExtension(b.split('/').pop() || '');
+        const ea = fileExtension(a);
+        const eb = fileExtension(b);
         if (ea !== eb) return ea.localeCompare(eb);
         return a.split('/').pop()!.toLowerCase().localeCompare(b.split('/').pop()!.toLowerCase());
       });

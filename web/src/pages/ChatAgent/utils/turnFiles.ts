@@ -7,11 +7,14 @@
  * reach a file the reply forgot to mention and carry what the edit changed.
  */
 
-import { fileKind, isFilePath, isImagePath, normalizeFilePath, parseWsPath } from './filePaths';
-import { classifyAgentPath } from './agentPaths';
+import { assistantText } from '../components/messageList/messageText';
+import type { MessageRecord } from '../components/messageList/types';
+import { fileKind, isFilePath, isImagePath, parseWsPath } from './filePaths';
+import { classifyAgentPath, normalizeAgentHref } from './agentPaths';
 import { splitFileLocation, type FileLocation } from './fileLocation';
-import { isSystemPath, normalizeRefPath, WRITE_TOOLS, type ToolCallLike } from './fileRefResolver';
+import { isSystemPath, writeCalls, type TurnMessage } from './fileRefResolver';
 import { normalizeFileRefs } from './normalizeFileRefs';
+import { mapOutsideCode } from './markdownSegments';
 
 export interface TurnFile {
   /** Workspace-relative path, with no location suffix. */
@@ -33,14 +36,26 @@ export interface TurnFile {
  * renders and opens while the card for it never appears, and an embedded
  * `![chart](chart(1).png)` stops counting as embedded and earns a second,
  * duplicate card for what the reader is already looking at.
+ *
+ * A destination may carry a CommonMark title, which is not part of the path and
+ * so rides in its own non-capturing group. Without it the closing paren had to
+ * follow the destination directly, and `[report](results/report.pdf "Download")`
+ * earned no card at all: not a deliverable, and for the image form not even an
+ * embed, so a titled chart the reader is already looking at could still collect
+ * a duplicate card from its Write call. The three title forms are the ones the
+ * secretary's `_TITLE` already accepts.
+ *
+ * The label is bounded for the reason the secretary's twin already records
+ * (`src/tools/secretary/utils.py`): the pattern is unanchored, so on a run of
+ * `[` with no `]` an unbounded label rescans the line from every one of them.
+ * That is quadratic, it runs on the main thread as a turn settles, and 512 is
+ * past any real link label.
  */
-const LINK_RE = /(!?)\[[^\]\n]*\]\(\s*(<[^<>\n]+>|(?:[^()\s]|\([^()\s]*\))+)\s*\)/g;
+const LINK_RE = /(!?)\[[^\]\n]{0,512}\]\(\s*(<[^<>\n]+>|(?:[^()\s]|\([^()\s]*\))+)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?\s*\)/g;
 
-interface MessageLike {
-  role?: unknown;
-  contentSegments?: { type?: string; content?: string }[];
-  content?: unknown;
-  toolCallProcesses?: Record<string, ToolCallLike>;
+/** Identity of a reference: two workspaces can hold one path, and those are two files. */
+function refKey(file: { path: string; workspaceId?: string }): string {
+  return file.workspaceId ? `${file.workspaceId}\u0000${file.path}` : file.path;
 }
 
 /**
@@ -71,19 +86,13 @@ function editStats(oldString: unknown, newString: unknown): { added: number; rem
   return { added: after.length - head - tail, removed: before.length - head - tail };
 }
 
-/** The reply's own text, with the link forms normalized the renderer uses. */
-function assistantText(message: MessageLike): string {
-  const segments = (message.contentSegments ?? [])
-    .filter((s) => s?.type === 'text' && s.content)
-    .map((s) => s.content as string);
-  const text = segments.length ? segments.join('\n') : typeof message.content === 'string' ? message.content : '';
-  return text ? normalizeFileRefs(text) : '';
-}
-
 /** Whether a reference points at a workspace file the panel can open. */
 function openablePath(path: string): boolean {
   return (
     !!path
+    // A reply's links read from the workspace root, so one that still climbs
+    // above it after normalization names nothing this deck can offer.
+    && !path.startsWith('../')
     && fileKind(path) !== null
     && !isSystemPath(path)
     && classifyAgentPath(path).kind === 'file'
@@ -99,45 +108,54 @@ interface MessageFiles {
   embedded: string[];
 }
 
-// A message object is replaced when it changes, so a cache keyed on it holds
-// only while the text is settled: during a turn every other message is a hit,
-// and the growing one recomputes alone.
-const perMessage = new WeakMap<object, MessageFiles>();
-
-function filesInMessage(message: MessageLike): MessageFiles {
+function filesInMessage(message: TurnMessage): MessageFiles {
   const cited: TurnFile[] = [];
   const written: TurnFile[] = [];
   const embedded: string[] = [];
 
   if (message.role === 'assistant') {
-    for (const match of assistantText(message).matchAll(LINK_RE)) {
-      const dest = match[2].replace(/^<|>$/g, '');
-      if (!isFilePath(dest)) continue;
-      const wsRef = parseWsPath(dest);
-      const { path: href, location } = splitFileLocation(wsRef ? wsRef.path : dest);
-      const path = normalizeRefPath(normalizeFilePath(href));
-      if (!openablePath(path)) continue;
-      if (match[1] === '!' || isImagePath(path)) {
-        embedded.push(path);
-        continue;
+    const text = assistantText(message);
+    // Only prose is read. A link inside code is syntax the reply is showing,
+    // not a file it produced: a fenced `[report](never-made.pdf)` would mint a
+    // card for something nothing wrote, and a fenced `![chart](chart.png)`
+    // would mark a real chart as already drawn and suppress the card its Write
+    // earned. The scan is a read, but it is the same prose/code split every
+    // rewrite in this pipeline goes through.
+    mapOutsideCode(text ? normalizeFileRefs(text) : '', (prose) => {
+      for (const match of prose.matchAll(LINK_RE)) {
+        const dest = match[2].replace(/^<|>$/g, '');
+        if (!isFilePath(dest)) continue;
+        // `#L12` and `:42` are link syntax, so they come off before the path
+        // rules run: those drop a fragment, and would take the location with it.
+        const { path: href, location } = splitFileLocation(dest);
+        const wsRef = parseWsPath(href);
+        const path = normalizeAgentHref(href);
+        if (!openablePath(path)) continue;
+        const file: TurnFile = { path, workspaceId: wsRef?.workspaceId, location: location ?? undefined };
+        if (match[1] === '!' || isImagePath(path)) {
+          embedded.push(refKey(file));
+          continue;
+        }
+        cited.push(file);
       }
-      cited.push({ path, workspaceId: wsRef?.workspaceId, location: location ?? undefined });
-    }
+      return prose;
+    });
   }
 
-  const calls = Object.values(message.toolCallProcesses ?? {})
-    .filter((p) => p && WRITE_TOOLS.has(p.toolName ?? '') && !p.isFailed)
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  for (const call of calls) {
-    const args = call.toolCall?.args ?? {};
-    const named = args.file_path ?? args.filePath ?? args.path ?? args.filename;
-    if (typeof named !== 'string' || !named) continue;
-    const path = normalizeRefPath(named);
+  for (const { path, call } of writeCalls(message)) {
     if (!openablePath(path)) continue;
     // Only an Edit says what changed. A Write carries the new file alone, and
-    // whether it replaced one, or how much of it, is not in the call.
-    const stats = call.toolName === 'Edit' ? editStats(args.old_string, args.new_string) : undefined;
-    written.push(stats ? { path, stats } : { path });
+    // whether it replaced one, or how much of it, is not in the call. Neither
+    // does a `replace_all` Edit, which carries one pair of strings for every
+    // substitution it made: counting that pair once reports an edit N times
+    // smaller than it was, and the card presents the number as fact.
+    const args = call.toolCall?.args ?? {};
+    const stats = call.toolName === 'Edit' && !args.replace_all
+      ? editStats(args.old_string, args.new_string)
+      : undefined;
+    // An edit whose two strings match changed nothing, and `+0 -0` under a file
+    // name reads as a measurement rather than as the absence of one.
+    written.push(stats && (stats.added || stats.removed) ? { path, stats } : { path });
   }
 
   return { cited, written, embedded };
@@ -148,30 +166,20 @@ function filesInMessage(message: MessageLike): MessageFiles {
  * ones only a write tool names. An image the reply embeds is left out, since a
  * card for it would point at what the reader is already looking at.
  */
-export function collectTurnFiles(messages: readonly unknown[]): TurnFile[] {
-  const parsed: MessageFiles[] = [];
-  for (const raw of messages) {
-    const message = raw as MessageLike | null;
-    if (!message || typeof message !== 'object') continue;
-    let files = perMessage.get(message);
-    if (!files) {
-      files = filesInMessage(message);
-      perMessage.set(message, files);
-    }
-    parsed.push(files);
-  }
+export function collectTurnFiles(messages: readonly TurnMessage[]): TurnFile[] {
+  const parsed = messages.filter(Boolean).map(filesInMessage);
 
   const embedded = new Set(parsed.flatMap((p) => p.embedded));
-  const byPath = new Map<string, TurnFile>();
+  const byRef = new Map<string, TurnFile>();
   const add = (file: TurnFile) => {
-    if (embedded.has(file.path)) return;
-    const existing = byPath.get(file.path);
+    const key = refKey(file);
+    if (embedded.has(key)) return;
+    const existing = byRef.get(key);
     if (!existing) {
-      byPath.set(file.path, { ...file, stats: file.stats && { ...file.stats } });
+      byRef.set(key, { ...file, stats: file.stats && { ...file.stats } });
       return;
     }
     if (!existing.location && file.location) existing.location = file.location;
-    if (!existing.workspaceId && file.workspaceId) existing.workspaceId = file.workspaceId;
     if (file.stats) {
       existing.stats = {
         added: (existing.stats?.added ?? 0) + file.stats.added,
@@ -182,5 +190,57 @@ export function collectTurnFiles(messages: readonly unknown[]): TurnFile[] {
 
   for (const p of parsed) p.cited.forEach(add);
   for (const p of parsed) p.written.forEach(add);
-  return [...byPath.values()];
+  return [...byRef.values()];
+}
+
+// Keyed on the message that ends a turn, and checked against the whole member
+// list, so the entry survives exactly as long as the turn's messages do.
+const turnCache = new WeakMap<object, { members: readonly TurnMessage[]; files: TurnFile[] }>();
+
+function cachedTurnFiles(members: readonly TurnMessage[]): TurnFile[] {
+  const key = members[members.length - 1] as object | undefined;
+  if (!key) return [];
+  const hit = turnCache.get(key);
+  if (hit && hit.members.length === members.length && hit.members.every((m, i) => m === members[i])) {
+    return hit.files;
+  }
+  const files = collectTurnFiles(members);
+  turnCache.set(key, { members: [...members], files });
+  return files;
+}
+
+/**
+ * The files each settled turn produced, keyed by turn index.
+ *
+ * Each array holds its identity for as long as its turn's messages hold
+ * theirs, because `MessageBubble` is memoized on exactly this value: the
+ * transcript hands out a new `messages` array on every streamed token, and a
+ * fresh array here would re-render every settled bubble that ever produced a
+ * file, on every token of the turn being written now.
+ *
+ * A turn still streaming is left out entirely. Half a path is not a
+ * deliverable yet, and the deck would rewrite itself as the rest arrived.
+ */
+export function turnFilesByTurn(
+  projected: readonly { message: MessageRecord; turnIndex: number }[],
+): Map<number, TurnFile[]> {
+  const byTurn = new Map<number, TurnMessage[]>();
+  const streaming = new Set<number>();
+  for (const { message, turnIndex } of projected) {
+    if (message.isStreaming) streaming.add(turnIndex);
+    // The transcript is `Record<string, unknown>` at its source; this is the
+    // one place the deliverables path gives it a shape.
+    const member = message as TurnMessage;
+    const bucket = byTurn.get(turnIndex);
+    if (bucket) bucket.push(member);
+    else byTurn.set(turnIndex, [member]);
+  }
+
+  const files = new Map<number, TurnFile[]>();
+  for (const [turnIndex, members] of byTurn) {
+    if (streaming.has(turnIndex)) continue;
+    const collected = cachedTurnFiles(members);
+    if (collected.length > 0) files.set(turnIndex, collected);
+  }
+  return files;
 }

@@ -10,8 +10,7 @@
  */
 
 import { SYSTEM_DIR_PREFIXES } from '../components/filePanel/fileMeta';
-
-const SANDBOX_ROOT_RE = /^(?:file:\/\/)?\/home\/(?:workspace|daytona)\//;
+import { normalizeAgentPath, parseAgentPath } from './agentPaths';
 
 /** The tools whose path argument names a file the agent created or changed. */
 export const WRITE_TOOLS = new Set(['Write', 'Edit']);
@@ -26,31 +25,45 @@ export function dirname(path: string): string {
   return idx <= 0 ? (idx === 0 ? '/' : '') : path.slice(0, idx);
 }
 
-/** Canonical workspace-relative form: sandbox root and `./` stripped, `..` folded. */
-export function normalizeRefPath(raw: string): string {
-  const p = raw.trim().replace(SANDBOX_ROOT_RE, '');
-  const absolute = p.startsWith('/');
-  const out: string[] = [];
-  for (const seg of p.split('/')) {
-    if (seg === '' || seg === '.') continue;
-    if (seg === '..') { out.pop(); continue; }
-    out.push(seg);
-  }
-  return (absolute ? '/' : '') + out.join('/');
-}
-
 /**
  * Candidate paths for a link found inside an open file, most likely first. A
  * relative link reads against the file's own directory, but agents just as
  * often write it from the workspace root, so both are offered.
  */
 export function linkCandidates(href: string, fromFile: string | null): string[] {
-  const direct = normalizeRefPath(href);
-  if (!fromFile || href.startsWith('/') || SANDBOX_ROOT_RE.test(href)) return [direct];
-  const dir = dirname(normalizeRefPath(fromFile));
+  const { path: direct, absolute, workspaceId } = parseAgentPath(href);
+  // A `__wsref__` destination names its own workspace, so the file the reader
+  // has open says nothing about where it lives; joining would have produced
+  // `work/__wsref__/<id>/…`, a path no workspace holds.
+  if (!fromFile || absolute || workspaceId) return [direct];
+  const dir = dirname(normalizeAgentPath(fromFile));
   if (!dir || dir === '/') return [direct];
-  const joined = normalizeRefPath(`${dir}/${href}`);
+  const joined = normalizeAgentPath(`${dir}/${href}`);
   return joined === direct ? [direct] : [joined, direct];
+}
+
+/**
+ * The path a save should ask for: the reference resolved the way opening it is.
+ *
+ * A deliverable card carries the reference as the reply wrote it, which is
+ * often not where the file landed — that is the whole reason the lookup exists.
+ * Open went through it and Download did not, so one card opened a report and
+ * then failed to save the same file. The lookup is an improvement on the
+ * reference rather than a precondition, so a reference that is already right
+ * still saves when the lookup is absent or fails.
+ */
+export async function downloadTarget(
+  path: string,
+  resolve: ((candidates: string[], recentWrites: string[]) => Promise<{ status: string; path?: string | null }>) | null,
+  recentWrites: readonly string[] = [],
+): Promise<string> {
+  if (!resolve) return path;
+  try {
+    const result = await resolve([path], [...recentWrites]);
+    return result.status === 'resolved' && result.path ? result.path : path;
+  } catch {
+    return path;
+  }
 }
 
 export function isSystemPath(path: string): boolean {
@@ -73,28 +86,76 @@ export interface ToolCallLike {
   toolName?: string;
   toolCall?: { args?: Record<string, unknown> } | null;
   isFailed?: boolean;
+  isComplete?: boolean;
+  /** Set only when a result arrived, which is the one proof the call returned. */
+  toolCallResult?: unknown;
   order?: number;
 }
 
+/**
+ * A message as the file collectors read it.
+ *
+ * Typed rather than `Record<string, unknown>` so the collectors below need no
+ * casts of their own; the one cast lives where the untyped transcript enters.
+ */
+export interface TurnMessage {
+  role?: unknown;
+  contentSegments?: { type?: string; content?: string; order?: number }[];
+  content?: unknown;
+  isStreaming?: unknown;
+  toolCallProcesses?: Record<string, ToolCallLike>;
+}
+
+/**
+ * The write and edit calls in one message, in call order, each with the path
+ * it named already canonical.
+ *
+ * The four spellings are the knowledge worth keeping in one place: a tool
+ * names its path under whichever key its schema chose, and a fifth spelling
+ * has to reach the deliverables deck and the link resolver together or they
+ * disagree about what the turn wrote.
+ */
+export function writeCalls(message: TurnMessage): { path: string; call: ToolCallLike }[] {
+  const out: { path: string; call: ToolCallLike }[] = [];
+  const calls = Object.values(message.toolCallProcesses ?? {})
+    // A call still in flight when the turn stopped names a file nothing said
+    // it wrote. `isComplete` is not that evidence: a stop and a steering
+    // rollback both fold every open call to complete with no result, so the
+    // returned result itself is what a card is allowed to claim.
+    .filter((p) => p && WRITE_TOOLS.has(p.toolName ?? '') && p.toolCallResult != null && !p.isFailed)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  for (const call of calls) {
+    const args = call.toolCall?.args;
+    const named = args?.file_path ?? args?.filePath ?? args?.path ?? args?.filename;
+    if (typeof named !== 'string' || !named) continue;
+    const path = normalizeAgentPath(named);
+    if (path) out.push({ path, call });
+  }
+  return out;
+}
+
+/**
+ * The most the resolver will accept, and therefore the most worth collecting.
+ *
+ * `ResolveFileRefRequest.recent_writes` caps the list at 200 and FastAPI
+ * rejects a longer one outright, so an uncapped walk would 422 a whole thread's
+ * worth of clicks the moment it passed its 200th distinct file. The list is
+ * only a tiebreak between namesakes and it is newest first, so the tail is what
+ * a longer thread can afford to lose.
+ */
+export const RECENT_WRITE_LIMIT = 200;
+
 /** Paths the agent wrote or edited in this thread, newest first. */
-export function collectRecentWritePaths(messages: readonly unknown[]): string[] {
+export function collectRecentWritePaths(messages: readonly TurnMessage[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const procs = (messages[i] as { toolCallProcesses?: Record<string, ToolCallLike> } | null)?.toolCallProcesses;
-    if (!procs) continue;
-    const calls = Object.values(procs)
-      .filter((p) => p && WRITE_TOOLS.has(p.toolName ?? '') && !p.isFailed)
-      .sort((a, b) => (b.order ?? 0) - (a.order ?? 0));
-    for (const call of calls) {
-      const args = call.toolCall?.args;
-      const raw = args?.file_path ?? args?.filePath ?? args?.path ?? args?.filename;
-      if (typeof raw !== 'string' || !raw) continue;
-      const path = normalizeRefPath(raw);
-      if (path && !seen.has(path)) {
-        seen.add(path);
-        out.push(path);
-      }
+  for (let i = messages.length - 1; i >= 0 && out.length < RECENT_WRITE_LIMIT; i--) {
+    const calls = writeCalls(messages[i] ?? {});
+    for (let j = calls.length - 1; j >= 0 && out.length < RECENT_WRITE_LIMIT; j--) {
+      const { path } = calls[j];
+      if (seen.has(path)) continue;
+      seen.add(path);
+      out.push(path);
     }
   }
   return out;

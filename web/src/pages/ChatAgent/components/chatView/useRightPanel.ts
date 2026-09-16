@@ -3,7 +3,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getPreviewUrl } from '../../utils/api';
 import { computeAgentArtifactRouting } from '../../utils/agentPaths';
-import { collectRecentWritePaths } from '../../utils/fileRefResolver';
+import { collectRecentWritePaths, type TurnMessage } from '../../utils/fileRefResolver';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { isValidUuid } from '../../utils/uuid';
 import { clampPanelWidth as clampPanelWidthUtil } from '@/lib/panelUtils';
@@ -328,7 +328,7 @@ export function useRightPanel({
   // Read at click time rather than derived per render: the file panel only
   // needs this thread's Write/Edit paths when it resolves a reference, and a
   // memo over `messages` would rebuild on every streamed chunk.
-  const getRecentWritePaths = useStableHandler(() => collectRecentWritePaths(messages));
+  const getRecentWritePaths = useStableHandler(() => collectRecentWritePaths(messages as TurnMessage[]));
 
   // Drop a sticky sources/status target whenever the right panel is closed or
   // switches to a non-file view (detail/preview), so a later file/memory click

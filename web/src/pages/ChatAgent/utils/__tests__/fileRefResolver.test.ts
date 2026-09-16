@@ -1,23 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   collectRecentWritePaths,
+  downloadTarget,
   linkCandidates,
-  normalizeRefPath,
   resolveExact,
+  type TurnMessage,
 } from '../fileRefResolver';
-
-describe('normalizeRefPath', () => {
-  it('strips the sandbox root and folds dot segments', () => {
-    expect(normalizeRefPath('/home/workspace/results/report.md')).toBe('results/report.md');
-    expect(normalizeRefPath('file:///home/daytona/results/report.md')).toBe('results/report.md');
-    expect(normalizeRefPath('./results/../data/./x.csv')).toBe('data/x.csv');
-  });
-
-  it('keeps a true absolute path absolute', () => {
-    expect(normalizeRefPath('/tmp/out.csv')).toBe('/tmp/out.csv');
-    expect(normalizeRefPath('/large_tool_results/abc')).toBe('/large_tool_results/abc');
-  });
-});
 
 describe('linkCandidates', () => {
   it('reads a link against the linking file first, then from the root', () => {
@@ -25,8 +13,21 @@ describe('linkCandidates', () => {
   });
 
   it('offers one candidate when both readings agree', () => {
-    expect(linkCandidates('../data/x.csv', 'results/report.md')).toEqual(['data/x.csv']);
     expect(linkCandidates('x.csv', 'report.md')).toEqual(['x.csv']);
+  });
+
+  it('lets a climbing link climb, against the directory it was written in', () => {
+    // `../data/x.csv` inside `results/report.md` is `data/x.csv`. Normalizing
+    // the `..` away first left `data/x.csv` looking like a bare root-relative
+    // name, so the join produced `results/data/x.csv` and the file the link
+    // named was in neither candidate.
+    expect(linkCandidates('../data/x.csv', 'results/report.md')).toEqual(['data/x.csv', '../data/x.csv']);
+  });
+
+  it('does not rebase a link that names its own workspace', () => {
+    // The reader's open file says nothing about where another workspace keeps
+    // its files; joining produced `results/__wsref__/…`, which no workspace holds.
+    expect(linkCandidates('__wsref__/ws-7/data/x.csv', 'results/report.md')).toEqual(['data/x.csv']);
   });
 
   it('does not rebase an absolute link', () => {
@@ -52,11 +53,13 @@ describe('collectRecentWritePaths', () => {
     toolName,
     toolCall: { args: { file_path: path } },
     isFailed,
+    isComplete: true,
+    toolCallResult: { content: 'ok' },
     order,
   });
 
   it('lists Write and Edit paths newest first, once each', () => {
-    const messages = [
+    const messages: TurnMessage[] = [
       { toolCallProcesses: { a: call('Write', '/home/workspace/results/a.md', 1), b: call('Read', 'results/r.md', 2) } },
       { role: 'user' },
       {
@@ -68,5 +71,37 @@ describe('collectRecentWritePaths', () => {
       },
     ];
     expect(collectRecentWritePaths(messages)).toEqual(['results/b.md', 'results/a.md']);
+  });
+});
+
+/**
+ * Save and open are the same card's two affordances, so they have to agree
+ * about which file the card names. Open went through the lookup and save did
+ * not, so a report the reader had just opened failed to download.
+ */
+describe('downloadTarget', () => {
+  it('saves the path the lookup resolved, not the one the reply wrote', async () => {
+    const resolve = async () => ({ status: 'resolved', path: 'work/q3/report.md' });
+    expect(await downloadTarget('report.md', resolve)).toBe('work/q3/report.md');
+  });
+
+  it('falls back to the reference when the lookup cannot place it', async () => {
+    expect(await downloadTarget('report.md', async () => ({ status: 'ambiguous' }))).toBe('report.md');
+    expect(await downloadTarget('report.md', async () => ({ status: 'resolved', path: null }))).toBe('report.md');
+  });
+
+  it('saves anyway when the lookup is absent or fails', async () => {
+    expect(await downloadTarget('results/report.md', null)).toBe('results/report.md');
+    const throws = async () => { throw new Error('offline'); };
+    expect(await downloadTarget('results/report.md', throws)).toBe('results/report.md');
+  });
+
+  it('passes this thread’s writes as the tiebreak between namesakes', async () => {
+    const seen: string[][] = [];
+    await downloadTarget('report.md', async (candidates, recentWrites) => {
+      seen.push(candidates, recentWrites);
+      return { status: 'resolved', path: 'a/report.md' };
+    }, ['a/report.md', 'b/report.md']);
+    expect(seen).toEqual([['report.md'], ['a/report.md', 'b/report.md']]);
   });
 });

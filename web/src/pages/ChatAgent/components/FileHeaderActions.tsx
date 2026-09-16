@@ -14,23 +14,22 @@ import {
 import { toast } from '@/components/ui/use-toast';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
+import { fileExtension } from '../utils/filePaths';
 import { exportServedPdf } from './viewers/html/useHtmlActions';
 
 const PDF_SCALE_CHOICES = [0.8, 1, 1.25];
 
 // --- File type detection helpers ---
 
-export function getFileExtension(fileName: string): string {
-  const dot = fileName.lastIndexOf('.');
-  return dot >= 0 ? fileName.slice(dot + 1).toLowerCase() : '';
-}
+/** The one extension reader; re-exported so this module's callers keep one import. */
+export { fileExtension as getFileExtension };
 
 export function isMarkdownFile(filePath: string, mime: string | null): boolean {
-  return getFileExtension(filePath.split('/').pop() || '') === 'md' || (mime?.includes('markdown') ?? false);
+  return fileExtension(filePath) === 'md' || (mime?.includes('markdown') ?? false);
 }
 
 export function isHtmlFile(filePath: string): boolean {
-  return ['html', 'htm'].includes(getFileExtension(filePath.split('/').pop() || ''));
+  return ['html', 'htm'].includes(fileExtension(filePath));
 }
 
 export function isTextMime(mime: string | null): boolean {

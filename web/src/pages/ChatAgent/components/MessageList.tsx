@@ -4,7 +4,7 @@ import { DispatchStatusProvider } from '../hooks/usePTCDispatchStatus';
 import { NotificationDivider } from './messageList/NotificationDivider';
 import { MessageBubble } from './messageList/MessageBubble';
 import { computeTurnTails, projectTurns, visibleProjection } from './messageList/turnProjection';
-import { collectTurnFiles, type TurnFile } from '../utils/turnFiles';
+import { turnFilesByTurn } from '../utils/turnFiles';
 import type { FeedbackResult, MessageRecord } from './messageList/types';
 
 // --- MessageList ---
@@ -36,26 +36,8 @@ function MessageList({ messages, isLoading, isLoadingHistory, hideAvatar, compac
   const turnTails = React.useMemo(() => computeTurnTails(visible), [visible]);
 
   // The deliverables strip reads the RAW projection: a turn's files are named
-  // across its whole span, including a bubble the list never paints. A turn
-  // still streaming is skipped — half a path is not a deliverable yet, and the
-  // strip would rewrite itself on every token.
-  const filesByTurn = React.useMemo(() => {
-    const byTurn = new Map<number, MessageRecord[]>();
-    const streaming = new Set<number>();
-    for (const { message, turnIndex } of projected) {
-      if (message.isStreaming as boolean) streaming.add(turnIndex);
-      const bucket = byTurn.get(turnIndex);
-      if (bucket) bucket.push(message);
-      else byTurn.set(turnIndex, [message]);
-    }
-    const files = new Map<number, TurnFile[]>();
-    for (const [turnIndex, turnMessages] of byTurn) {
-      if (streaming.has(turnIndex)) continue;
-      const collected = collectTurnFiles(turnMessages);
-      if (collected.length > 0) files.set(turnIndex, collected);
-    }
-    return files;
-  }, [projected]);
+  // across its whole span, including a bubble the list never paints.
+  const filesByTurn = React.useMemo(() => turnFilesByTurn(projected), [projected]);
 
   // Empty state - show when no messages exist (hidden in subagent view)
   if (messages.length === 0) {

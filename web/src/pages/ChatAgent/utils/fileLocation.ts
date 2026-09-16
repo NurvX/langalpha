@@ -9,7 +9,19 @@ export interface FileLocation {
   anchor?: string;
 }
 
-export type OpenFileHandler = (path: string, workspaceId?: string, location?: FileLocation) => void;
+/**
+ * `rooted` says the reference named a starting point of its own, a workspace
+ * qualifier or the sandbox root, so it is not written relative to whatever file
+ * quotes it. Only the file panel reads it, to decide whether joining against
+ * the open file's directory is a reading the reference invited. Optional, so
+ * every handler that only opens a path stays assignable.
+ */
+export type OpenFileHandler = (
+  path: string,
+  workspaceId?: string,
+  location?: FileLocation,
+  rooted?: boolean,
+) => void;
 
 // Uppercase only, as GitHub writes it: `#l2` is a heading slug ("L2"), not line 2.
 const LINE_FRAGMENT_RE = /^L(\d+)(?:-L?(\d+))?$/;

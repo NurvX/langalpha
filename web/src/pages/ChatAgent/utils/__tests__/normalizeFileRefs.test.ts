@@ -35,21 +35,25 @@ describe('normalizeFileRefs', () => {
     expect(normalizeFileRefs(input)).toBe('[a.md](results/a.md) and [b.md](results/b.md)');
   });
 
-  // ── Step 2: file:///home/(workspace|daytona)/ stripping ──────
+  // ── Step 2: unwrap `file://`, keep the sandbox root ──────────
+  //
+  // The scheme has to go, because rehype-sanitize drops it. The root stays:
+  // it is how a reference says it starts at the workspace instead of beside
+  // the file quoting it, and `agentPaths` canonicalizes it for every reader.
 
-  it('strips file:///home/workspace/ from link href', () => {
+  it('unwraps file:// and leaves the sandbox root in place', () => {
     const input = '[report.md](file:///home/workspace/results/report.md)';
-    expect(normalizeFileRefs(input)).toBe('[report.md](results/report.md)');
+    expect(normalizeFileRefs(input)).toBe('[report.md](/home/workspace/results/report.md)');
   });
 
-  it('strips file:///home/daytona/ from link href', () => {
+  it('unwraps file:// on the daytona root too', () => {
     const input = '[report.md](file:///home/daytona/results/report.md)';
-    expect(normalizeFileRefs(input)).toBe('[report.md](results/report.md)');
+    expect(normalizeFileRefs(input)).toBe('[report.md](/home/daytona/results/report.md)');
   });
 
-  it('strips file:// from image link href', () => {
+  it('unwraps file:// from an image link href', () => {
     const input = '![chart](file:///home/workspace/charts/fig.png)';
-    expect(normalizeFileRefs(input)).toBe('![chart](charts/fig.png)');
+    expect(normalizeFileRefs(input)).toBe('![chart](/home/workspace/charts/fig.png)');
   });
 
   it('does not strip file:// from non-sandbox paths', () => {
@@ -57,29 +61,33 @@ describe('normalizeFileRefs', () => {
     expect(normalizeFileRefs(input)).toBe(input);
   });
 
-  it('strips the sandbox prefix inside an angle-bracketed destination', () => {
-    expect(normalizeFileRefs('[d](<file:///home/workspace/results/Q3 deck.pptx>)')).toBe('[d](<results/Q3 deck.pptx>)');
-    expect(normalizeFileRefs('[d](</home/daytona/results/Q3 deck.pptx>)')).toBe('[d](<results/Q3 deck.pptx>)');
+  it('reaches inside an angle-bracketed destination and keeps the brackets', () => {
+    expect(normalizeFileRefs('[d](<file:///home/workspace/results/Q3 deck.pptx>)'))
+      .toBe('[d](</home/workspace/results/Q3 deck.pptx>)');
   });
 
-  // ── Step 3: /home/(workspace|daytona)/ absolute path stripping
+  // ── A bare sandbox path is left exactly as written ───────────
+  //
+  // Flattening it here left the reference indistinguishable from a relative
+  // one, so a link to `/home/workspace/results/report.md` read from
+  // `docs/index.md` opened `docs/results/report.md` whenever both existed.
 
-  it('strips /home/workspace/ from link href', () => {
+  it('leaves a bare sandbox path alone, so it stays rooted', () => {
     const input = '[report.md](/home/workspace/results/report.md)';
-    expect(normalizeFileRefs(input)).toBe('[report.md](results/report.md)');
+    expect(normalizeFileRefs(input)).toBe(input);
   });
 
-  it('strips /home/daytona/ from link href', () => {
+  it('leaves a bare daytona path alone', () => {
     const input = '[report.md](/home/daytona/results/report.md)';
-    expect(normalizeFileRefs(input)).toBe('[report.md](results/report.md)');
+    expect(normalizeFileRefs(input)).toBe(input);
   });
 
-  it('strips /home/workspace/ from image link', () => {
+  it('leaves a bare sandbox path in an image link alone', () => {
     const input = '![chart](/home/workspace/charts/fig.png)';
-    expect(normalizeFileRefs(input)).toBe('![chart](charts/fig.png)');
+    expect(normalizeFileRefs(input)).toBe(input);
   });
 
-  // ── Step 4: Clean inside __wsref__ paths ─────────────────────
+  // ── Step 3: Clean inside __wsref__ paths ─────────────────────
 
   it('strips file:///home/workspace/ inside __wsref__ path', () => {
     const input = '[report.md](__wsref__/abc-123/file:///home/workspace/results/report.md)';
@@ -100,7 +108,7 @@ describe('normalizeFileRefs', () => {
 
   it('handles backtick + file:// combined', () => {
     const input = '`[report.md](file:///home/workspace/results/report.md)`';
-    expect(normalizeFileRefs(input)).toBe('[report.md](results/report.md)');
+    expect(normalizeFileRefs(input)).toBe('[report.md](/home/workspace/results/report.md)');
   });
 
   it('handles backtick + __wsref__ + file:// combined', () => {
@@ -110,7 +118,7 @@ describe('normalizeFileRefs', () => {
 
   it('handles backtick + absolute path combined', () => {
     const input = '`[report.md](/home/workspace/results/report.md)`';
-    expect(normalizeFileRefs(input)).toBe('[report.md](results/report.md)');
+    expect(normalizeFileRefs(input)).toBe('[report.md](/home/workspace/results/report.md)');
   });
 
   // ── Passthrough / negative cases ─────────────────────────────
@@ -149,7 +157,7 @@ describe('normalizeFileRefs', () => {
     expect(normalizeFileRefs(undefined as unknown as string)).toBe(undefined);
   });
 
-  // ── Step 5: destinations with spaces ─────────────────────────
+  // ── Step 4: destinations with spaces ─────────────────────────
 
   it('wraps a spaced file destination so it still parses as a link', () => {
     expect(normalizeFileRefs('[deck](results/Q3 deck.pptx)')).toBe('[deck](<results/Q3 deck.pptx>)');
@@ -182,7 +190,7 @@ describe('normalizeFileRefs', () => {
     expect(normalizeFileRefs('`x = [m](model.py:42)` then')).toBe('`x = [m](model.py:42)` then');
   });
 
-  // ── Step 6: bare line-suffix destinations ────────────────────
+  // ── Step 5: bare line-suffix destinations ────────────────────
 
   it('anchors a bare name with a line suffix so the URL filter keeps it', () => {
     expect(normalizeFileRefs('[m](model.py:42)')).toBe('[m](./model.py:42)');
@@ -197,6 +205,21 @@ describe('normalizeFileRefs', () => {
     expect(normalizeFileRefs('[m](<my model.py:42>)')).toBe('[m](<./my model.py:42>)');
     expect(normalizeFileRefs('[m](<work/my model.py:42>)')).toBe('[m](<work/my model.py:42>)');
     expect(normalizeFileRefs('[s](<localhost:8000>)')).toBe('[s](<localhost:8000>)');
+  });
+
+  it('anchors a line suffix carrying any of the three title forms', () => {
+    // The title is not part of the destination, so requiring `)` right after
+    // the line number skipped every titled reference and the URL filter read
+    // `model.py:` as a scheme. `turnFiles.ts` already collects these, so the
+    // card appeared while the prose link beside it rendered with no href.
+    expect(normalizeFileRefs('[m](model.py:42 "source")')).toBe('[m](./model.py:42 "source")');
+    expect(normalizeFileRefs("[m](model.py:42 'source')")).toBe("[m](./model.py:42 'source')");
+    expect(normalizeFileRefs('[m](model.py:42 (source))')).toBe('[m](./model.py:42 (source))');
+    expect(normalizeFileRefs('[m](<model.py:42> "source")')).toBe('[m](<./model.py:42> "source")');
+    expect(normalizeFileRefs('[m](<my model.py:42> "source")')).toBe('[m](<./my model.py:42> "source")');
+    // A slash ahead of the colon is already a path, title or not.
+    expect(normalizeFileRefs('[m](work/model.py:42 "source")')).toBe('[m](work/model.py:42 "source")');
+    expect(normalizeFileRefs('[s](localhost:8000 "home")')).toBe('[s](localhost:8000 "home")');
   });
 
   it('leaves URLs, titles and non-file destinations alone', () => {
@@ -223,8 +246,8 @@ describe('normalizeFileRefs', () => {
     const expected = [
       '| File | Description |',
       '|------|-------------|',
-      '| [results/nvda_analysis.md](results/nvda_analysis.md) | Full report |',
-      '| ![chart](work/task/charts/fig.png) | Price chart |',
+      '| [results/nvda_analysis.md](/home/workspace/results/nvda_analysis.md) | Full report |',
+      '| ![chart](/home/workspace/work/task/charts/fig.png) | Price chart |',
     ].join('\n');
     expect(normalizeFileRefs(input)).toBe(expected);
   });
@@ -233,5 +256,18 @@ describe('normalizeFileRefs', () => {
     const input = 'Deliverables:\n`[results/nvda_analysis.md](__wsref__/20cc68e8-d057-41f4-9bb1-57aa8d310704/results/nvda_analysis.md)`';
     const expected = 'Deliverables:\n[results/nvda_analysis.md](__wsref__/20cc68e8-d057-41f4-9bb1-57aa8d310704/results/nvda_analysis.md)';
     expect(normalizeFileRefs(input)).toBe(expected);
+  });
+
+  /**
+   * This runs on every rendered bubble, and each of its five label scans
+   * rescanned the line from every unmatched `[`. At 80k brackets that was ~11s
+   * of frozen main thread; bounded it is ~0.27s. The ceiling is loose on
+   * purpose: the point is the complexity class, not a stopwatch reading.
+   */
+  it('stays fast on a prose line full of unmatched brackets', () => {
+    const input = '['.repeat(80_000);
+    const started = performance.now();
+    expect(normalizeFileRefs(input)).toBe(input);
+    expect(performance.now() - started).toBeLessThan(3_000);
   });
 });

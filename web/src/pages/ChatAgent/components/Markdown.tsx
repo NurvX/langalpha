@@ -12,6 +12,7 @@ import { Copy, Check } from 'lucide-react';
 import { useTheme } from '@/contexts/ThemeContext';
 import WorkspaceImage from './WorkspaceImage';
 import { isFilePath, isImagePath, normalizeFilePath, parseWsPath } from '../utils/filePaths';
+import { parseAgentPath } from '../utils/agentPaths';
 import { normalizeFileRefs } from '../utils/normalizeFileRefs';
 import { splitFileLocation, type OpenFileHandler } from '../utils/fileLocation';
 import { mapOutsideCode, mapOutsideMultilineCode } from '../utils/markdownSegments';
@@ -713,7 +714,7 @@ function Markdown({ content, variant = 'panel', className = '', style, onOpenFil
               <a
                 className="underline hover:opacity-80 transition-opacity cursor-pointer"
                 style={{ color: 'var(--color-accent-primary)' }}
-                onClick={(e: React.MouseEvent) => { e.preventDefault(); onOpenFile(normalizeFilePath(path), wsRef?.workspaceId, location ?? undefined); }}
+                onClick={(e: React.MouseEvent) => { e.preventDefault(); onOpenFile(normalizeFilePath(path), wsRef?.workspaceId, location ?? undefined, parseAgentPath(path).absolute || !!wsRef); }}
               >{linkText}</a>
             );
           }
@@ -749,7 +750,7 @@ function Markdown({ content, variant = 'panel', className = '', style, onOpenFil
             <a
               className="underline hover:opacity-80 transition-opacity cursor-pointer"
               style={{ color: 'var(--color-accent-primary)' }}
-              onClick={(e: React.MouseEvent) => { e.preventDefault(); onOpenFile(normalizeFilePath(path), wsRef?.workspaceId, location ?? undefined); }}
+              onClick={(e: React.MouseEvent) => { e.preventDefault(); onOpenFile(normalizeFilePath(path), wsRef?.workspaceId, location ?? undefined, parseAgentPath(path).absolute || !!wsRef); }}
               {...props}
             >{children}</a>
           );

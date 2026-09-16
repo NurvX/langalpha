@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import { FileText, FileSpreadsheet, Globe, Image, Presentation } from 'lucide-react';
-import { hasLineSuffix } from './fileLocation';
+import { normalizeAgentHref, parseAgentPath } from './agentPaths';
+import { hasLineSuffix, splitFileLocation } from './fileLocation';
 
 /**
  * The kinds of file a person opens to read an answer.
@@ -11,13 +12,24 @@ import { hasLineSuffix } from './fileLocation';
  */
 export type FileKind = 'document' | 'presentation' | 'spreadsheet' | 'page' | 'image';
 
+// Read as a deliverable's kind, which is not the same question as the file
+// tree's type filter (`fileMeta.EXT_TO_TYPE`, which groups by what a reader
+// browses: Docs / Code / Data / Image). A `.csv` is a spreadsheet here and
+// Data there on purpose; keep both in mind when adding an extension.
 const KIND_BY_EXT: Record<string, FileKind> = {
   md: 'document', markdown: 'document', pdf: 'document',
   docx: 'document', doc: 'document', rtf: 'document', odt: 'document',
+  // A plain-text answer is still the answer: a Flash relay hands back
+  // `notes.txt` as readily as `notes.md`. Executable material stays out
+  // (`.py`, `.sh`, `.ipynb`) — that is how the turn got where it went, and a
+  // deck of it buries the two files that are the answer.
+  txt: 'document',
   pptx: 'presentation', ppt: 'presentation', key: 'presentation',
   xlsx: 'spreadsheet', xlsm: 'spreadsheet', xls: 'spreadsheet', csv: 'spreadsheet',
+  tsv: 'spreadsheet', parquet: 'spreadsheet',
   html: 'page', htm: 'page',
-  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', svg: 'image', webp: 'image',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', svg: 'image',
+  webp: 'image', bmp: 'image',
 };
 
 const KIND_ICONS: Record<FileKind, LucideIcon> = {
@@ -28,11 +40,22 @@ const KIND_ICONS: Record<FileKind, LucideIcon> = {
   image: Image,
 };
 
-/** The file's extension in lower case, or '' when the name carries none. */
+/**
+ * The file's extension in lower case, or '' when the name carries none.
+ *
+ * The one extension reader in the app: `fileMeta` and `FileHeaderActions`
+ * re-export it, so a dotfile (`.env` → `env`) and an extensionless name
+ * (`Makefile` → '') read the same everywhere.
+ *
+ * Takes a path, not a link destination. A `#` reaches here as part of the name
+ * (`issue#1.md`), so cutting at one reported no extension and made the file
+ * read as working material with no card and no icon. `isImagePath` splits a
+ * destination's location off first, which is where that rule belongs.
+ */
 export function fileExtension(path: string): string {
   const name = path.split('/').pop() ?? '';
   const dot = name.lastIndexOf('.');
-  return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
 }
 
 /** What kind of deliverable this is, or null when it is working material. */
@@ -49,28 +72,22 @@ export function fileKindIcon(kind: FileKind): LucideIcon {
 const WSREF_PREFIX = '__wsref__/';
 
 /**
- * Parse a __wsref__/{workspaceId}/path reference.
- * Returns { workspaceId, path } or null if not a workspace-qualified path.
- *
- * Expects pre-normalized input (no file:// or /home/workspace/ inside the path).
- * Use normalizeFileRefs() at the content level to clean paths before they reach here.
+ * The workspace a `__wsref__/{workspaceId}/path` reference names, with the
+ * canonical path beside it, or null when the reference names no workspace.
  */
 export function parseWsPath(href: string | undefined): { workspaceId: string; path: string } | null {
-  if (!href || !href.startsWith(WSREF_PREFIX)) return null;
-  const rest = href.slice(WSREF_PREFIX.length);
-  const slashIdx = rest.indexOf('/');
-  if (slashIdx < 1) return null;
-  return {
-    workspaceId: rest.slice(0, slashIdx),
-    path: rest.slice(slashIdx + 1),
-  };
+  if (!href) return null;
+  const { workspaceId, path } = parseAgentPath(href);
+  return workspaceId ? { workspaceId, path } : null;
 }
 
 /**
  * Check if an href looks like a sandbox file path (not an external URL).
  *
- * Expects pre-normalized input (normalizeFileRefs already stripped file://
- * and /home/workspace/ prefixes). Any relative href is a file: the agent has
+ * Expects pre-normalized input: `normalizeFileRefs` has unwrapped `file://`,
+ * but it keeps a `/home/workspace/` root, which is how a reference says it
+ * starts at the workspace rather than beside the file quoting it. Any relative
+ * href is a file: the agent has
  * no other use for one, and a relative link left to the browser opens the app
  * itself in a new tab. The file panel owns resolving it, so a name with
  * an unfamiliar extension or none at all still opens. A root-absolute href
@@ -89,36 +106,15 @@ export function isFilePath(href: string | undefined): boolean {
 }
 
 /**
- * Normalize a file path for API calls: strip __wsref__ prefix, return relative path.
- *
- * Drops a `#fragment` or `?query`, which a link can carry but a file path
- * never does (a literal `#` in a name arrives percent-encoded).
- *
- * Also percent-decodes the path so an LLM-emitted markdown link like
- * `[name](results/%E9%95%BF...md)` reaches the API as raw Unicode and gets
- * encoded exactly once by the HTTP layer. Without this, Axios re-encodes the
- * leading `%` to `%25` and the backend's single `unquote` decodes to a
- * literal `%XX` path that doesn't exist on disk.
- *
- * Expects pre-normalized input (no file:// or /home/workspace/ prefixes).
+ * A markdown destination as the API wants it: workspace-relative, decoded once.
+ * `agentPaths.normalizeAgentHref` owns the rules and documents why.
  */
 export function normalizeFilePath(path: string): string {
-  const ws = parseWsPath(path);
-  const raw = (ws ? ws.path : path).replace(/[?#].*$/, '');
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
+  return normalizeAgentHref(path);
 }
 
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp']);
-
-/**
- * Check if an href points to an image file.
- */
+/** Whether an href points at an image, by the same table the cards read. */
 export function isImagePath(href: string | undefined): boolean {
-  if (!href) return false;
-  const ext = href.split('.').pop()?.split(/[?#]/)[0]?.toLowerCase();
-  return !!ext && IMAGE_EXTS.has(ext);
+  // A destination, so `#L4` and `:42` come off before the name is read.
+  return !!href && fileKind(splitFileLocation(href).path) === 'image';
 }

@@ -76,7 +76,9 @@ const userMsg = (id: string, overrides: Msg = {}): Msg => ({
 });
 
 const write = (order: number, path: string) => ({
-  toolName: 'Write', order, isFailed: false, toolCall: { name: 'Write', args: { file_path: path, content: 'x' } },
+  toolName: 'Write', order, isFailed: false, isComplete: true,
+  toolCallResult: { content: 'ok' },
+  toolCall: { name: 'Write', args: { file_path: path, content: 'x' } },
 });
 
 function renderList(messages: Msg[], actions: MessageActions) {
