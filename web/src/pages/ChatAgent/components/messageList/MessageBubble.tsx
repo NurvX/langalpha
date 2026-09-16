@@ -201,6 +201,106 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
     }).catch(() => {});
   };
 
+  // The footer actions, built once and placed by role. An assistant bubble
+  // shows them on the same line as its Sources pill, above the deliverables, so
+  // the turn still ends on the deck rather than on a row of icons; a user
+  // bubble keeps them underneath, where there is nothing to share a line with.
+  // Always mounted (reserves space), visibility toggled: aria-hidden + inert
+  // keep the buttons out of the a11y tree and tab order while opacity-0 is
+  // hiding them, so screen readers don't announce "Copy, Thumbs up, ..." for
+  // every streaming message.
+  const actionsRow = canShowActions && !isEditing ? (
+  <div
+    aria-hidden={!showActions}
+    inert={!showActions || undefined}
+    className={`flex gap-1 transition-opacity ${
+      showActions
+        ? (isMobile ? 'opacity-70' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100')
+        : 'opacity-0 pointer-events-none'
+    } ${
+      // The top margin belongs to the user placement only: under a bubble the
+      // row needs its own gap, while beside the Sources pill the meta row's
+      // `items-center` is what puts it on the line.
+      isUser ? 'justify-end mt-0.5' : 'justify-start'
+    }`}
+  >
+    {/* User message actions. Steering bubbles get no edit pencil:
+        they're injected mid-turn and have no turn checkpoint of their
+        own, so an edit fork would target the NEXT turn and leave the
+        original steering text in the agent's context. */}
+    {isUser && onEditMessage && !isSteeringUserMessage(message) && (
+      <button
+        onClick={handleStartEdit}
+        className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
+        title={t('chat.actions.editMessage')}
+      >
+        <Pencil className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
+      </button>
+    )}
+
+    {/* Copy — both roles (a user bubble falls back to message.content).
+        Then assistant-only: ThumbUp -> ThumbDown -> Regenerate/Retry */}
+    <button
+      onClick={handleCopy}
+      className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
+      title={copied ? t('chat.actions.copied') : t('chat.actions.copyMessage')}
+    >
+      {copied
+        ? <Check className="h-3.5 w-3.5" style={{ color: 'var(--color-profit)' }} />
+        : <Copy className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
+      }
+    </button>
+    {isAssistant && !(message.error as boolean) && onThumbUp && (
+      <button
+        onClick={handleThumbUpClick}
+        className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
+        title={feedbackRating === 'thumbs_up' ? t('chat.actions.removeRating') : t('chat.actions.goodResponse')}
+      >
+        <ThumbsUp
+          className="h-3.5 w-3.5"
+          fill={feedbackRating === 'thumbs_up' ? 'currentColor' : 'none'}
+          style={{ color: feedbackRating === 'thumbs_up' ? 'var(--color-profit)' : 'var(--color-text-tertiary)' }}
+        />
+      </button>
+    )}
+    {isAssistant && !(message.error as boolean) && onThumbDown && (
+      <button
+        onClick={() => setShowThumbDownModal(true)}
+        className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
+        title={feedbackRating === 'thumbs_down' ? t('chat.actions.feedbackSubmitted') : t('chat.actions.reportIssue')}
+      >
+        <ThumbsDown
+          className="h-3.5 w-3.5"
+          fill={feedbackRating === 'thumbs_down' ? 'currentColor' : 'none'}
+          style={{ color: feedbackRating === 'thumbs_down' ? 'var(--color-loss)' : 'var(--color-text-tertiary)' }}
+        />
+      </button>
+    )}
+    {/* One regenerate per backend turn, on the turn's last bubble —
+        regenerating re-runs the whole turn from its input checkpoint
+        (mid-run steering can't be replayed), so the affordance sits
+        at the end of the full response. */}
+    {isAssistant && !(message.error as boolean) && onRegenerate && isTurnTail && (
+      <button
+        onClick={() => onRegenerate(message.id as string)}
+        className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
+        title={t('chat.actions.regenerate')}
+      >
+        <RefreshCw className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
+      </button>
+    )}
+    {isAssistant && (message.error as boolean) && onRetry && (
+      <button
+        onClick={onRetry}
+        className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
+        title={t('chat.actions.retry')}
+      >
+        <RotateCcw className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
+      </button>
+    )}
+  </div>
+  ) : null;
+
   return (
     <div
       data-message-id={message.id as string}
@@ -384,32 +484,41 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
           })()}
         </div>
 
-        {/* Sources pill -- always-visible row (not the hover-gated footer
-            below). Mounted from the first source onward and only faded in once
-            the turn has finished: a count that climbs mid-stream reads as
-            activity, but unmounting the row until then would hop the whole
-            transcript by a line the moment the turn ends. While faded the row
-            is inert, so the invisible button takes neither a click nor a tab
-            stop. Clicking opens the Sources tab in the right panel. */}
-        {isAssistant && !isSubagentView && sourceCount > 0 && (
-          <div
-            className="flex justify-start mt-1 transition-opacity duration-200"
-            style={{ opacity: isStreaming ? 0 : 1 }}
-            inert={isStreaming}
-          >
-            <button
-              type="button"
-              onClick={() => onOpenSources?.(message.id as string)}
-              className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors"
-              style={{
-                backgroundColor: 'var(--color-bg-elevated)',
-                color: 'var(--color-text-secondary)',
-              }}
-              title={t('chat.sources.title')}
+        {/* The assistant's meta row: what the turn drew on, and what you can do
+            with it, on one line above the deliverables.
+
+            The Sources pill is always visible, while the actions beside it stay
+            hover-gated, so the two keep their own opacity. The pill is mounted
+            from the first source onward and only faded in once the turn has
+            finished: a count that climbs mid-stream reads as activity, but
+            unmounting it until then would hop the whole transcript by a line
+            the moment the turn ends. While faded it is inert, so the invisible
+            button takes neither a click nor a tab stop. Clicking it opens the
+            Sources tab in the right panel. */}
+        {isAssistant && ((sourceCount > 0 && !isSubagentView) || actionsRow) && (
+          <div className="flex items-center gap-2 mt-1">
+            {sourceCount > 0 && !isSubagentView && (
+            <div
+              className="transition-opacity duration-200"
+              style={{ opacity: isStreaming ? 0 : 1 }}
+              inert={isStreaming}
             >
-              <FileSearch className="h-3.5 w-3.5" />
-              {t('chat.sources.pill', { count: sourceCount })}
-            </button>
+              <button
+                type="button"
+                onClick={() => onOpenSources?.(message.id as string)}
+                className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors"
+                style={{
+                  backgroundColor: 'var(--color-bg-elevated)',
+                  color: 'var(--color-text-secondary)',
+                }}
+                title={t('chat.sources.title')}
+              >
+                <FileSearch className="h-3.5 w-3.5" />
+                {t('chat.sources.pill', { count: sourceCount })}
+              </button>
+            </div>
+            )}
+            {actionsRow}
           </div>
         )}
 
@@ -462,98 +571,7 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
         </>
         )}
 
-        {/* Message action buttons -- always mounted (reserves space), visibility toggled.
-            aria-hidden + inert keep the buttons out of the a11y tree and tab order
-            while opacity-0 is hiding them, so screen readers don't announce
-            "Copy, Thumbs up, ..." for every streaming message. */}
-        {canShowActions && !isEditing && (
-          <div
-            aria-hidden={!showActions}
-            inert={!showActions || undefined}
-            className={`flex gap-1 mt-0.5 transition-opacity ${
-              showActions
-                ? (isMobile ? 'opacity-70' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100')
-                : 'opacity-0 pointer-events-none'
-            } ${
-              isUser ? 'justify-end' : 'justify-start'
-            }`}
-          >
-            {/* User message actions. Steering bubbles get no edit pencil:
-                they're injected mid-turn and have no turn checkpoint of their
-                own, so an edit fork would target the NEXT turn and leave the
-                original steering text in the agent's context. */}
-            {isUser && onEditMessage && !isSteeringUserMessage(message) && (
-              <button
-                onClick={handleStartEdit}
-                className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
-                title={t('chat.actions.editMessage')}
-              >
-                <Pencil className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
-              </button>
-            )}
-
-            {/* Copy — both roles (a user bubble falls back to message.content).
-                Then assistant-only: ThumbUp -> ThumbDown -> Regenerate/Retry */}
-            <button
-              onClick={handleCopy}
-              className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
-              title={copied ? t('chat.actions.copied') : t('chat.actions.copyMessage')}
-            >
-              {copied
-                ? <Check className="h-3.5 w-3.5" style={{ color: 'var(--color-profit)' }} />
-                : <Copy className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
-              }
-            </button>
-            {isAssistant && !(message.error as boolean) && onThumbUp && (
-              <button
-                onClick={handleThumbUpClick}
-                className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
-                title={feedbackRating === 'thumbs_up' ? t('chat.actions.removeRating') : t('chat.actions.goodResponse')}
-              >
-                <ThumbsUp
-                  className="h-3.5 w-3.5"
-                  fill={feedbackRating === 'thumbs_up' ? 'currentColor' : 'none'}
-                  style={{ color: feedbackRating === 'thumbs_up' ? 'var(--color-profit)' : 'var(--color-text-tertiary)' }}
-                />
-              </button>
-            )}
-            {isAssistant && !(message.error as boolean) && onThumbDown && (
-              <button
-                onClick={() => setShowThumbDownModal(true)}
-                className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
-                title={feedbackRating === 'thumbs_down' ? t('chat.actions.feedbackSubmitted') : t('chat.actions.reportIssue')}
-              >
-                <ThumbsDown
-                  className="h-3.5 w-3.5"
-                  fill={feedbackRating === 'thumbs_down' ? 'currentColor' : 'none'}
-                  style={{ color: feedbackRating === 'thumbs_down' ? 'var(--color-loss)' : 'var(--color-text-tertiary)' }}
-                />
-              </button>
-            )}
-            {/* One regenerate per backend turn, on the turn's last bubble —
-                regenerating re-runs the whole turn from its input checkpoint
-                (mid-run steering can't be replayed), so the affordance sits
-                at the end of the full response. */}
-            {isAssistant && !(message.error as boolean) && onRegenerate && isTurnTail && (
-              <button
-                onClick={() => onRegenerate(message.id as string)}
-                className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
-                title={t('chat.actions.regenerate')}
-              >
-                <RefreshCw className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
-              </button>
-            )}
-            {isAssistant && (message.error as boolean) && onRetry && (
-              <button
-                onClick={onRetry}
-                className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
-                title={t('chat.actions.retry')}
-              >
-                <RotateCcw className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
-              </button>
-            )}
-          </div>
-        )}
+        {isUser && actionsRow}
 
         {/* ThumbDown feedback modal */}
         {showThumbDownModal && (
