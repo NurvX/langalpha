@@ -14,6 +14,7 @@ Design goals:
 Endpoints:
 - GET    /api/v1/workspaces/{workspace_id}/files
 - GET    /api/v1/workspaces/{workspace_id}/files/read
+- POST   /api/v1/workspaces/{workspace_id}/files/resolve
 - PUT    /api/v1/workspaces/{workspace_id}/files/write
 - GET    /api/v1/workspaces/{workspace_id}/files/download
 - POST   /api/v1/workspaces/{workspace_id}/files/upload

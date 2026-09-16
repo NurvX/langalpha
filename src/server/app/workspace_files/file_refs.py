@@ -11,23 +11,30 @@ from __future__ import annotations
 
 import posixpath
 import re
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from ._shared import _is_always_hidden_path, _is_hidden_path, _is_system_path
 
 _GLOB_SPECIAL_RE = re.compile(r"([*?\[])")
 
+# A reference is a workspace path, and the longest a filesystem will hold is
+# well under this. The bound is on the item because the shared-thread route is
+# the one body-accepting endpoint on the unauthenticated router: FastAPI parses
+# the body while solving dependencies, before the share token is looked up, so
+# a list capped only in length still buffers whatever each entry weighs.
+_RefPath = Annotated[str, StringConstraints(max_length=1024)]
+
 
 class ResolveFileRefRequest(BaseModel):
-    candidates: list[str] = Field(
+    candidates: list[_RefPath] = Field(
         ...,
         min_length=1,
         max_length=4,
         description="Readings of one reference, most likely first. All share a file name.",
     )
-    recent_writes: list[str] = Field(
+    recent_writes: list[_RefPath] = Field(
         default_factory=list,
         max_length=200,
         description="Paths this thread wrote or edited, newest first; break ties between namesakes.",
@@ -35,7 +42,12 @@ class ResolveFileRefRequest(BaseModel):
 
 
 def clean_path(value: str, work_dir: str) -> str | None:
-    """A workspace-relative path, or None for an empty or traversing one."""
+    """A workspace-relative path, or None for one that names no workspace file.
+
+    Four call sites read the result as workspace-relative, so a path still
+    absolute after the working directory comes off is refused here rather than
+    handed on to a glob that would search for it under the workspace anyway.
+    """
     path = (value or "").strip().replace("\\", "/")
     prefix = work_dir.rstrip("/") + "/"
     if path.startswith(prefix):
@@ -43,7 +55,7 @@ def clean_path(value: str, work_dir: str) -> str | None:
     while path.startswith("./"):
         path = path[2:]
     path = path.rstrip("/")
-    if not path or ".." in path.split("/"):
+    if not path or path.startswith("/") or ".." in path.split("/"):
         return None
     return path
 
