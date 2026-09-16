@@ -5,10 +5,6 @@
  * prose, or only inside a tool call nobody expands. The deck collects them
  * where the reader finishes reading, and collapses to a single card carrying
  * the count, so a turn that wrote six files still ends on one object.
- *
- * One rule holds in every state: the stripe opens the file it names. Fanning is
- * the count chip's job, so a collapsed deck never swallows a click meant for
- * the file on its face.
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -141,23 +137,20 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile }: TurnFileCar
                   type="button"
                   className="turn-file-hit"
                   tabIndex={interactive ? undefined : -1}
-                  aria-label={t('chat.turnFiles.openTitle', { path: file.path })}
-                  title={file.path}
-                  onClick={open}
+                  aria-label={summarizing
+                    ? t('chat.turnFiles.expand', { count: n })
+                    : t('chat.turnFiles.openTitle', { path: file.path })}
+                  title={summarizing ? undefined : file.path}
+                  onClick={() => (summarizing ? setFanned(true) : open())}
                 >
                   <span className="turn-file-name">{name}</span>
                   <span className="turn-file-meta">{kindLine}</span>
                 </button>
                 {summarizing ? (
-                  <button
-                    type="button"
-                    className="turn-file-count"
-                    aria-label={t('chat.turnFiles.expand', { count: n })}
-                    onClick={() => setFanned(true)}
-                  >
+                  <span className="turn-file-count" aria-hidden="true">
                     <span className="turn-file-badge">{n}</span>
                     <ChevronDown className="h-4 w-4" />
-                  </button>
+                  </span>
                 ) : (
                   <span className="turn-file-actions">
                     <span className="turn-file-open" aria-hidden="true">

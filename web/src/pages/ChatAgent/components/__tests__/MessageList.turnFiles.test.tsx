@@ -4,9 +4,8 @@
  * A steered turn paints several assistant bubbles and a turn can still be
  * streaming, so the deck has to pick a single settled tail and gather the whole
  * turn's files onto it, including ones named by a bubble that never reaches the
- * screen. Collapsed it shows one card: the stripe opens the file on its face
- * and the count chip fans the rest out, so neither click can be mistaken for
- * the other.
+ * screen. Collapsed it shows one card, so opening the second file is a fan
+ * then a click, the same two steps the sources deck takes.
  */
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
@@ -97,10 +96,6 @@ const names = (container: HTMLElement) =>
 const stripe = (container: HTMLElement, i = 0) =>
   container.querySelectorAll('.turn-file-card')[i].querySelector('.turn-file-hit') as HTMLElement;
 
-/** The count chip on a collapsed deck, the only thing that fans it. */
-const chip = (container: HTMLElement) =>
-  container.querySelector('.turn-file-count') as HTMLElement;
-
 describe('turn deliverables deck', () => {
   it('opens a lone file on the first click, in the workspace the reply named', () => {
     const onOpenFile = vi.fn();
@@ -114,7 +109,7 @@ describe('turn deliverables deck', () => {
     expect(onOpenFile).toHaveBeenCalledWith('results/review.md', 'ws-7', { line: 12 });
   });
 
-  it('holds several files behind one card, and the chip is what fans them out', () => {
+  it('holds several files behind one card until the deck is fanned', () => {
     const onOpenFile = vi.fn();
     const { container } = renderList(
       [
@@ -129,17 +124,13 @@ describe('turn deliverables deck', () => {
     expect(deck.getAttribute('data-fanned')).toBe('false');
     expect(names(container)).toEqual(['review.md', '']);
 
-    // The stripe means the file on its face, even with a deck behind it.
     fireEvent.click(stripe(container));
-    expect(onOpenFile).toHaveBeenCalledWith('results/review.md', undefined, undefined);
-    expect(deck.getAttribute('data-fanned')).toBe('false');
-
-    fireEvent.click(chip(container));
+    expect(onOpenFile).not.toHaveBeenCalled();
     expect(deck.getAttribute('data-fanned')).toBe('true');
     expect(names(container)).toEqual(['review.md', 'deck.pptx']);
 
     fireEvent.click(stripe(container, 1));
-    expect(onOpenFile).toHaveBeenLastCalledWith('results/deck.pptx', undefined, undefined);
+    expect(onOpenFile).toHaveBeenCalledWith('results/deck.pptx', undefined, undefined);
   });
 
   it('gathers the whole turn onto its last bubble and leaves the earlier one bare', () => {
@@ -158,7 +149,7 @@ describe('turn deliverables deck', () => {
     expect(withDeck).toHaveLength(1);
     expect(withDeck[0].getAttribute('data-message-id')).toBe('a0-cont');
 
-    fireEvent.click(chip(container));
+    fireEvent.click(stripe(container));
     expect(names(container)).toEqual(['report.md', 'prices.csv']);
   });
 

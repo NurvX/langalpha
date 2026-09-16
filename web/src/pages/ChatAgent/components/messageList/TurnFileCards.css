@@ -180,31 +180,12 @@
   box-shadow: 0 0 0 2px var(--color-accent-overlay);
 }
 
-/* Fanning the deck is this chip's job, not the stripe's: the stripe behind it
-   opens the file on its face, so the chip has to sit above that hit target. */
 .turn-file-count {
-  position: relative;
-  z-index: 1;
   display: inline-flex;
   align-items: center;
   gap: 5px;
   flex-shrink: 0;
-  padding: 4px 6px 4px 4px;
-  border: none;
-  border-radius: 8px;
-  background: none;
   color: var(--color-text-tertiary);
-  font-family: inherit;
-  cursor: pointer;
-  outline: none;
-  transition: color 140ms ease, background 140ms ease;
-}
-.turn-file-count:hover {
-  background: var(--color-bg-card);
-  color: var(--color-text-secondary);
-}
-.turn-file-count:focus-visible {
-  box-shadow: 0 0 0 2px var(--color-accent-overlay);
 }
 .turn-file-badge {
   display: inline-flex;
