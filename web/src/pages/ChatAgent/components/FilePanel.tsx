@@ -449,6 +449,13 @@ function FilePanel({
     const current = () => seq === openSeqRef.current;
     const ext = getFileExtension(filePath);
     setFileError(null);
+    // Measured on the file being replaced: only the text branch writes it, so
+    // leaving it set carries one file's truncation onto the next one's name.
+    setFileTruncated(false);
+    // The settings pane replaces the content wrapper the viewer scrolls, so a
+    // file opened behind it loads into no container and the line or heading it
+    // named is never found. `landOnSearch` already clears it for the same reason.
+    setShowSettings(false);
     resetEdit();
 
     if (DOWNLOAD_ONLY_EXTENSIONS.has(ext)) {
@@ -655,8 +662,15 @@ function FilePanel({
   const handleDownloadSelected = canDownload
     ? () => {
         if (!selectedFile) return;
+        // A save pulls the whole body before the anchor click, and nothing stops
+        // the reader opening another file meanwhile. The token the read path
+        // already uses says whether the panel has moved on, so a late rejection
+        // does not replace the file now on screen with this one's error. Starting
+        // a save is not an open, so the token is read here rather than bumped.
+        const seq = openSeqRef.current;
         triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => {
           console.error('[FilePanel] Download failed:', err);
+          if (seq !== openSeqRef.current) return;
           setFileError(categorizeFileError(err, wsData?.status));
         });
       }

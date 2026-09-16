@@ -201,4 +201,57 @@ describe('FilePanel reference opens', () => {
     expect(await clickFolder('rooted-folder'))
       .toHaveBeenCalledWith('results/', 'ws', undefined);
   });
+
+  it('drops a save that fails after the reader has opened another file', async () => {
+    // A save reads the whole body before the anchor click and the client sets
+    // no timeout, so the window is open for as long as the request hangs.
+    // Opening another file clears `fileError` on the way in and nothing clears
+    // it again, so an unguarded rejection replaced the file on screen with the
+    // previous one's error, and `not_found` renders without a Retry button.
+    const files = ['data.parquet', 'notes.md'];
+    let failDownload: (err: unknown) => void = () => {};
+    (api.triggerFileDownload as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((_resolve, reject) => { failDownload = reject; }),
+    );
+
+    const { rerender } = renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={files} targetFile="data.parquet" />,
+    );
+    fireEvent.click(await screen.findByText('Download instead'));
+
+    rerender(<FilePanel workspaceId="ws" onClose={() => {}} files={files} targetFile="notes.md" />);
+    await screen.findByText('My private notes body.');
+
+    await act(async () => {
+      failDownload({ response: { status: 404, data: { detail: 'File not found' } } });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(screen.getByText('My private notes body.')).toBeTruthy();
+    expect(screen.queryByText('File not found')).toBeNull();
+    expect(screen.queryByText('Cannot preview this file')).toBeNull();
+  });
+
+  it('still reports a save that fails while its own file is on screen', async () => {
+    // The control for the guard above: the reader has not moved, so the failure
+    // belongs to the file being looked at and is the one thing that tells them
+    // the download they asked for did not happen.
+    const files = ['data.parquet', 'notes.md'];
+    let failDownload: (err: unknown) => void = () => {};
+    (api.triggerFileDownload as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((_resolve, reject) => { failDownload = reject; }),
+    );
+
+    renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={files} targetFile="data.parquet" />,
+    );
+    fireEvent.click(await screen.findByText('Download instead'));
+
+    await act(async () => {
+      failDownload({ response: { status: 404, data: { detail: 'File not found' } } });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(await screen.findByText('File not found')).toBeTruthy();
+  });
 });

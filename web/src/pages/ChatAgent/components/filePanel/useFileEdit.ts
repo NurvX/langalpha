@@ -55,6 +55,9 @@ export function useFileEdit({ workspaceId, selectedFile, fileContent, setFileCon
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: string } }; message?: string };
       console.error('[FilePanel] Failed to fetch full file for editing:', err);
+      // The read that failed is for a file the panel has already left, so its
+      // error would otherwise appear under the name now on screen.
+      if (selectedFileRef.current !== selectedFile) return;
       setSaveError(e?.response?.data?.detail || e?.message || t('filePanel.loadEditFailed'));
     }
   }, [selectedFile, workspaceId, readFileFullFn, setFileContent, t]);
@@ -70,6 +73,10 @@ export function useFileEdit({ workspaceId, selectedFile, fileContent, setFileCon
     setSaveError(null);
     try {
       await writeFileFn(workspaceId, selectedFile, editContent);
+      // Another file opened while the write was in flight, the same guard the
+      // full read takes above. Without it this file's text lands in the panel
+      // under the other one's name, and feeds its line and heading lookup.
+      if (selectedFileRef.current !== selectedFile) return;
       setFileContent(editContent);
       setIsEditing(false);
       setEditContent(null);
@@ -78,6 +85,7 @@ export function useFileEdit({ workspaceId, selectedFile, fileContent, setFileCon
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: string } }; message?: string };
       console.error('[FilePanel] Save failed:', err);
+      if (selectedFileRef.current !== selectedFile) return;
       setSaveError(e?.response?.data?.detail || e?.message || t('filePanel.saveFailed'));
     } finally {
       setIsSaving(false);
