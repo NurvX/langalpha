@@ -225,6 +225,39 @@ describe('turn deliverables deck', () => {
     expect(items.map((el) => el.textContent)).toEqual(['chat.turnFiles.open']);
   });
 
+  /**
+   * The deck owns no scroll container and must not take one. Walking up for one
+   * lands on the transcript's content column, which reports a scrollable
+   * `overflow-y` only because CSS resolves it that way when `overflow-x` is
+   * hidden, and which never scrolls; and the host re-asserts its own scroll
+   * position on every growth frame of the fan. So unfolding asks, and the host
+   * is the one that moves.
+   */
+  it('asks the host to reveal the deck it just unfolded', () => {
+    const onRevealFiles = vi.fn();
+    const { container } = renderList(
+      [userMsg('u0'), assistant('a0', 'Wrote [the review](results/review.md) and [the deck](results/deck.pptx).')],
+      { onOpenFile: vi.fn(), onRevealFiles },
+    );
+
+    expect(onRevealFiles).not.toHaveBeenCalled();
+    fireEvent.click(stripe(container));
+    expect(onRevealFiles).toHaveBeenCalledWith('a0');
+  });
+
+  it('asks for nothing when the click opens a file instead of unfolding', () => {
+    const onRevealFiles = vi.fn();
+    const onOpenFile = vi.fn();
+    const { container } = renderList(
+      [userMsg('u0'), assistant('a0', 'Built [the review](results/review.md).')],
+      { onOpenFile, onRevealFiles },
+    );
+
+    fireEvent.click(stripe(container));
+    expect(onOpenFile).toHaveBeenCalled();
+    expect(onRevealFiles).not.toHaveBeenCalled();
+  });
+
   it('shows nothing for a turn whose only file is an image the reply already drew', () => {
     const { container } = renderList(
       [userMsg('u0'), assistant('a0', 'Here it is: ![chart](results/chart.png)', { toolCallProcesses: { w: write(0, 'results/chart.png') } })],

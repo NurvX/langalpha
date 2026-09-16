@@ -386,6 +386,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     isSubagentNearBottomRef,
     restoredForThreadRef,
     pinToMessage,
+    revealFiles,
     pinTargetRef,
   } = scroll;
   useTurnEndScroll(scroll, { messages, isStreaming, isActiveRef, turnEndScroll: readTurnEndScroll(preferences) });
@@ -876,6 +877,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
 
   const stableOpenFile = useStableHandler(handleOpenFileFromChat);
   const stableDownloadFile = useStableHandler(handleDownloadFileFromChat);
+  const stableRevealFiles = useStableHandler(revealFiles);
   const stableOpenSources = useStableHandler(handleOpenSourcesFromChat);
   const stableToolCallDetail = useStableHandler(handleToolCallDetailClick);
   const stableOpenSubagentTask = useStableHandler(handleOpenSubagentTask);
@@ -914,6 +916,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const messageActions = useMemo<MessageActions>(() => ({
     onOpenFile: stableOpenFile,
     onDownloadFile: stableDownloadFile,
+    onRevealFiles: stableRevealFiles,
     onOpenSources: stableOpenSources,
     onToolCallDetailClick: stableToolCallDetail,
     onOpenSubagentTask: stableOpenSubagentTask,
@@ -941,7 +944,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     onReportWithAgent: stableReportWithAgent,
     onWidgetSendPrompt: stableSendMessage,
   }), [
-    stableOpenFile, stableDownloadFile, stableOpenSources, stableToolCallDetail,
+    stableOpenFile, stableDownloadFile, stableRevealFiles, stableOpenSources, stableToolCallDetail,
     stableOpenSubagentTask, stableApprovePlan, stableRejectPlan, stablePlanDetail,
     stableAnswerQuestion, stableSkipQuestion, stableApproveCreateWorkspace,
     stableRejectCreateWorkspace, stableApproveStartQuestion, stableRejectStartQuestion,
@@ -954,6 +957,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // The subagent transcript is a DIFFERENT surface: its cards belong to a task,
   // not to the main thread's turn, so the main thread's approve/reject/edit
   // handlers must not be reachable from it. Navigation only.
+  // No onRevealFiles: it moves the main transcript, and the settle-aware
+  // observer that follows an unfolding deck is only attached there.
   const subagentMessageActions = useMemo<MessageActions>(() => ({
     onOpenFile: stableOpenFile,
     onDownloadFile: stableDownloadFile,

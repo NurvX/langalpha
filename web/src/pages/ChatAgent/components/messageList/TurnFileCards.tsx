@@ -25,14 +25,20 @@ const CARD_HEIGHT = 68;
 const CARD_GAP = 8;
 const PEEK_STEP = 6;
 const MAX_PEEK_LAYERS = 2;
-
 interface TurnFileCardsProps {
   files: TurnFile[];
   onOpenFile: OpenFileHandler;
   onDownloadFile?: (path: string, workspaceId?: string) => void;
+  /** Asks the host to bring the unfolded deck into view. Walking up to a scroll
+   *  container and moving it does not work here: the nearest ancestor reporting
+   *  a scrollable `overflow-y` is the transcript's content column, which CSS
+   *  resolves to `auto` only because its `overflow-x` is hidden and which never
+   *  scrolls; and the host re-asserts its own scroll position on every growth
+   *  frame of the fan. Only the host can do this. */
+  onReveal?: () => void;
 }
 
-export function TurnFileCards({ files, onOpenFile, onDownloadFile }: TurnFileCardsProps): React.ReactElement | null {
+export function TurnFileCards({ files, onOpenFile, onDownloadFile, onReveal }: TurnFileCardsProps): React.ReactElement | null {
   const { t } = useTranslation();
   const [fanned, setFanned] = useState(false);
   // A card's menu portals outside the deck, so an open menu suspends the
@@ -70,12 +76,19 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile }: TurnFileCar
     };
   }, [fanned, menuOpen]);
 
-  if (n === 0) return null;
+  // Unfolding is two things: the deck opens, and the transcript makes room for
+  // it. The second is the host's to do, so it is asked in the same breath.
+  const fan = () => {
+    setFanned(true);
+    onReveal?.();
+  };
 
   const peekLayers = Math.min(n - 1, MAX_PEEK_LAYERS);
   const stackHeight = fanned
     ? n * (CARD_HEIGHT + CARD_GAP) - CARD_GAP
     : CARD_HEIGHT + peekLayers * PEEK_STEP;
+
+  if (n === 0) return null;
 
   return (
     <div
@@ -144,7 +157,7 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile }: TurnFileCar
                     ? t('chat.turnFiles.expand', { count: n })
                     : t('chat.turnFiles.openTitle', { path: file.path })}
                   title={summarizing ? undefined : file.path}
-                  onClick={() => (summarizing ? setFanned(true) : open())}
+                  onClick={() => (summarizing ? fan() : open())}
                 >
                   <span className="turn-file-name">{name}</span>
                   <span className="turn-file-meta">{kindLine}</span>
