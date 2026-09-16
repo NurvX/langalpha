@@ -13,6 +13,9 @@ interface BaseProps {
   onOpenChange: (open: boolean) => void;
   title: string;
   actions: HtmlActions;
+  /** Whether the viewer may save the bytes. A PDF export saves them too, so
+   *  both go together and `HtmlActionBar` drops the menu that held them. */
+  canDownload?: boolean;
 }
 
 interface WidgetVariant extends BaseProps {
@@ -41,7 +44,7 @@ type HtmlFullscreenModalProps = WidgetVariant | FileVariant;
  * files or a widget-fullscreen srcDoc iframe for widgets.
  */
 export default function HtmlFullscreenModal(props: HtmlFullscreenModalProps) {
-  const { open, onOpenChange, title, actions } = props;
+  const { open, onOpenChange, title, actions, canDownload = true } = props;
   const { t } = useTranslation();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { pushTheme } = useHtmlSandbox({ iframeRef, autoHeight: false });
@@ -74,8 +77,8 @@ export default function HtmlFullscreenModal(props: HtmlFullscreenModalProps) {
                 the canonical close, so a second one would overlap it. */}
             <HtmlActionBar
               onOpenInNewTab={openInNewTab}
-              onDownload={actions.downloadHtml}
-              onExportPdf={actions.exportPdf}
+              onDownload={canDownload ? actions.downloadHtml : undefined}
+              onExportPdf={canDownload ? actions.exportPdf : undefined}
             />
           </div>
           {props.variant === 'file' ? (

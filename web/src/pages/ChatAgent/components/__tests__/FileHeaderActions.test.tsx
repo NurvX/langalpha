@@ -308,6 +308,38 @@ describe('FileHeaderActions', () => {
     ).not.toBeInTheDocument();
   });
 
+  // A copy-link share grants allow_files without allow_download, and the
+  // download endpoint refuses what allow_files alone opened. Every item behind
+  // this trigger saves a file, so the trigger goes with them rather than
+  // standing over an empty menu.
+  it.each([
+    ['markdown', 'report.md', 'text/markdown'],
+    ['html', 'report.html', 'text/html'],
+    ['text', 'data.txt', 'text/plain'],
+    ['binary', 'chart.png', 'image/png'],
+  ])('hides the whole download menu for a %s file when the share forbids saving', (_kind, file, mime) => {
+    render(
+      <FileHeaderActions
+        {...defaultProps}
+        selectedFile={file}
+        fileMime={mime}
+        canDownload={false}
+      />,
+    );
+    expect(screen.queryByTestId('dropdown-menu')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('filePanel.downloadOptions')).not.toBeInTheDocument();
+    expect(screen.queryByText('filePanel.download')).not.toBeInTheDocument();
+    expect(screen.queryByText('filePanel.downloadAsPdf')).not.toBeInTheDocument();
+    expect(screen.queryByText('filePanel.saveAsPdf')).not.toBeInTheDocument();
+    // The edit affordance is a separate permission and is not swept up.
+    expect(screen.getByTitle('filePanel.editFile')).toBeInTheDocument();
+  });
+
+  it('keeps the download menu when the prop is omitted', () => {
+    render(<FileHeaderActions {...defaultProps} />);
+    expect(screen.getByTestId('dropdown-menu')).toBeInTheDocument();
+  });
+
   it('does not render download dropdown when isEditing is true', () => {
     render(<FileHeaderActions {...defaultProps} isEditing={true} />);
     expect(screen.queryByText('filePanel.downloadAsPdf')).not.toBeInTheDocument();

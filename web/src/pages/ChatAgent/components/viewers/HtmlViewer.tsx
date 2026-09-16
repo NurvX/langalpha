@@ -18,7 +18,9 @@ interface HtmlViewerProps {
   /** Path within the workspace, e.g. "results/report.html". */
   filePath: string;
   /** Download the server's original bytes for this file. */
-  onTriggerDownload: () => void;
+  /** Omitted where the viewer may not save the bytes, which drops the save
+   *  affordances in the fullscreen toolbar along with it. */
+  onTriggerDownload?: () => void;
   /** Override the served URL (e.g. the public share serve URL). When set, the
    *  preview iframe and HTML actions point here instead of the wsfiles route. */
   servedUrlOverride?: string;
@@ -80,7 +82,7 @@ export default function HtmlViewer({
     mode: 'file',
     workspaceId,
     filePath,
-    triggerDownload: () => Promise.resolve(onTriggerDownload()),
+    triggerDownload: onTriggerDownload && (() => Promise.resolve(onTriggerDownload())),
     servedUrl: servedUrlPlain,
   });
 
@@ -152,6 +154,7 @@ export default function HtmlViewer({
           filePath={filePath}
           servedUrl={servedUrlOverride}
           actions={actions}
+          canDownload={!!onTriggerDownload}
         />
       )}
       {directLinkDialog}

@@ -350,7 +350,7 @@ export default function SharedChatView() {
   // Permissions
   const permissions = (metadata?.permissions || {}) as Record<string, unknown>;
   const canBrowseFiles = permissions.allow_files === true;
-  const _canDownload = permissions.allow_download === true;
+  const canDownload = permissions.allow_download === true;
 
   // File panel handlers
   const handleToggleFilePanel = useCallback(async () => {
@@ -419,7 +419,17 @@ export default function SharedChatView() {
   const readOnlyActions = useMemo<MessageActions>(() => ({
     ...READ_ONLY_MESSAGE_ACTIONS,
     onOpenFile: handleOpenFile,
-  }), [handleOpenFile]);
+    // A copy-link share grants allow_files without allow_download, so the
+    // deliverable card offers Download only where the share actually permits
+    // saving the bytes.
+    onDownloadFile: canDownload
+      ? (path: string) => {
+          downloadSharedFileAs(shareToken!, path, 'download').catch((err: unknown) => {
+            console.error('[SharedChatView] Download failed:', err);
+          });
+        }
+      : undefined,
+  }), [handleOpenFile, canDownload, shareToken]);
 
   // Deep link: `?file=<path>` opens that report directly once metadata + file
   // permission are known. One-shot — the share-link target from §1.3b.
@@ -620,6 +630,7 @@ export default function SharedChatView() {
           <div className="flex-shrink-0" style={{ width: rightPanelWidth }}>
             <FilePanel
               readOnly
+              canDownload={canDownload}
               workspaceId=""
               apiAdapter={fileApiAdapter}
               onClose={() => setShowFilePanel(false)}

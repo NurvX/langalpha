@@ -24,10 +24,6 @@
   border-radius: 12px;
   background: var(--color-bg-card);
   color: var(--color-text-primary);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  outline: none;
   transition:
     transform 260ms cubic-bezier(0.16, 1, 0.3, 1),
     opacity 260ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -43,12 +39,15 @@
   .turn-file-card:hover .turn-file-sheet {
     transform: translate(-5px, 4px) rotate(-7deg);
   }
-  .turn-file-card:hover .turn-file-open {
+  .turn-file-card:hover .turn-file-open,
+  .turn-file-card:hover .turn-file-more {
     color: var(--color-text-secondary);
     border-color: var(--color-border-default);
   }
 }
-.turn-file-card:focus-visible {
+/* The ring follows the button the key actually reached: the stripe lights the
+   whole card, the caret only itself. */
+.turn-file-card:has(.turn-file-hit:focus-visible) {
   box-shadow: 0 0 0 2px var(--color-accent-overlay);
 }
 
@@ -93,12 +92,29 @@
   color: var(--color-text-tertiary);
 }
 
-.turn-file-info {
+/* The stripe: a real button carrying the name, stretched by its own ::after
+   over the whole card so clicking anywhere but the caret opens the file. */
+.turn-file-hit {
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 2px;
   min-width: 0;
   flex: 1;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+}
+.turn-file-hit::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
 }
 .turn-file-name {
   font-size: 0.875rem;
@@ -117,18 +133,51 @@
   text-overflow: ellipsis;
 }
 
-/* The way in, always visible: the card reads as a door rather than a row. */
+/* The way in, always visible: the card reads as a door rather than a row. The
+   Open half is inert on purpose, because the stripe behind it already opens the
+   file; only the caret takes a click of its own. */
+.turn-file-actions {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  pointer-events: none;
+}
 .turn-file-open {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0;
   padding: 5px 11px;
   border: 1px solid var(--color-border-muted);
-  border-radius: 8px;
+  border-right: none;
+  border-radius: 8px 0 0 8px;
   font-size: 0.75rem;
   color: var(--color-text-tertiary);
   transition: color 140ms ease, border-color 140ms ease;
+}
+.turn-file-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  padding: 0;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 0 8px 8px 0;
+  background: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  pointer-events: auto;
+  outline: none;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+.turn-file-more:hover,
+.turn-file-more[data-state='open'] {
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+}
+.turn-file-more:focus-visible {
+  box-shadow: 0 0 0 2px var(--color-accent-overlay);
 }
 
 .turn-file-count {

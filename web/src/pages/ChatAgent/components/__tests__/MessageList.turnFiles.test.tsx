@@ -9,7 +9,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { renderWithProviders } from '@/test/utils';
 import MessageList from '../MessageList';
@@ -91,8 +91,10 @@ const names = (container: HTMLElement) =>
   Array.from(container.querySelectorAll('.turn-file-card'))
     .map((el) => el.querySelector('.turn-file-name')?.textContent ?? '');
 
-const front = (container: HTMLElement) =>
-  container.querySelector('.turn-file-card') as HTMLElement;
+/** The stripe, which is the card's primary target: the whole row opens the
+ *  file, so a test clicks it rather than the Open pill beside it. */
+const stripe = (container: HTMLElement, i = 0) =>
+  container.querySelectorAll('.turn-file-card')[i].querySelector('.turn-file-hit') as HTMLElement;
 
 describe('turn deliverables deck', () => {
   it('opens a lone file on the first click, in the workspace the reply named', () => {
@@ -103,7 +105,7 @@ describe('turn deliverables deck', () => {
     );
 
     expect(names(container)).toEqual(['review.md']);
-    fireEvent.click(front(container));
+    fireEvent.click(stripe(container));
     expect(onOpenFile).toHaveBeenCalledWith('results/review.md', 'ws-7', { line: 12 });
   });
 
@@ -122,12 +124,12 @@ describe('turn deliverables deck', () => {
     expect(deck.getAttribute('data-fanned')).toBe('false');
     expect(names(container)).toEqual(['review.md', '']);
 
-    fireEvent.click(front(container));
+    fireEvent.click(stripe(container));
     expect(onOpenFile).not.toHaveBeenCalled();
     expect(deck.getAttribute('data-fanned')).toBe('true');
     expect(names(container)).toEqual(['review.md', 'deck.pptx']);
 
-    fireEvent.click(container.querySelectorAll('.turn-file-card')[1]);
+    fireEvent.click(stripe(container, 1));
     expect(onOpenFile).toHaveBeenCalledWith('results/deck.pptx', undefined, undefined);
   });
 
@@ -147,7 +149,7 @@ describe('turn deliverables deck', () => {
     expect(withDeck).toHaveLength(1);
     expect(withDeck[0].getAttribute('data-message-id')).toBe('a0-cont');
 
-    fireEvent.click(front(container));
+    fireEvent.click(stripe(container));
     expect(names(container)).toEqual(['report.md', 'prices.csv']);
   });
 
@@ -170,6 +172,37 @@ describe('turn deliverables deck', () => {
       { onOpenFile: vi.fn() },
     );
     expect(container.querySelector('[data-testid="turn-files"]')).toBeNull();
+  });
+
+  it('offers Download beside Open, and only where the host permits saving', async () => {
+    const onDownloadFile = vi.fn();
+    const { container } = renderList(
+      [userMsg('u0'), assistant('a0', 'Built [the review](results/review.md).')],
+      { onOpenFile: vi.fn(), onDownloadFile },
+    );
+
+    fireEvent.pointerDown(
+      container.querySelector('.turn-file-more') as HTMLElement,
+      { button: 0, ctrlKey: false },
+    );
+    const items = await screen.findAllByRole('menuitem');
+    expect(items.map((el) => el.textContent)).toEqual(['chat.turnFiles.open', 'chat.turnFiles.download']);
+    fireEvent.click(items[1]);
+    expect(onDownloadFile).toHaveBeenCalledWith('results/review.md', undefined);
+  });
+
+  it('leaves the menu open-only when the host grants no download', async () => {
+    const { container } = renderList(
+      [userMsg('u0'), assistant('a0', 'Built [the review](results/review.md).')],
+      { onOpenFile: vi.fn() },
+    );
+
+    fireEvent.pointerDown(
+      container.querySelector('.turn-file-more') as HTMLElement,
+      { button: 0, ctrlKey: false },
+    );
+    const items = await screen.findAllByRole('menuitem');
+    expect(items.map((el) => el.textContent)).toEqual(['chat.turnFiles.open']);
   });
 
   it('shows nothing for a turn whose only file is an image the reply already drew', () => {

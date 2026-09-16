@@ -69,6 +69,10 @@ interface FilePanelProps {
   filesError?: string | null;
   onRefreshFiles?: () => void;
   readOnly?: boolean;
+  /** Whether this viewer may save a file's bytes. A copy-link share grants
+   *  `allow_files` without `allow_download`, and the download endpoint refuses
+   *  what `allow_files` alone opened, so an offered save fails after the click. */
+  canDownload?: boolean;
   /** Lock to a single file — back button closes the panel instead of returning to the file tree. */
   singleFileMode?: boolean;
   apiAdapter?: ApiAdapter | null;
@@ -101,6 +105,7 @@ function FilePanel({
   filesError = null,
   onRefreshFiles,
   readOnly = false,
+  canDownload = true,
   singleFileMode = false,
   apiAdapter = null,
   onAddContext = null,
@@ -621,13 +626,31 @@ function FilePanel({
     if (selectedFile) fileFocus.focusAt(selectedFile, parseFragment(fragment));
   });
 
-  const handleDownloadSelected = () => {
-    if (!selectedFile) return;
-    triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => {
-      console.error('[FilePanel] Download failed:', err);
-      setFileError(categorizeFileError(err, wsData?.status));
-    });
-  };
+  // Every save this panel offers comes from one of the two handlers below, and
+  // both are undefined when the share forbids saving. Reading the permission
+  // once here is what stops the next affordance from shipping without it: the
+  // menu, the binary-file error, four viewer error boundaries and the HTML
+  // fullscreen bar were nine copies of the same call before.
+  const handleDownloadSelected = canDownload
+    ? () => {
+        if (!selectedFile) return;
+        triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => {
+          console.error('[FilePanel] Download failed:', err);
+          setFileError(categorizeFileError(err, wsData?.status));
+        });
+      }
+    : undefined;
+
+  // The same save from inside a viewer's error boundary. That fallback is
+  // already reporting a failure, so this one only logs: raising `fileError`
+  // would replace the thing the reader is looking at with a second error.
+  const handleDownloadInFallback = canDownload
+    ? () => {
+        if (!selectedFile) return;
+        void triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) =>
+          console.error('[FilePanel] Download failed:', err));
+      }
+    : undefined;
 
   const clearSearch = () => {
     setSearchQuery('');
@@ -800,6 +823,7 @@ function FilePanel({
             onStartEdit={handleStartEdit}
             onOpenExportModal={() => setExportModalOpen(true)}
             triggerDownloadFn={triggerDownloadFn}
+            canDownload={canDownload}
             readFileFullFn={readFileFullFn}
             htmlServedUrl={selectedFile ? apiAdapter?.buildServedUrl?.(selectedFile) : undefined}
             editorRef={editorRef}
@@ -1071,13 +1095,13 @@ function FilePanel({
               />
             ) : fileMime === 'pdf' ? (
               <Suspense fallback={<DocumentLoadingFallback />}>
-                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))} />}>
+                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={handleDownloadInFallback} />}>
                   <PdfViewer data={fileArrayBuffer!} focusPage={fileFocus.focusPage} focusSeq={fileFocus.seq} onPageCount={setPdfPageCount} />
                 </DocumentErrorBoundary>
               </Suspense>
             ) : fileMime === 'excel' ? (
               <Suspense fallback={<DocumentLoadingFallback />}>
-                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))} />}>
+                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={handleDownloadInFallback} />}>
                   <ExcelViewer data={fileArrayBuffer!} />
                 </DocumentErrorBoundary>
               </Suspense>
@@ -1090,14 +1114,14 @@ function FilePanel({
                 </div>
               ) : (
                 <Suspense fallback={<DocumentLoadingFallback />}>
-                  <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))} />}>
+                  <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={handleDownloadInFallback} />}>
                     <CsvViewer content={fileContent ?? ''} />
                   </DocumentErrorBoundary>
                 </Suspense>
               )
             ) : ['html', 'htm'].includes(getFileExtension(selectedFile)) ? (
               <Suspense fallback={<DocumentLoadingFallback />}>
-                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))} />}>
+                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={handleDownloadInFallback} />}>
                   <HtmlViewer
                     content={fileContent ?? ''}
                     fileName={fileName}
@@ -1107,7 +1131,7 @@ function FilePanel({
                     anchor={fileFocus.htmlAnchor}
                     anchorSeq={fileFocus.seq}
                     onCopyShareLink={onCopyShareLink ?? undefined}
-                    onTriggerDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))}
+                    onTriggerDownload={handleDownloadInFallback}
                   />
                 </DocumentErrorBoundary>
               </Suspense>

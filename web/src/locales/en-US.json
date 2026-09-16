@@ -1357,10 +1357,10 @@
     "turnFiles": {
       "open": "Open",
       "openTitle": "Open {{path}}",
+      "download": "Download",
+      "moreActions": "More actions",
       "expand_one": "Open {{count}} file from this turn",
       "expand_other": "Show all {{count}} files from this turn",
-      "fileCount_one": "{{count}} file",
-      "fileCount_other": "{{count}} files",
       "kind": {
         "document": "Document",
         "presentation": "Presentation",
@@ -1793,6 +1793,7 @@
       "sandboxUnavailableHint": "The sandbox is not available. Start the workspace to access files.",
       "binaryFile": "Cannot preview this file",
       "binaryFileHint": "This file type cannot be displayed in the browser, but you can download it.",
+      "binaryFileNoDownloadHint": "This file type cannot be displayed in the browser.",
       "noSandbox": "No sandbox available",
       "noSandboxHint": "Flash mode workspaces do not have file storage.",
       "accessDenied": "Access denied",

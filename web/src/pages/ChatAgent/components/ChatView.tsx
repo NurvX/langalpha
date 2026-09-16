@@ -15,7 +15,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
 import { modelPrefs } from '@/lib/modelPreferences';
 import { updateCurrentUser } from '../../Dashboard/utils/api';
-import { summarizeThread, offloadThread, getThreadShareStatus, updateThreadSharing, cancelSubagentTask } from '../utils/api';
+import { summarizeThread, offloadThread, getThreadShareStatus, updateThreadSharing, cancelSubagentTask, triggerFileDownload } from '../utils/api';
 import { buildSharedServeUrl, buildWsfilesUrl } from './viewers/html/wsfilesUrl';
 import ShareReportLinkModal from './ShareReportLinkModal';
 import { toast } from '@/components/ui/use-toast';
@@ -863,7 +863,19 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // useStableHandler pins each identity while always invoking the freshest
   // closure, which is exactly what edit/regenerate need: their turn-index
   // math must read the current messages array, never a memoized snapshot.
+  // A deliverable card names its own workspace only for a cross-workspace ref;
+  // otherwise the file belongs to the thread's own workspace, which the card
+  // has no way to know.
+  const handleDownloadFileFromChat = useCallback((path: string, targetWorkspaceId?: string) => {
+    const wsId = targetWorkspaceId ?? workspaceId;
+    if (!wsId) return;
+    triggerFileDownload(wsId, path).catch((err: unknown) => {
+      console.error('[ChatView] Download failed:', err);
+    });
+  }, [workspaceId]);
+
   const stableOpenFile = useStableHandler(handleOpenFileFromChat);
+  const stableDownloadFile = useStableHandler(handleDownloadFileFromChat);
   const stableOpenSources = useStableHandler(handleOpenSourcesFromChat);
   const stableToolCallDetail = useStableHandler(handleToolCallDetailClick);
   const stableOpenSubagentTask = useStableHandler(handleOpenSubagentTask);
@@ -901,6 +913,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // this object is built once and never re-renders the memoized message tree.
   const messageActions = useMemo<MessageActions>(() => ({
     onOpenFile: stableOpenFile,
+    onDownloadFile: stableDownloadFile,
     onOpenSources: stableOpenSources,
     onToolCallDetailClick: stableToolCallDetail,
     onOpenSubagentTask: stableOpenSubagentTask,
@@ -928,7 +941,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     onReportWithAgent: stableReportWithAgent,
     onWidgetSendPrompt: stableSendMessage,
   }), [
-    stableOpenFile, stableOpenSources, stableToolCallDetail,
+    stableOpenFile, stableDownloadFile, stableOpenSources, stableToolCallDetail,
     stableOpenSubagentTask, stableApprovePlan, stableRejectPlan, stablePlanDetail,
     stableAnswerQuestion, stableSkipQuestion, stableApproveCreateWorkspace,
     stableRejectCreateWorkspace, stableApproveStartQuestion, stableRejectStartQuestion,
@@ -943,8 +956,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // handlers must not be reachable from it. Navigation only.
   const subagentMessageActions = useMemo<MessageActions>(() => ({
     onOpenFile: stableOpenFile,
+    onDownloadFile: stableDownloadFile,
     onToolCallDetailClick: stableToolCallDetail,
-  }), [stableOpenFile, stableToolCallDetail]);
+  }), [stableOpenFile, stableDownloadFile, stableToolCallDetail]);
 
   // Flash-mode deep-link context for PTC-agent proposal cards. Memoized: a
   // fresh object per render would defeat the bubble memo in flash mode.

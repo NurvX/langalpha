@@ -73,7 +73,13 @@ export function FileErrorDisplay({ error, onRetry, onDownload }: FileErrorDispla
   const key = ERROR_I18N_KEY[error.category];
 
   const showRetry = error.category === 'sandbox_starting' || error.category === 'sandbox_unavailable' || error.category === 'unknown';
-  const showDownload = error.category === 'binary_file';
+  const showDownload = error.category === 'binary_file' && !!onDownload;
+  // The binary hint ends "but you can download it", which is a promise only the
+  // button keeps. A share that grants `allow_files` without `allow_download`
+  // gets the sentence without that clause instead of a claim it cannot honour.
+  const hintKey = error.category === 'binary_file' && !onDownload
+    ? 'filePanel.error.binaryFileNoDownloadHint'
+    : `filePanel.error.${key}Hint`;
 
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-12">
@@ -82,7 +88,7 @@ export function FileErrorDisplay({ error, onRetry, onDownload }: FileErrorDispla
         {t(`filePanel.error.${key}`)}
       </p>
       <p className="text-xs text-center max-w-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-        {t(`filePanel.error.${key}Hint`)}
+        {t(hintKey)}
       </p>
       <div className="flex gap-2 mt-1">
         {showRetry && onRetry && (

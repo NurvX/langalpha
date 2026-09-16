@@ -21,6 +21,10 @@ import type { OpenFileHandler } from '../../utils/fileLocation';
 export interface MessageActions {
   onOpenSubagentTask?: (info: SubagentInfo) => void;
   onOpenFile?: OpenFileHandler;
+  /** Saves a workspace file to disk. Separate from `onOpenFile` because a host
+   *  may grant reading without granting download: a copy-link share does. Its
+   *  absence is what hides the deliverable card's Download item. */
+  onDownloadFile?: (path: string, workspaceId?: string) => void;
   onOpenSources?: (messageId: string) => void;
   onToolCallDetailClick?: (proc: ToolCallProcessRecord) => void;
   onApprovePlan?: () => void;

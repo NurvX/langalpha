@@ -66,7 +66,7 @@ interface MessageBubbleProps {
  * chunk never re-renders settled bubbles through a handler identity.
  */
 export const MessageBubble = memo(function MessageBubble({ message, turnIndex, isTurnTail, turnFiles, feedback, isLoading, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, isMobile, flashContext }: MessageBubbleProps): React.ReactElement {
-  const { onOpenFile, onOpenSources, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, onReportWithAgent } = useMessageActions();
+  const { onOpenFile, onDownloadFile, onOpenSources, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, onReportWithAgent } = useMessageActions();
   const { t } = useTranslation();
   const { user } = useUser();
   const { theme } = useTheme();
@@ -417,7 +417,7 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
             files somewhere in the prose or only inside a tool call, so the
             strip gathers them where the reader finishes reading. */}
         {isAssistant && isTurnTail && !isStreaming && onOpenFile && (!readOnly || allowFiles) && turnFiles && turnFiles.length > 0 && (
-          <TurnFileCards files={turnFiles} onOpenFile={onOpenFile} />
+          <TurnFileCards files={turnFiles} onOpenFile={onOpenFile} onDownloadFile={onDownloadFile} />
         )}
 
         {/* Per-message "⏹ Stopped" marker — the turn was hard-stopped by the

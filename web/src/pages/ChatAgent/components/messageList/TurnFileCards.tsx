@@ -8,7 +8,13 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, PanelRight } from 'lucide-react';
+import { ChevronDown, Download, PanelRight } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { fileExtension, fileKind, fileKindIcon } from '../../utils/filePaths';
 import type { OpenFileHandler } from '../../utils/fileLocation';
 import type { TurnFile } from '../../utils/turnFiles';
@@ -23,18 +29,23 @@ const MAX_PEEK_LAYERS = 2;
 interface TurnFileCardsProps {
   files: TurnFile[];
   onOpenFile: OpenFileHandler;
+  onDownloadFile?: (path: string, workspaceId?: string) => void;
 }
 
-export function TurnFileCards({ files, onOpenFile }: TurnFileCardsProps): React.ReactElement | null {
+export function TurnFileCards({ files, onOpenFile, onDownloadFile }: TurnFileCardsProps): React.ReactElement | null {
   const { t } = useTranslation();
   const [fanned, setFanned] = useState(false);
+  // A card's menu portals outside the deck, so an open menu suspends the
+  // outside-click and Escape collapse: otherwise choosing Download would fold
+  // the deck shut under the pointer, and Escape would close both at once.
+  const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const n = files.length;
 
   // Outside-click / Escape collapse while fanned, deferred one frame so the
   // click that fanned the deck cannot immediately re-collapse it.
   useEffect(() => {
-    if (!fanned) return;
+    if (!fanned || menuOpen) return;
     const onDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (!target || !document.body.contains(target)) return;
@@ -57,7 +68,7 @@ export function TurnFileCards({ files, onOpenFile }: TurnFileCardsProps): React.
         document.removeEventListener('keydown', onKey);
       }
     };
-  }, [fanned]);
+  }, [fanned, menuOpen]);
 
   if (n === 0) return null;
 
@@ -90,18 +101,12 @@ export function TurnFileCards({ files, onOpenFile }: TurnFileCardsProps): React.
         const kindLine = [kind ? t(`chat.turnFiles.kind.${kind}`) : '', ext.toUpperCase(), stat]
           .filter(Boolean)
           .join(' · ');
+        const open = () => onOpenFile(file.path, file.workspaceId, file.location);
 
         return (
-          <button
+          <div
             key={`${file.workspaceId ?? ''}/${file.path}`}
-            type="button"
             aria-hidden={interactive ? undefined : true}
-            tabIndex={interactive ? undefined : -1}
-            aria-label={summarizing
-              ? t('chat.turnFiles.expand', { count: n })
-              : t('chat.turnFiles.openTitle', { path: file.path })}
-            title={interactive && !summarizing ? file.path : undefined}
-            onClick={() => (summarizing ? setFanned(true) : onOpenFile(file.path, file.workspaceId, file.location))}
             className="turn-file-card"
             style={{
               top: fanned ? i * (CARD_HEIGHT + CARD_GAP) : 0,
@@ -124,26 +129,62 @@ export function TurnFileCards({ files, onOpenFile }: TurnFileCardsProps): React.
                     <span className="turn-file-ext">{ext.toUpperCase()}</span>
                   </span>
                 </span>
-                <span className="turn-file-info">
+                {/* The whole stripe is the primary target: this button carries
+                    the name for its accessible label and stretches over the
+                    card, so the menu trigger is the only thing clicking it can
+                    miss. */}
+                <button
+                  type="button"
+                  className="turn-file-hit"
+                  tabIndex={interactive ? undefined : -1}
+                  aria-label={summarizing
+                    ? t('chat.turnFiles.expand', { count: n })
+                    : t('chat.turnFiles.openTitle', { path: file.path })}
+                  title={summarizing ? undefined : file.path}
+                  onClick={() => (summarizing ? setFanned(true) : open())}
+                >
                   <span className="turn-file-name">{name}</span>
-                  <span className="turn-file-meta">
-                    {summarizing ? t('chat.turnFiles.fileCount', { count: n }) : kindLine}
-                  </span>
-                </span>
+                  <span className="turn-file-meta">{kindLine}</span>
+                </button>
                 {summarizing ? (
                   <span className="turn-file-count" aria-hidden="true">
                     <span className="turn-file-badge">{n}</span>
                     <ChevronDown className="h-4 w-4" />
                   </span>
                 ) : (
-                  <span className="turn-file-open" aria-hidden="true">
-                    <PanelRight className="h-3.5 w-3.5" />
-                    {t('chat.turnFiles.open')}
+                  <span className="turn-file-actions">
+                    <span className="turn-file-open" aria-hidden="true">
+                      <PanelRight className="h-3.5 w-3.5" />
+                      {t('chat.turnFiles.open')}
+                    </span>
+                    <DropdownMenu modal={false} onOpenChange={setMenuOpen}>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className="turn-file-more"
+                          aria-label={t('chat.turnFiles.moreActions')}
+                        >
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" sideOffset={4}>
+                        <DropdownMenuItem onSelect={open}>
+                          <PanelRight className="h-3.5 w-3.5" />
+                          {t('chat.turnFiles.open')}
+                        </DropdownMenuItem>
+                        {onDownloadFile && (
+                          <DropdownMenuItem onSelect={() => onDownloadFile(file.path, file.workspaceId)}>
+                            <Download className="h-3.5 w-3.5" />
+                            {t('chat.turnFiles.download')}
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </span>
                 )}
               </>
             )}
-          </button>
+          </div>
         );
       })}
     </div>
