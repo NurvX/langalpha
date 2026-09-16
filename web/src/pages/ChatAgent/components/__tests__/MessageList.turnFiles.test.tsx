@@ -153,6 +153,26 @@ describe('turn deliverables deck', () => {
     expect(names(container)).toEqual(['report.md', 'prices.csv']);
   });
 
+  it('moves a fanned card by transform, the one property the browser can animate here', () => {
+    const { container } = renderList(
+      [
+        userMsg('u0'),
+        assistant('a0', 'Wrote [the review](results/review.md) and [the deck](results/deck.pptx).'),
+      ],
+      { onOpenFile: vi.fn() },
+    );
+
+    const second = () => container.querySelectorAll('.turn-file-card')[1] as HTMLElement;
+    expect(second().style.transform).toContain('translateY(6px)');
+
+    fireEvent.click(stripe(container));
+
+    // `top` carries no offset: nothing transitions it, so a card moved by it
+    // would jump to its fanned slot instead of travelling there.
+    expect(second().style.top).toBe('');
+    expect(second().style.transform).toContain('translateY(76px)');
+  });
+
   it('waits for the turn to settle before claiming what it produced', () => {
     const { container } = renderList(
       [userMsg('u0'), assistant('a0', 'Saving [the report](results/report.md)', { isStreaming: true })],

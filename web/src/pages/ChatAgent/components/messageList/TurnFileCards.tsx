@@ -76,10 +76,6 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile }: TurnFileCar
   const stackHeight = fanned
     ? n * (CARD_HEIGHT + CARD_GAP) - CARD_GAP
     : CARD_HEIGHT + peekLayers * PEEK_STEP;
-  // Collapsed, only the front and a capped number of peek cards are rendered:
-  // the true count rides the front badge, and capping the rendered set (not
-  // just the height) keeps the deepest peek flush with the stack's bottom.
-  const visible = fanned ? files : files.slice(0, peekLayers + 1);
 
   return (
     <div
@@ -89,10 +85,16 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile }: TurnFileCar
       data-fanned={fanned}
       style={{ height: stackHeight }}
     >
-      {visible.map((file, i) => {
+      {files.map((file, i) => {
         const isTop = i === 0;
         const interactive = fanned || isTop;
         const summarizing = !fanned && isTop && n > 1;
+        // Collapsed, the stack shows at most MAX_PEEK_LAYERS behind the front
+        // and parks the rest under the deepest peek at zero opacity. They stay
+        // mounted so fanning is one continuous transition rather than a slide
+        // for some cards and an abrupt mount for the others.
+        const depth = Math.min(i, MAX_PEEK_LAYERS);
+        const buried = !fanned && i > MAX_PEEK_LAYERS;
         const name = file.path.split('/').pop() || file.path;
         const kind = fileKind(file.path);
         const Icon = kind ? fileKindIcon(kind) : null;
@@ -109,13 +111,14 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile }: TurnFileCar
             aria-hidden={interactive ? undefined : true}
             className="turn-file-card"
             style={{
-              top: fanned ? i * (CARD_HEIGHT + CARD_GAP) : 0,
               height: CARD_HEIGHT,
-              transform: `translateY(${fanned ? 0 : i * PEEK_STEP}px) scale(${fanned ? 1 : Math.max(1 - i * 0.03, 0.85)})`,
-              opacity: fanned ? 1 : isTop ? 1 : Math.max(0.85 - (i - 1) * 0.2, 0.25),
+              // The whole offset rides the transform: `top` is not a
+              // transitionable step here, so a card moved by it teleports to
+              // its fanned slot while only the last few pixels animate.
+              transform: `translateY(${fanned ? i * (CARD_HEIGHT + CARD_GAP) : depth * PEEK_STEP}px) scale(${fanned ? 1 : Math.max(1 - depth * 0.02, 0.9)})`,
+              opacity: fanned ? 1 : buried ? 0 : isTop ? 1 : Math.max(0.85 - (depth - 1) * 0.2, 0.25),
               zIndex: n - i,
               pointerEvents: interactive ? 'auto' : 'none',
-              animationDelay: fanned ? `${i * 45}ms` : undefined,
             }}
           >
             {/* A peek card behind the front renders as a blank sheet: its name
