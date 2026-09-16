@@ -43,8 +43,26 @@ interface MessageLike {
   toolCallProcesses?: Record<string, ToolCallLike>;
 }
 
-/** An extension is what separates a deliverable from a link to a section or a folder. */
-const HAS_EXTENSION_RE = /\.[A-Za-z0-9]{1,8}$/;
+/**
+ * The file kinds a person opens to read the answer.
+ *
+ * A turn writes two sorts of file: the report, model or deck it was asked for,
+ * and the scripts it wrote to get there. Listing the scripts buries the answer
+ * in the scaffolding, so the deck lists documents, spreadsheets, pages and
+ * charts only. Everything else stays one search away in the file panel.
+ */
+const DELIVERABLE_EXTS = new Set([
+  'md', 'markdown', 'pdf', 'docx', 'doc', 'rtf', 'odt',
+  'pptx', 'ppt', 'key',
+  'xlsx', 'xls', 'csv',
+  'html', 'htm',
+  'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp',
+]);
+
+function isDeliverableKind(path: string): boolean {
+  const ext = path.split('/').pop()?.split('.');
+  return !!ext && ext.length > 1 && DELIVERABLE_EXTS.has(ext[ext.length - 1].toLowerCase());
+}
 
 /**
  * What one Edit changed, counted after the lines both sides share.
@@ -87,7 +105,7 @@ function assistantText(message: MessageLike): string {
 function openablePath(path: string): boolean {
   return (
     !!path
-    && HAS_EXTENSION_RE.test(path)
+    && isDeliverableKind(path)
     && !isSystemPath(path)
     && classifyAgentPath(path).kind === 'file'
   );

@@ -1,10 +1,11 @@
 /**
- * The deliverables strip: one turn's files, on the bubble that ends it.
+ * The deliverables deck: one turn's files, on the bubble that ends it.
  *
  * A steered turn paints several assistant bubbles and a turn can still be
- * streaming, so the strip has to pick a single settled tail and gather the
- * whole turn's files onto it, including ones named by a bubble that never
- * reaches the screen.
+ * streaming, so the deck has to pick a single settled tail and gather the whole
+ * turn's files onto it, including ones named by a bubble that never reaches the
+ * screen. Collapsed it shows one card, so opening the second file is a fan
+ * then a click, the same two steps the sources deck takes.
  */
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
@@ -86,20 +87,48 @@ function renderList(messages: Msg[], actions: MessageActions) {
   );
 }
 
-const cards = (container: HTMLElement) =>
-  Array.from(container.querySelectorAll('.turn-file .turn-file-name')).map((el) => el.textContent);
+const names = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll('.turn-file-card'))
+    .map((el) => el.querySelector('.truncate')?.textContent ?? '');
 
-describe('turn deliverables strip', () => {
-  it('opens the file the card names, in the workspace the reply named', () => {
+const front = (container: HTMLElement) =>
+  container.querySelector('.turn-file-card') as HTMLElement;
+
+describe('turn deliverables deck', () => {
+  it('opens a lone file on the first click, in the workspace the reply named', () => {
     const onOpenFile = vi.fn();
     const { container } = renderList(
-      [userMsg('u0'), assistant('a0', 'Built [the model](__wsref__/ws-7/results/model.py#L12).')],
+      [userMsg('u0'), assistant('a0', 'Built [the review](__wsref__/ws-7/results/review.md#L12).')],
       { onOpenFile },
     );
 
-    expect(cards(container)).toEqual(['model.py']);
-    fireEvent.click(container.querySelector('.turn-file')!);
-    expect(onOpenFile).toHaveBeenCalledWith('results/model.py', 'ws-7', { line: 12 });
+    expect(names(container)).toEqual(['review.md']);
+    fireEvent.click(front(container));
+    expect(onOpenFile).toHaveBeenCalledWith('results/review.md', 'ws-7', { line: 12 });
+  });
+
+  it('holds several files behind one card until the deck is fanned', () => {
+    const onOpenFile = vi.fn();
+    const { container } = renderList(
+      [
+        userMsg('u0'),
+        assistant('a0', 'Wrote [the review](results/review.md) and [the deck](results/deck.pptx).'),
+      ],
+      { onOpenFile },
+    );
+
+    // Collapsed: the front card carries the count, the peek behind it is blank.
+    const deck = container.querySelector('[data-testid="turn-files"]')!;
+    expect(deck.getAttribute('data-fanned')).toBe('false');
+    expect(names(container)).toEqual(['review.md', '']);
+
+    fireEvent.click(front(container));
+    expect(onOpenFile).not.toHaveBeenCalled();
+    expect(deck.getAttribute('data-fanned')).toBe('true');
+    expect(names(container)).toEqual(['review.md', 'deck.pptx']);
+
+    fireEvent.click(container.querySelectorAll('.turn-file-card')[1]);
+    expect(onOpenFile).toHaveBeenCalledWith('results/deck.pptx', undefined, undefined);
   });
 
   it('gathers the whole turn onto its last bubble and leaves the earlier one bare', () => {
@@ -114,10 +143,12 @@ describe('turn deliverables strip', () => {
     );
 
     const bubbles = Array.from(container.querySelectorAll('[data-message-id]'));
-    const withCards = bubbles.filter((b) => b.querySelector('.turn-file'));
-    expect(withCards).toHaveLength(1);
-    expect(withCards[0].getAttribute('data-message-id')).toBe('a0-cont');
-    expect(cards(container)).toEqual(['report.md', 'prices.csv']);
+    const withDeck = bubbles.filter((b) => b.querySelector('.turn-file-card'));
+    expect(withDeck).toHaveLength(1);
+    expect(withDeck[0].getAttribute('data-message-id')).toBe('a0-cont');
+
+    fireEvent.click(front(container));
+    expect(names(container)).toEqual(['report.md', 'prices.csv']);
   });
 
   it('waits for the turn to settle before claiming what it produced', () => {
@@ -125,21 +156,20 @@ describe('turn deliverables strip', () => {
       [userMsg('u0'), assistant('a0', 'Saving [the report](results/report.md)', { isStreaming: true })],
       { onOpenFile: vi.fn() },
     );
-    expect(cards(container)).toEqual([]);
+    expect(container.querySelector('[data-testid="turn-files"]')).toBeNull();
   });
 
-  it('holds the overflow behind one control rather than growing past the reply', () => {
-    const links = ['one.md', 'two.md', 'three.md', 'four.md', 'five.md', 'six.md']
-      .map((name) => `[${name}](results/${name})`)
-      .join(' and ');
+  it('shows nothing for a turn that only wrote its own scaffolding', () => {
     const { container } = renderList(
-      [userMsg('u0'), assistant('a0', `Wrote ${links}.`)],
+      [
+        userMsg('u0'),
+        assistant('a0', 'Ran [the fetcher](scripts/fetch.py).', {
+          toolCallProcesses: { a: write(0, 'scripts/fetch.py'), b: write(1, 'run.sh') },
+        }),
+      ],
       { onOpenFile: vi.fn() },
     );
-
-    expect(cards(container)).toHaveLength(5);
-    fireEvent.click(container.querySelector('.turn-files-more')!);
-    expect(cards(container)).toHaveLength(6);
+    expect(container.querySelector('[data-testid="turn-files"]')).toBeNull();
   });
 
   it('shows nothing for a turn whose only file is an image the reply already drew', () => {
@@ -147,6 +177,6 @@ describe('turn deliverables strip', () => {
       [userMsg('u0'), assistant('a0', 'Here it is: ![chart](results/chart.png)', { toolCallProcesses: { w: write(0, 'results/chart.png') } })],
       { onOpenFile: vi.fn() },
     );
-    expect(container.querySelector('.turn-files')).toBeNull();
+    expect(container.querySelector('[data-testid="turn-files"]')).toBeNull();
   });
 });

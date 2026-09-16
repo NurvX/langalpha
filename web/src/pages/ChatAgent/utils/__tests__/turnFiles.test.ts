@@ -23,9 +23,9 @@ function edit(order: number, path: string, oldString: string, newString: string)
 describe('collectTurnFiles', () => {
   it('lists the files the reply links, in the order it names them', () => {
     const files = collectTurnFiles([
-      assistant('See [the model](results/model.py) and [the notes](notes/summary.md).'),
+      assistant('See [the model](results/model.docx) and [the notes](notes/summary.md).'),
     ]);
-    expect(files.map((f) => f.path)).toEqual(['results/model.py', 'notes/summary.md']);
+    expect(files.map((f) => f.path)).toEqual(['results/model.docx', 'notes/summary.md']);
   });
 
   it('keeps a file only a write tool named', () => {
@@ -37,8 +37,8 @@ describe('collectTurnFiles', () => {
 
   it('counts an edit as the lines it changed, not the anchor lines it carried', () => {
     const files = collectTurnFiles([
-      assistant('Updated [the model](model.py).', {
-        a: edit(0, 'model.py', 'def run():\n    old()\n    return 1', 'def run():\n    new()\n    also()\n    return 1'),
+      assistant('Updated [the model](report.md).', {
+        a: edit(0, 'report.md', 'def run():\n    old()\n    return 1', 'def run():\n    new()\n    also()\n    return 1'),
       }),
     ]);
     expect(files[0].stats).toEqual({ added: 2, removed: 1 });
@@ -46,8 +46,8 @@ describe('collectTurnFiles', () => {
 
   it('sums the edits a turn made to one file and keeps it listed once', () => {
     const files = collectTurnFiles([
-      assistant('', { a: edit(0, 'model.py', 'a', 'b'), b: edit(1, 'model.py', 'c', 'd\ne') }),
-      assistant('Then [the model](model.py) was ready.'),
+      assistant('', { a: edit(0, 'report.md', 'a', 'b'), b: edit(1, 'report.md', 'c', 'd\ne') }),
+      assistant('Then [the model](report.md) was ready.'),
     ]);
     expect(files).toHaveLength(1);
     expect(files[0].stats).toEqual({ added: 3, removed: 2 });
@@ -101,13 +101,26 @@ describe('collectTurnFiles', () => {
   });
 
   it('keeps the spot in the file the reply pointed at', () => {
-    const files = collectTurnFiles([assistant('See [the loop](src/run.py#L42).')]);
+    const files = collectTurnFiles([assistant('See [the section](notes/plan.md#L42).')]);
     expect(files[0].location).toEqual({ line: 42 });
   });
 
   it('carries the workspace a Flash relay named', () => {
-    const files = collectTurnFiles([assistant('See [the model](__wsref__/ws-7/results/model.py).')]);
-    expect(files[0]).toMatchObject({ path: 'results/model.py', workspaceId: 'ws-7' });
+    const files = collectTurnFiles([assistant('See [the model](__wsref__/ws-7/results/model.md).')]);
+    expect(files[0]).toMatchObject({ path: 'results/model.md', workspaceId: 'ws-7' });
+  });
+
+  it('lists what a person opens and leaves the agent\'s own scaffolding out', () => {
+    const files = collectTurnFiles([
+      assistant('Ran [the fetcher](scripts/fetch_prices.py) and [the job](run.sh), wrote [the memo](results/memo.md).', {
+        a: write(0, 'scripts/fetch_prices.py'),
+        b: write(1, 'notebooks/scratch.ipynb'),
+        c: write(2, 'results/raw.json'),
+        d: write(3, 'results/memo.md'),
+        e: write(4, 'results/comps.csv'),
+      }),
+    ]);
+    expect(files.map((f) => f.path)).toEqual(['results/memo.md', 'results/comps.csv']);
   });
 
   it('leaves out system paths, section links and folders', () => {
@@ -119,8 +132,8 @@ describe('collectTurnFiles', () => {
 
   it('ignores a failed write and a user message', () => {
     const files = collectTurnFiles([
-      { role: 'user', content: 'write [the model](model.py)' },
-      assistant('', { a: { ...write(0, 'model.py'), isFailed: true } }),
+      { role: 'user', content: 'write [the model](report.md)' },
+      assistant('', { a: { ...write(0, 'report.md'), isFailed: true } }),
     ]);
     expect(files).toEqual([]);
   });

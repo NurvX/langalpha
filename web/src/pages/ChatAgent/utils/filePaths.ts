@@ -1,11 +1,12 @@
 import type { LucideIcon } from 'lucide-react';
-import { FileText, FileCode, Image, Table } from 'lucide-react';
+import { FileText, FileCode, Image, Presentation, Table } from 'lucide-react';
 import { hasLineSuffix } from './fileLocation';
 
 const EXT_ICONS: Record<string, LucideIcon> = {
   py: FileCode, js: FileCode, jsx: FileCode, ts: FileCode, tsx: FileCode,
   html: FileCode, css: FileCode, sh: FileCode, bash: FileCode, sql: FileCode,
   csv: Table, json: Table, yaml: Table, yml: Table, xml: Table, toml: Table, xlsx: Table, xls: Table,
+  pptx: Presentation, ppt: Presentation, key: Presentation,
   png: Image, jpg: Image, jpeg: Image, svg: Image, gif: Image, webp: Image,
 };
 

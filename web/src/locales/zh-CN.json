@@ -1354,11 +1354,10 @@
       "retry": "重试"
     },
     "turnFiles": {
-      "open": "打开",
       "openTitle": "打开 {{path}}",
-      "rootDir": "工作区根目录",
-      "more_other": "还有 {{count}} 个文件",
-      "less": "收起"
+      "expand_other": "展开本轮的 {{count}} 个文件",
+      "fileCount_other": "{{count}} 个文件",
+      "rootDir": "工作区根目录"
     },
     "modelTroubleSuggestion": "{{from}} 出现问题 — 本次回答由 {{to}} 完成",
     "switchToModel": "切换到 {{model}}",
