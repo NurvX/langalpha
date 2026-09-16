@@ -100,6 +100,11 @@ describe('collectTurnFiles', () => {
     expect(files.map((f) => f.path)).toEqual(['results/report(1).pdf']);
   });
 
+  it('counts a macro workbook as a deliverable, as the panel and the relay do', () => {
+    const files = collectTurnFiles([assistant('See [the model](results/model.xlsm).')]);
+    expect(files.map((f) => f.path)).toEqual(['results/model.xlsm']);
+  });
+
   it('keeps the spot in the file the reply pointed at', () => {
     const files = collectTurnFiles([assistant('See [the section](notes/plan.md#L42).')]);
     expect(files[0].location).toEqual({ line: 42 });

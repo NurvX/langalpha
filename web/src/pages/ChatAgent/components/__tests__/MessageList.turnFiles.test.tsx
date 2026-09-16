@@ -89,7 +89,7 @@ function renderList(messages: Msg[], actions: MessageActions) {
 
 const names = (container: HTMLElement) =>
   Array.from(container.querySelectorAll('.turn-file-card'))
-    .map((el) => el.querySelector('.truncate')?.textContent ?? '');
+    .map((el) => el.querySelector('.turn-file-name')?.textContent ?? '');
 
 const front = (container: HTMLElement) =>
   container.querySelector('.turn-file-card') as HTMLElement;

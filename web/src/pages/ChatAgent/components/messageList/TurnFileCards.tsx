@@ -3,30 +3,22 @@
  *
  * A long turn buries its deliverables: the paths are named somewhere in the
  * prose, or only inside a tool call nobody expands. The deck collects them
- * where the reader finishes reading, and collapses to a single card with the
- * rest peeking behind, so a turn that wrote six files still ends on one object.
+ * where the reader finishes reading, and collapses to a single card carrying
+ * the count, so a turn that wrote six files still ends on one object.
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronRight } from 'lucide-react';
-import { fileIcon } from '../../utils/filePaths';
+import { ChevronDown, PanelRight } from 'lucide-react';
+import { fileExtension, fileKind, fileKindIcon } from '../../utils/filePaths';
 import type { OpenFileHandler } from '../../utils/fileLocation';
 import type { TurnFile } from '../../utils/turnFiles';
 import './TurnFileCards.css';
 
-/** Deck geometry, kept in step with the sources deck (`SourcesPanel.tsx`). */
-const CARD_HEIGHT = 52;
-const CARD_GAP = 6;
+/** Deck geometry. The fan motion is kept in step with the sources deck. */
+const CARD_HEIGHT = 68;
+const CARD_GAP = 8;
 const PEEK_STEP = 6;
 const MAX_PEEK_LAYERS = 2;
-
-/** Visuals only — position and height are set per card below. */
-const CARD_CHROME =
-  'group turn-file-card absolute left-0 right-0 flex items-center gap-2.5 rounded-lg border px-3 ' +
-  'text-left outline-none cursor-pointer border-[var(--color-border-muted)] bg-[var(--color-bg-card)] ' +
-  'hover:border-[var(--color-border-default)] hover:bg-[var(--color-bg-elevated)] focus-visible:ring-2 focus-visible:ring-ring';
-
-const TERTIARY = { color: 'var(--color-text-tertiary)' as const };
 
 interface TurnFileCardsProps {
   files: TurnFile[];
@@ -89,16 +81,15 @@ export function TurnFileCards({ files, onOpenFile }: TurnFileCardsProps): React.
       {visible.map((file, i) => {
         const isTop = i === 0;
         const interactive = fanned || isTop;
-        const collapsedFront = !fanned && isTop;
-        const opensOnClick = fanned || n === 1;
+        const summarizing = !fanned && isTop && n > 1;
         const name = file.path.split('/').pop() || file.path;
-        const dir = file.path.split('/').slice(0, -1).join('/');
-        const Icon = fileIcon(file.path);
+        const kind = fileKind(file.path);
+        const Icon = kind ? fileKindIcon(kind) : null;
+        const ext = fileExtension(file.path);
         const stat = file.stats ? `+${file.stats.added} -${file.stats.removed}` : '';
-        const where = [dir ? `${dir}/` : t('chat.turnFiles.rootDir'), stat].filter(Boolean).join(' · ');
-        // Collapsed with more behind, the front card summarizes the deck; a
-        // lone card and every fanned card carry the file's own folder.
-        const subtitle = collapsedFront && n > 1 ? t('chat.turnFiles.fileCount', { count: n }) : where;
+        const kindLine = [kind ? t(`chat.turnFiles.kind.${kind}`) : '', ext.toUpperCase(), stat]
+          .filter(Boolean)
+          .join(' · ');
 
         return (
           <button
@@ -106,11 +97,12 @@ export function TurnFileCards({ files, onOpenFile }: TurnFileCardsProps): React.
             type="button"
             aria-hidden={interactive ? undefined : true}
             tabIndex={interactive ? undefined : -1}
-            aria-label={opensOnClick
-              ? t('chat.turnFiles.openTitle', { path: file.path })
-              : t('chat.turnFiles.expand', { count: n })}
-            onClick={() => (opensOnClick ? onOpenFile(file.path, file.workspaceId, file.location) : setFanned(true))}
-            className={CARD_CHROME}
+            aria-label={summarizing
+              ? t('chat.turnFiles.expand', { count: n })
+              : t('chat.turnFiles.openTitle', { path: file.path })}
+            title={interactive && !summarizing ? file.path : undefined}
+            onClick={() => (summarizing ? setFanned(true) : onOpenFile(file.path, file.workspaceId, file.location))}
+            className="turn-file-card"
             style={{
               top: fanned ? i * (CARD_HEIGHT + CARD_GAP) : 0,
               height: CARD_HEIGHT,
@@ -118,32 +110,36 @@ export function TurnFileCards({ files, onOpenFile }: TurnFileCardsProps): React.
               opacity: fanned ? 1 : isTop ? 1 : Math.max(0.85 - (i - 1) * 0.2, 0.25),
               zIndex: n - i,
               pointerEvents: interactive ? 'auto' : 'none',
+              animationDelay: fanned ? `${i * 45}ms` : undefined,
             }}
           >
-            {/* A peek card behind the front renders as a blank surface: its
-                name would bleed out below the front card as a garbled tail. */}
+            {/* A peek card behind the front renders as a blank sheet: its name
+                would bleed out below the front card as a garbled tail. */}
             {interactive && (
               <>
-                <Icon className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--color-accent-primary)' }} />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-sm" style={{ color: 'var(--color-text-primary)' }}>{name}</span>
-                  <span className="truncate text-xs" style={TERTIARY} title={file.path}>{subtitle}</span>
+                <span className="turn-file-thumb" aria-hidden="true">
+                  <span className="turn-file-sheet" />
+                  <span className="turn-file-page">
+                    {Icon && <Icon className="turn-file-glyph" />}
+                    <span className="turn-file-ext">{ext.toUpperCase()}</span>
+                  </span>
                 </span>
-                {collapsedFront && n > 1 ? (
-                  <span className="inline-flex flex-shrink-0 items-center gap-1">
-                    <span
-                      className="inline-flex items-center justify-center rounded-full px-1 text-[0.625rem] font-medium"
-                      style={{ minWidth: 16, height: 16, backgroundColor: 'var(--color-border-muted)', color: 'var(--color-text-tertiary)' }}
-                    >
-                      {n}
-                    </span>
-                    <ChevronDown className="h-4 w-4 opacity-60" style={TERTIARY} />
+                <span className="turn-file-info">
+                  <span className="turn-file-name">{name}</span>
+                  <span className="turn-file-meta">
+                    {summarizing ? t('chat.turnFiles.fileCount', { count: n }) : kindLine}
+                  </span>
+                </span>
+                {summarizing ? (
+                  <span className="turn-file-count" aria-hidden="true">
+                    <span className="turn-file-badge">{n}</span>
+                    <ChevronDown className="h-4 w-4" />
                   </span>
                 ) : (
-                  <ChevronRight
-                    className="h-4 w-4 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-50"
-                    style={TERTIARY}
-                  />
+                  <span className="turn-file-open" aria-hidden="true">
+                    <PanelRight className="h-3.5 w-3.5" />
+                    {t('chat.turnFiles.open')}
+                  </span>
                 )}
               </>
             )}

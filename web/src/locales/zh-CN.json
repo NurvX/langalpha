@@ -1354,10 +1354,17 @@
       "retry": "重试"
     },
     "turnFiles": {
+      "open": "打开",
       "openTitle": "打开 {{path}}",
       "expand_other": "展开本轮的 {{count}} 个文件",
       "fileCount_other": "{{count}} 个文件",
-      "rootDir": "工作区根目录"
+      "kind": {
+        "document": "文档",
+        "presentation": "演示文稿",
+        "spreadsheet": "表格",
+        "page": "网页",
+        "image": "图片"
+      }
     },
     "modelTroubleSuggestion": "{{from}} 出现问题 — 本次回答由 {{to}} 完成",
     "switchToModel": "切换到 {{model}}",

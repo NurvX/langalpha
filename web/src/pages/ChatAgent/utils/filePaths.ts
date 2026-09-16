@@ -1,18 +1,48 @@
 import type { LucideIcon } from 'lucide-react';
-import { FileText, FileCode, Image, Presentation, Table } from 'lucide-react';
+import { FileText, FileSpreadsheet, Globe, Image, Presentation } from 'lucide-react';
 import { hasLineSuffix } from './fileLocation';
 
-const EXT_ICONS: Record<string, LucideIcon> = {
-  py: FileCode, js: FileCode, jsx: FileCode, ts: FileCode, tsx: FileCode,
-  html: FileCode, css: FileCode, sh: FileCode, bash: FileCode, sql: FileCode,
-  csv: Table, json: Table, yaml: Table, yml: Table, xml: Table, toml: Table, xlsx: Table, xls: Table,
-  pptx: Presentation, ppt: Presentation, key: Presentation,
-  png: Image, jpg: Image, jpeg: Image, svg: Image, gif: Image, webp: Image,
+/**
+ * The kinds of file a person opens to read an answer.
+ *
+ * A turn writes two sorts of file: the report, model or deck it was asked for,
+ * and the scripts it wrote to get there. Only these kinds are the answer, so
+ * this table is both the deliverable test and the card's own vocabulary.
+ */
+export type FileKind = 'document' | 'presentation' | 'spreadsheet' | 'page' | 'image';
+
+const KIND_BY_EXT: Record<string, FileKind> = {
+  md: 'document', markdown: 'document', pdf: 'document',
+  docx: 'document', doc: 'document', rtf: 'document', odt: 'document',
+  pptx: 'presentation', ppt: 'presentation', key: 'presentation',
+  xlsx: 'spreadsheet', xlsm: 'spreadsheet', xls: 'spreadsheet', csv: 'spreadsheet',
+  html: 'page', htm: 'page',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', svg: 'image', webp: 'image',
 };
 
-/** The icon standing for a file's kind, by extension. */
-export function fileIcon(path: string): LucideIcon {
-  return EXT_ICONS[path.split('.').pop()?.toLowerCase() ?? ''] || FileText;
+const KIND_ICONS: Record<FileKind, LucideIcon> = {
+  document: FileText,
+  presentation: Presentation,
+  spreadsheet: FileSpreadsheet,
+  page: Globe,
+  image: Image,
+};
+
+/** The file's extension in lower case, or '' when the name carries none. */
+export function fileExtension(path: string): string {
+  const name = path.split('/').pop() ?? '';
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
+/** What kind of deliverable this is, or null when it is working material. */
+export function fileKind(path: string): FileKind | null {
+  return KIND_BY_EXT[fileExtension(path)] ?? null;
+}
+
+/** The glyph standing for a kind of file. */
+export function fileKindIcon(kind: FileKind): LucideIcon {
+  return KIND_ICONS[kind];
 }
 
 /** Prefix used for cross-workspace file references: __wsref__/{workspaceId}/path */

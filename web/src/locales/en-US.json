@@ -1355,12 +1355,19 @@
       "retry": "Retry"
     },
     "turnFiles": {
+      "open": "Open",
       "openTitle": "Open {{path}}",
-      "expand_one": "{{count}} file from this turn",
+      "expand_one": "Open {{count}} file from this turn",
       "expand_other": "Show all {{count}} files from this turn",
       "fileCount_one": "{{count}} file",
       "fileCount_other": "{{count}} files",
-      "rootDir": "Workspace root"
+      "kind": {
+        "document": "Document",
+        "presentation": "Presentation",
+        "spreadsheet": "Spreadsheet",
+        "page": "Page",
+        "image": "Image"
+      }
     },
     "modelTroubleSuggestion": "{{from}} is having trouble — this answer came from {{to}}",
     "switchToModel": "Switch to {{model}}",

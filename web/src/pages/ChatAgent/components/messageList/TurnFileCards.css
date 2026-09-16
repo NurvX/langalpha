@@ -1,24 +1,154 @@
 /* Turn deliverables — the file deck under a turn's last bubble.
  *
- * Mirrors the sources deck's fan/collapse motion (`.source-deck-*` in
- * SourcesPanel.css, itself in step with the chat-input snapshot deck) — same
- * easing curve, same durations — so every stack in the transcript expands
- * alike. The per-card top/transform/opacity are set inline (they depend on
- * index + fan state); these rules supply only the transitions and entrance. */
+ * The fan/collapse motion mirrors the sources deck (`.source-deck-*` in
+ * SourcesPanel.css, itself in step with the chat-input snapshot deck): same
+ * easing curve, same durations, so every stack in the transcript expands
+ * alike. Per-card top/transform/opacity are set inline (they depend on index +
+ * fan state); these rules carry the chrome, the transitions and the entrance. */
 .turn-files {
   position: relative;
   width: 100%;
-  margin-top: 12px;
+  margin-top: 14px;
   transition: height 260ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .turn-file-card {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 12px;
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
   transition:
     transform 260ms cubic-bezier(0.16, 1, 0.3, 1),
     opacity 260ms cubic-bezier(0.16, 1, 0.3, 1),
-    background 120ms cubic-bezier(0.16, 1, 0.3, 1),
-    border-color 120ms cubic-bezier(0.16, 1, 0.3, 1);
-  animation: turnFileCardIn 280ms cubic-bezier(0.16, 1, 0.3, 1);
+    background 140ms ease,
+    border-color 140ms ease;
+  animation: turnFileCardIn 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@media (hover: hover) {
+  .turn-file-card:hover {
+    background: var(--color-bg-elevated);
+    border-color: var(--color-border-default);
+  }
+  .turn-file-card:hover .turn-file-sheet {
+    transform: translate(-5px, 4px) rotate(-7deg);
+  }
+  .turn-file-card:hover .turn-file-open {
+    color: var(--color-text-secondary);
+    border-color: var(--color-border-default);
+  }
+}
+.turn-file-card:focus-visible {
+  box-shadow: 0 0 0 2px var(--color-accent-overlay);
+}
+
+/* A document, drawn as paper: the sheet behind carries the depth, the page in
+   front carries the kind. */
+.turn-file-thumb {
+  position: relative;
+  flex-shrink: 0;
+  width: 34px;
+  height: 42px;
+}
+.turn-file-sheet,
+.turn-file-page {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 6px;
+}
+.turn-file-sheet {
+  background: var(--color-bg-elevated);
+  transform: translate(-3px, 3px) rotate(-5deg);
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.turn-file-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  background: var(--color-bg-page);
+  border-color: var(--color-border-elevated);
+}
+.turn-file-glyph {
+  width: 14px;
+  height: 14px;
+  color: var(--color-accent-primary);
+}
+.turn-file-ext {
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  font-size: 0.5rem;
+  letter-spacing: 0.04em;
+  color: var(--color-text-tertiary);
+}
+
+.turn-file-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.turn-file-name {
+  font-size: 0.875rem;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.turn-file-meta {
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The way in, always visible: the card reads as a door rather than a row. */
+.turn-file-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 5px 11px;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 8px;
+  font-size: 0.75rem;
+  color: var(--color-text-tertiary);
+  transition: color 140ms ease, border-color 140ms ease;
+}
+
+.turn-file-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+}
+.turn-file-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--color-border-muted);
+  font-size: 0.6875rem;
+  font-weight: 500;
 }
 
 @keyframes turnFileCardIn {
@@ -30,7 +160,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .turn-files,
-  .turn-file-card {
+  .turn-file-card,
+  .turn-file-sheet {
     transition: none;
     animation: none;
   }

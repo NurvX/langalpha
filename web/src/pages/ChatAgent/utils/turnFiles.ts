@@ -7,7 +7,7 @@
  * reach a file the reply forgot to mention and carry what the edit changed.
  */
 
-import { isFilePath, isImagePath, normalizeFilePath, parseWsPath } from './filePaths';
+import { fileKind, isFilePath, isImagePath, normalizeFilePath, parseWsPath } from './filePaths';
 import { classifyAgentPath } from './agentPaths';
 import { splitFileLocation, type FileLocation } from './fileLocation';
 import { isSystemPath, normalizeRefPath, WRITE_TOOLS, type ToolCallLike } from './fileRefResolver';
@@ -41,27 +41,6 @@ interface MessageLike {
   contentSegments?: { type?: string; content?: string }[];
   content?: unknown;
   toolCallProcesses?: Record<string, ToolCallLike>;
-}
-
-/**
- * The file kinds a person opens to read the answer.
- *
- * A turn writes two sorts of file: the report, model or deck it was asked for,
- * and the scripts it wrote to get there. Listing the scripts buries the answer
- * in the scaffolding, so the deck lists documents, spreadsheets, pages and
- * charts only. Everything else stays one search away in the file panel.
- */
-const DELIVERABLE_EXTS = new Set([
-  'md', 'markdown', 'pdf', 'docx', 'doc', 'rtf', 'odt',
-  'pptx', 'ppt', 'key',
-  'xlsx', 'xls', 'csv',
-  'html', 'htm',
-  'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp',
-]);
-
-function isDeliverableKind(path: string): boolean {
-  const ext = path.split('/').pop()?.split('.');
-  return !!ext && ext.length > 1 && DELIVERABLE_EXTS.has(ext[ext.length - 1].toLowerCase());
 }
 
 /**
@@ -105,7 +84,7 @@ function assistantText(message: MessageLike): string {
 function openablePath(path: string): boolean {
   return (
     !!path
-    && isDeliverableKind(path)
+    && fileKind(path) !== null
     && !isSystemPath(path)
     && classifyAgentPath(path).kind === 'file'
   );
