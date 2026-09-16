@@ -43,26 +43,32 @@ export function linkCandidates(href: string, fromFile: string | null): string[] 
 }
 
 /**
- * The path a save should ask for: the reference resolved the way opening it is.
+ * Where a save should go: the reference resolved the way opening it is, and
+ * whether the lookup could place it at all.
  *
  * A deliverable card carries the reference as the reply wrote it, which is
- * often not where the file landed — that is the whole reason the lookup exists.
- * Open went through it and Download did not, so one card opened a report and
- * then failed to save the same file. The lookup is an improvement on the
- * reference rather than a precondition, so a reference that is already right
- * still saves when the lookup is absent or fails.
+ * often not where the file landed, and that is the whole reason the lookup
+ * exists. Open went through it and Download did not, so one card opened a
+ * report and then failed to save the same file.
+ *
+ * The lookup is an improvement on the reference rather than a precondition, so
+ * `placed` stays true whenever nothing contradicts the reference: no lookup, a
+ * failed one, or a server that has not looked yet. It goes false only when the
+ * server looked and could not pick, which is the one answer Open hands to the
+ * user instead of guessing at.
  */
 export async function downloadTarget(
   path: string,
   resolve: ((candidates: string[], recentWrites: string[]) => Promise<{ status: string; path?: string | null }>) | null,
   recentWrites: readonly string[] = [],
-): Promise<string> {
-  if (!resolve) return path;
+): Promise<{ path: string; placed: boolean }> {
+  if (!resolve) return { path, placed: true };
   try {
     const result = await resolve([path], [...recentWrites]);
-    return result.status === 'resolved' && result.path ? result.path : path;
+    if (result.status === 'resolved' && result.path) return { path: result.path, placed: true };
+    return { path, placed: result.status === 'unavailable' || result.status === 'resolved' };
   } catch {
-    return path;
+    return { path, placed: true };
   }
 }
 

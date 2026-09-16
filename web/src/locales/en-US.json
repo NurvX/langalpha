@@ -1698,6 +1698,7 @@
     "cancelSelection": "Cancel selection",
     "download": "Download",
     "downloadOptions": "Download options",
+    "downloadFailed": "Couldn't download the file",
     "downloadAsPdf": "Download as PDF",
     "downloadAsMarkdown": "Download as Markdown",
     "copyToClipboard": "Copy to clipboard",

@@ -15,7 +15,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
 import { modelPrefs } from '@/lib/modelPreferences';
 import { updateCurrentUser } from '../../Dashboard/utils/api';
-import { summarizeThread, offloadThread, getThreadShareStatus, updateThreadSharing, cancelSubagentTask, triggerFileDownload } from '../utils/api';
+import { summarizeThread, offloadThread, getThreadShareStatus, updateThreadSharing, cancelSubagentTask, triggerFileDownload, resolveWorkspaceFile } from '../utils/api';
+import { downloadTarget } from '../utils/fileRefResolver';
 import { buildSharedServeUrl, buildWsfilesUrl } from './viewers/html/wsfilesUrl';
 import ShareReportLinkModal from './ShareReportLinkModal';
 import { toast } from '@/components/ui/use-toast';
@@ -867,13 +868,32 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // A deliverable card names its own workspace only for a cross-workspace ref;
   // otherwise the file belongs to the thread's own workspace, which the card
   // has no way to know.
-  const handleDownloadFileFromChat = useCallback((path: string, targetWorkspaceId?: string) => {
+  const handleDownloadFileFromChat = useCallback(async (path: string, targetWorkspaceId?: string) => {
     const wsId = targetWorkspaceId ?? workspaceId;
     if (!wsId) return;
-    triggerFileDownload(wsId, path).catch((err: unknown) => {
+    try {
+      // This thread's writes break ties between namesakes, and they only name
+      // files in its own workspace, so a card pointing elsewhere resolves
+      // without them.
+      const writes = wsId === workspaceId ? getRecentWritePaths() : [];
+      const target = await downloadTarget(
+        path,
+        (candidates, recentWrites) => resolveWorkspaceFile(wsId, candidates, recentWrites),
+        writes,
+      );
+      // The lookup found namesakes and could not pick one, so there is no file
+      // to save and a fetch of the reference as written would 404 in silence.
+      // Open already asks which one the reader meant, so the click goes there.
+      if (!target.placed) return void handleOpenFileFromChat(path, targetWorkspaceId);
+      await triggerFileDownload(wsId, target.path);
+    } catch (err: unknown) {
       console.error('[ChatView] Download failed:', err);
-    });
-  }, [workspaceId]);
+      // A card's Download is the whole interaction: nothing opens, nothing
+      // navigates, and the browser shows no save. Without this the click is
+      // indistinguishable from a dead button.
+      toast({ description: t('filePanel.downloadFailed'), variant: 'destructive' });
+    }
+  }, [workspaceId, getRecentWritePaths, handleOpenFileFromChat, t]);
 
   const stableOpenFile = useStableHandler(handleOpenFileFromChat);
   const stableDownloadFile = useStableHandler(handleDownloadFileFromChat);

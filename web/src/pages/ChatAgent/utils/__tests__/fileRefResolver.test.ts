@@ -82,18 +82,28 @@ describe('collectRecentWritePaths', () => {
 describe('downloadTarget', () => {
   it('saves the path the lookup resolved, not the one the reply wrote', async () => {
     const resolve = async () => ({ status: 'resolved', path: 'work/q3/report.md' });
-    expect(await downloadTarget('report.md', resolve)).toBe('work/q3/report.md');
+    expect(await downloadTarget('report.md', resolve)).toEqual({ path: 'work/q3/report.md', placed: true });
   });
 
-  it('falls back to the reference when the lookup cannot place it', async () => {
-    expect(await downloadTarget('report.md', async () => ({ status: 'ambiguous' }))).toBe('report.md');
-    expect(await downloadTarget('report.md', async () => ({ status: 'resolved', path: null }))).toBe('report.md');
+  it('leaves the reference unplaced when the lookup found namesakes and could not pick', async () => {
+    // Nothing occupies the reference, so the caller sends the click to the
+    // panel that lists the matches rather than fetching a 404 in silence.
+    expect(await downloadTarget('report.md', async () => ({ status: 'ambiguous' })))
+      .toEqual({ path: 'report.md', placed: false });
+    expect(await downloadTarget('report.md', async () => ({ status: 'missing' })))
+      .toEqual({ path: 'report.md', placed: false });
   });
 
-  it('saves anyway when the lookup is absent or fails', async () => {
-    expect(await downloadTarget('results/report.md', null)).toBe('results/report.md');
+  it('saves the reference when nothing contradicts it', async () => {
+    // No lookup, one that threw, one that has not looked yet, and a resolve
+    // that named no path: none of these is evidence against the reference.
+    expect(await downloadTarget('results/report.md', null)).toEqual({ path: 'results/report.md', placed: true });
     const throws = async () => { throw new Error('offline'); };
-    expect(await downloadTarget('results/report.md', throws)).toBe('results/report.md');
+    expect(await downloadTarget('results/report.md', throws)).toEqual({ path: 'results/report.md', placed: true });
+    expect(await downloadTarget('report.md', async () => ({ status: 'unavailable' })))
+      .toEqual({ path: 'report.md', placed: true });
+    expect(await downloadTarget('report.md', async () => ({ status: 'resolved', path: null })))
+      .toEqual({ path: 'report.md', placed: true });
   });
 
   it('passes this thread’s writes as the tiebreak between namesakes', async () => {

@@ -1696,6 +1696,7 @@
     "cancelSelection": "取消选择",
     "download": "下载",
     "downloadOptions": "下载选项",
+    "downloadFailed": "无法下载文件",
     "downloadAsPdf": "下载为 PDF",
     "downloadAsMarkdown": "下载为 Markdown",
     "copyToClipboard": "复制到剪贴板",

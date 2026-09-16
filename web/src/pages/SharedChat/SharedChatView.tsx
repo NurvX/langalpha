@@ -12,6 +12,8 @@ import {
 import FilePanel from '../ChatAgent/components/FilePanel';
 import { WorkspaceProvider } from '../ChatAgent/contexts/WorkspaceContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useTranslation } from 'react-i18next';
+import { toast } from '@/components/ui/use-toast';
 import logoLight from '../../assets/img/logo.svg';
 import logoDark from '../../assets/img/logo-dark.svg';
 import {
@@ -41,6 +43,8 @@ import { buildSharedServeUrl } from '../ChatAgent/components/viewers/html/wsfile
 import { isTaskAgentId } from '../ChatAgent/utils/agentId';
 import type { FileLocation } from '../ChatAgent/utils/fileLocation';
 import { computeAgentArtifactRouting } from '../ChatAgent/utils/agentPaths';
+import { collectRecentWritePaths, downloadTarget, type TurnMessage } from '../ChatAgent/utils/fileRefResolver';
+import { useStableHandler } from '@/hooks/useStableHandler';
 
 // Message record type compatible with historyEventHandlers
 type MessageRecord = Record<string, unknown>;
@@ -60,6 +64,7 @@ function updateMessage(messages: MessageRecord[], messageId: string, updater: (m
  */
 export default function SharedChatView() {
   const { shareToken } = useParams<{ shareToken: string }>();
+  const { t } = useTranslation();
   const { theme } = useTheme();
   const logo = theme === 'dark' ? logoDark : logoLight;
 
@@ -412,6 +417,11 @@ export default function SharedChatView() {
     }
   }, [canBrowseFiles, files.length, shareToken]);
 
+  // This thread's writes break ties between namesakes, the same tiebreak the
+  // owner view passes. Identity-stable, so the actions memo below does not
+  // rebuild on every replayed message.
+  const getRecentWritePaths = useStableHandler(() => collectRecentWritePaths(messages as TurnMessage[]));
+
   // Read-only adapter for the transcript's action surface. The shared view has
   // no turn to edit/regenerate/rate and no interrupt to approve. Subagent-task
   // opening isn't declared here — MessageContentSegments strips it on readOnly
@@ -423,13 +433,34 @@ export default function SharedChatView() {
     // deliverable card offers Download only where the share actually permits
     // saving the bytes.
     onDownloadFile: canDownload
-      ? (path: string) => {
-          downloadSharedFileAs(shareToken!, path, 'download').catch((err: unknown) => {
+      ? async (path: string, fileWorkspaceId?: string) => {
+          // A card relayed from the worker names the workspace holding it, and
+          // the share token authorizes this thread's workspace alone. Resolving
+          // it here would look the name up in the wrong place and save whatever
+          // namesake it found, so the click goes where an unplaceable one goes.
+          if (fileWorkspaceId) return void handleOpenFile(path, fileWorkspaceId);
+          try {
+            // The same lookup opening the card takes, so one card cannot open
+            // a report and then fail to save it.
+            const target = await downloadTarget(
+              path,
+              (candidates, recentWrites) => resolveSharedFile(shareToken!, candidates, recentWrites),
+              getRecentWritePaths(),
+            );
+            // Namesakes the lookup could not pick between leave nothing to
+            // save, so the click lands on the panel that asks, exactly as Open
+            // does with the same answer.
+            if (!target.placed) return void handleOpenFile(path, fileWorkspaceId);
+            await downloadSharedFileAs(shareToken!, target.path, 'download');
+          } catch (err: unknown) {
             console.error('[SharedChatView] Download failed:', err);
-          });
+            // A reader on a shared link has no other way to learn the save did
+            // not happen: there is no panel error to fall back on here.
+            toast({ description: t('filePanel.downloadFailed'), variant: 'destructive' });
+          }
         }
       : undefined,
-  }), [handleOpenFile, canDownload, shareToken]);
+  }), [handleOpenFile, canDownload, shareToken, getRecentWritePaths, t]);
 
   // Deep link: `?file=<path>` opens that report directly once metadata + file
   // permission are known. One-shot — the share-link target from §1.3b.
@@ -642,6 +673,7 @@ export default function SharedChatView() {
               targetDirectory={filePanelTargetDir}
               onTargetDirHandled={() => setFilePanelTargetDir(null)}
               onOpenFile={handleOpenFile}
+              getRecentWritePaths={getRecentWritePaths}
             />
           </div>
         </>
