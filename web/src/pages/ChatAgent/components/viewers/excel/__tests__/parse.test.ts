@@ -76,7 +76,7 @@ describe('parseWorkbook', () => {
   it('applies the number format the cell carries', () => {
     expect(at('B4').text).toBe('12.4');
     expect(at('C4').text).toBe('12.3%');
-    expect(at('B8').text).toBe('03/15/2023');
+    expect(at('B8').text).toBe('2023-03-15');
   });
 
   it('spans a merge from its top-left and marks what it covers', () => {

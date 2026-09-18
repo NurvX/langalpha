@@ -97,6 +97,7 @@ vi.mock('../charts/InlineArtifactCards', async () => {
   const InlineStockPriceCard = () => React.createElement('div', { 'data-testid': 'inline-chart' });
   const NullCard = () => null;
   return {
+    chartSymbolOf: () => null,
     INLINE_ARTIFACT_TOOLS: new Set<string>(['fetch_sample_chart']),
     isInlineArtifactReady: (name: string, artifact: unknown) =>
       !!artifact && name === 'fetch_sample_chart',

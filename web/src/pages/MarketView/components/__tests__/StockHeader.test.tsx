@@ -1,6 +1,14 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+
+const { searchStocks } = vi.hoisted(() => ({ searchStocks: vi.fn() }));
+vi.mock('@/lib/marketUtils', async (importOriginal) => {
+  const orig = await importOriginal<Record<string, unknown>>();
+  return { ...orig, searchStocks };
+});
+
 import StockHeader from '../StockHeader';
+import { SYMBOL_SEARCH_DEBOUNCE_MS } from '@/hooks/useSymbolSearch';
 import type { SnapshotData } from '@/types/market';
 import type { ConnectionStatus } from '../../hooks/useMarketDataWS';
 
@@ -178,4 +186,43 @@ describe('StockHeader market status badge', () => {
     );
     expect(screen.getByText('Live')).toBeInTheDocument();
   });
+});
+
+describe('StockHeader symbol switch', () => {
+  it('keeps the ticker a label when nothing can be switched', () => {
+    render(<StockHeader {...baseProps} />);
+    expect(screen.getByText('AMD').tagName).toBe('SPAN');
+  });
+
+  it('makes the ticker a control that opens the search', async () => {
+    render(<StockHeader {...baseProps} onSwitchSymbol={() => {}} />);
+    const ticker = screen.getByRole('button', { name: /AMD/ });
+    fireEvent.click(ticker);
+    expect(await screen.findByRole('combobox')).toBeTruthy();
+  });
+
+  it('names the control by what it does, not just the ticker', () => {
+    render(<StockHeader {...baseProps} onSwitchSymbol={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Change symbol, currently AMD' })).toBeInTheDocument();
+  });
+
+  it('hands a picked hit to onSwitchSymbol with its name', async () => {
+    searchStocks.mockResolvedValue({ query: 'goog', results: [{ symbol: 'GOOGL', name: 'Alphabet Inc.' }], count: 1 });
+    const onSwitchSymbol = vi.fn();
+    render(<StockHeader {...baseProps} onSwitchSymbol={onSwitchSymbol} />);
+    fireEvent.click(screen.getByRole('button', { name: /AMD/ }));
+    // The popover opens on real timers (findBy polls them); only the rest
+    // period is faked.
+    const input = await screen.findByRole('combobox');
+    vi.useFakeTimers();
+    fireEvent.change(input, { target: { value: 'goog' } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(SYMBOL_SEARCH_DEBOUNCE_MS); });
+    fireEvent.click(screen.getByText('Alphabet Inc.'));
+    expect(onSwitchSymbol).toHaveBeenCalledWith('GOOGL', expect.objectContaining({ name: 'Alphabet Inc.' }));
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.clearAllMocks();
 });

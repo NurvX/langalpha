@@ -1,6 +1,6 @@
 /**
  * ChatView routing — verifies the pure routing function used by
- * `handleOpenAgentArtifactFromChat`. Critical regressions:
+ * `handleOpenFileFromChat`. Critical regressions:
  *  - all targets are cleared per call (no stale-target hijacking)
  *  - memo index opens to LIST view (empty-string targetMemoKey sentinel)
  *  - user-scoped artifacts (memo, user-tier memory) clear filePanelWorkspaceId

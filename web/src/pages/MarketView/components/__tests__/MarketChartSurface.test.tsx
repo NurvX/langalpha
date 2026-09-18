@@ -68,9 +68,17 @@ vi.mock('../StockHeader', () => ({
   default: (props: Record<string, unknown>) => {
     header.props = props;
     return (
-      <button data-testid="stock-header" onClick={props.onToggleOverview as () => void}>
-        header
-      </button>
+      <>
+        <button data-testid="stock-header" onClick={props.onToggleOverview as () => void}>
+          header
+        </button>
+        <button
+          data-testid="stock-header-pick"
+          onClick={() => (props.onSwitchSymbol as ((s: string, hit?: unknown) => void) | undefined)?.('GOOGL', { symbol: 'GOOGL', name: 'Alphabet Inc.' })}
+        >
+          pick
+        </button>
+      </>
     );
   },
 }));
@@ -147,6 +155,52 @@ describe('MarketChartSurface', () => {
 
     act(() => fireEvent.click(screen.getByTestId('market-chart'))); // → '5min'
     expect(chart.props!.interval).toBe('5min');
+  });
+
+  it('relays a header pick and a toolbar interval switch to the host unchanged', () => {
+    const onSwitchSymbol = vi.fn();
+    const onIntervalChange = vi.fn();
+    render(<MarketChartSurface symbol="AAPL" timeframe="1day" onSwitchSymbol={onSwitchSymbol} onIntervalChange={onIntervalChange} />);
+
+    act(() => fireEvent.click(screen.getByTestId('stock-header-pick')));
+    expect(onSwitchSymbol).toHaveBeenCalledWith('GOOGL', expect.objectContaining({ name: 'Alphabet Inc.' }));
+
+    act(() => fireEvent.click(screen.getByTestId('market-chart'))); // → '5min'
+    expect(onIntervalChange).toHaveBeenCalledWith('5min');
+    expect(chart.props!.interval).toBe('5min');
+  });
+
+  it('shows nothing of the previous company while the new symbol’s quote is loading', () => {
+    sd.stockInfo = { Symbol: 'AAPL', Name: 'Apple Inc.', Price: 190 };
+    sd.snapshotData = { symbol: 'AAPL', previous_close: 189 };
+    render(<MarketChartSurface symbol="GOOGL" />);
+
+    expect(header.props!.stockInfo).toBeNull();
+    expect(header.props!.snapshot).toBeNull();
+    expect(chart.props!.snapshot).toBeNull();
+  });
+
+  it('names the picked company from the search hit until its own quote lands', () => {
+    const onSwitchSymbol = vi.fn();
+    const { rerender } = render(<MarketChartSurface symbol="AAPL" onSwitchSymbol={onSwitchSymbol} />);
+    expect(header.props!.displayOverride).toBeNull();
+
+    act(() => fireEvent.click(screen.getByTestId('stock-header-pick')));
+    rerender(<MarketChartSurface symbol="GOOGL" onSwitchSymbol={onSwitchSymbol} />);
+    expect(header.props!.displayOverride).toMatchObject({ name: 'Alphabet Inc.' });
+
+    // The name belongs to the symbol it was picked for, not to whatever is up next.
+    rerender(<MarketChartSurface symbol="MSFT" onSwitchSymbol={onSwitchSymbol} />);
+    expect(header.props!.displayOverride).toBeNull();
+  });
+
+  it('follows a timeframe prop change after the toolbar moved the interval', () => {
+    const { rerender } = render(<MarketChartSurface symbol="AAPL" timeframe="1day" />);
+    act(() => fireEvent.click(screen.getByTestId('market-chart'))); // → '5min'
+    expect(chart.props!.interval).toBe('5min');
+
+    rerender(<MarketChartSurface symbol="AAPL" timeframe="1min" />);
+    expect(chart.props!.interval).toBe('1min');
   });
 
   it('hides the overview panel until toggled, then shows + closes it', () => {
