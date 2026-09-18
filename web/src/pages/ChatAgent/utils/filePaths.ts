@@ -91,7 +91,9 @@ export function parseWsPath(href: string | undefined): { workspaceId: string; pa
  * no other use for one, and a relative link left to the browser opens the app
  * itself in a new tab. The file panel owns resolving it, so a name with
  * an unfamiliar extension or none at all still opens. A root-absolute href
- * still needs an extension, since `/settings` style links are app routes.
+ * still needs an extension, since `/settings` style links are app routes, unless
+ * it starts at that sandbox root, which already says it names the workspace and
+ * so names a file or a folder whatever it ends in.
  * A `name.py:42` line suffix is checked before the scheme test, which would
  * otherwise read `name.py:` as a URL scheme.
  */
@@ -101,7 +103,16 @@ export function isFilePath(href: string | undefined): boolean {
   if (hasLineSuffix(href) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(href)) return !/^www\./i.test(href);
   if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//') || href.startsWith('#') || href.startsWith('?')) return false;
   if (/^www\./i.test(href)) return false;
-  if (href.startsWith('/')) return /\.[a-z0-9]{1,8}(?:[?#].*)?$/i.test(href);
+  if (href.startsWith('/')) {
+    // A sandbox root is the reference saying "start at the workspace", so the
+    // parser strips it and what comes back is a workspace path with no leading
+    // slash. `/settings` keeps its slash through the parser and still has to
+    // look like a file. Asking a rooted destination for an extension read
+    // `/home/workspace/data/` as an app route, because a folder has none.
+    const parts = parseAgentPath(href);
+    if (!parts.path.startsWith('/')) return parts.path !== '' || parts.directory;
+    return /\.[a-z0-9]{1,8}(?:[?#].*)?$/i.test(href);
+  }
   return true;
 }
 

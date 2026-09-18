@@ -75,6 +75,23 @@ describe('isFilePath', () => {
     expect(isFilePath('/tmp/output.csv')).toBe(true);
   });
 
+  it('accepts a folder that starts at the sandbox root, which has no extension to offer', () => {
+    // The prompts tell the agent its working directory is `/home/workspace`, so
+    // it writes rooted destinations. Asking every rooted one for an extension
+    // read a folder as an app route, and the click left the app.
+    expect(isFilePath('/home/workspace/data/')).toBe(true);
+    expect(isFilePath('/home/daytona/work/q3/')).toBe(true);
+    expect(isFilePath('/home/workspace/results/report.md')).toBe(true);
+    expect(isFilePath('/home/workspace/')).toBe(true);
+  });
+
+  it('still asks every other rooted destination for an extension', () => {
+    // The control: only the sandbox root says "this names the workspace".
+    expect(isFilePath('/settings')).toBe(false);
+    expect(isFilePath('/home/someone/data/')).toBe(false);
+    expect(isFilePath('/home/workspaces/data/')).toBe(false);
+  });
+
   it('reads a line suffix as a file, not a URL scheme', () => {
     expect(isFilePath('model.py:42')).toBe(true);
     expect(isFilePath('work/code/model.py:40-55')).toBe(true);

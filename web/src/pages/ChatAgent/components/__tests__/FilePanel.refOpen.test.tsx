@@ -68,6 +68,7 @@ const CONTENT: Record<string, string> = {
     '[up-folder](../data/)',
     '[sub-folder](assets/)',
     '[rooted-folder](__wsref__/ws/results/)',
+    '[sandbox-folder](/home/workspace/results/)',
   ].join('\n'),
   'docs/results/report.md': '# The nested one',
   'results/report.md': '# The rooted one',
@@ -209,11 +210,18 @@ describe('FilePanel reference opens', () => {
 
   it('leaves a rooted folder where it points, not one level down', async () => {
     // The control for the join above: `docs/results/` exists, so joining a
-    // reference that named its own starting point would land on it. A sandbox
-    // root cannot stand in for the qualifier here, because `isFilePath` asks a
-    // rooted destination for an extension and a folder has none.
+    // reference that named its own starting point would land on it. The
+    // qualifier also carries the workspace, which is the third argument here.
     expect(await clickFolder('rooted-folder'))
       .toHaveBeenCalledWith('results/', 'ws', undefined);
+  });
+
+  it('opens a folder a sandbox-rooted link names, rather than leaving the app', async () => {
+    // `/home/workspace/data/` is the form the prompts teach, and it names no
+    // workspace of its own. The click used to fall through to a plain app link,
+    // because a folder has no extension to offer the rooted test.
+    expect(await clickFolder('sandbox-folder'))
+      .toHaveBeenCalledWith('results/', undefined, undefined);
   });
 
   it('drops a save that fails after the reader has opened another file', async () => {
