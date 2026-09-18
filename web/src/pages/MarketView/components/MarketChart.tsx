@@ -92,6 +92,12 @@ interface MarketChartProps {
   wsStatus: string;
   marketStatus?: Record<string, unknown> | null;
   snapshot: SnapshotData | null;
+  /**
+   * Show the range/point selection tools. They write to a store only the
+   * MarketView page reads, so any other host would arm a hand-off nothing
+   * receives; a host opts in rather than out.
+   */
+  selectionTools?: boolean;
 }
 
 export interface MarketChartHandle {
@@ -141,6 +147,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   wsStatus: _wsStatus,
   marketStatus,
   snapshot,
+  selectionTools = false,
 }, ref) => {
   const { t } = useTranslation();
   const { theme } = useTheme();
@@ -2195,9 +2202,11 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
               {/* Selection tools — first-class, both layouts. Primary entry
                   point for the chart → agent hand-off, so not buried in a
                   dropdown. Only meaningful on the Light chart (custom mode). */}
-              <div className="chart-tool-buttons">
-                {renderSelectionButtons()}
-              </div>
+              {selectionTools && (
+                <div className="chart-tool-buttons">
+                  {renderSelectionButtons()}
+                </div>
+              )}
               {/* Tools dropdown — inline until tier 3, then into the menu */}
               <div className="toolbar-dropdown toolbar-item--tools" ref={toolsDropdownRef}>
                 <button

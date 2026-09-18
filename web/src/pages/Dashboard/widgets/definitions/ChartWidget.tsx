@@ -14,7 +14,8 @@ import {
   type MouseEventParams,
   type UTCTimestamp,
 } from 'lightweight-charts';
-import { searchStocks } from '@/lib/marketUtils';
+import { useSymbolSearch } from '@/hooks/useSymbolSearch';
+import { normalizeSymbolInput, readTypedTicker } from '@/lib/marketUtils';
 import {
   getChartTheme,
   STAGE2_BACKFILL_DAYS,
@@ -1100,29 +1101,23 @@ function ChartWidget({ instance, updateConfig }: WidgetRenderProps<ChartConfig>)
 
   const hasData = allDataRef.current.length > 0 || summary !== null;
 
-  // Inline symbol search — click the symbol text to edit in place. The same
-  // debounced search the DashboardHeader uses powers a dropdown of matches
-  // so users can ticker-hunt without leaving the widget. Enter picks the
-  // first match (or the raw uppercase query if no matches); Escape or
-  // outside-click cancels.
-  type SymbolHit = { symbol: string; name?: string };
+  // Inline symbol search: click the symbol text to edit in place, with a
+  // dropdown of matches. Enter picks the first match (or the raw uppercase
+  // query if no matches); Escape or outside-click cancels.
   const [editingSymbol, setEditingSymbol] = useState(false);
   const [symbolDraft, setSymbolDraft] = useState(config.symbol);
-  const [searchHits, setSearchHits] = useState<SymbolHit[]>([]);
-  const [searchLoading, setSearchLoading] = useState(false);
+  const { hits: searchHits, loading: searchLoading } = useSymbolSearch(symbolDraft, 8, { enabled: editingSymbol });
   const symbolEditorRef = useRef<HTMLDivElement | null>(null);
   const symbolInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectSymbol = useCallback((sym: string) => {
-    const next = sym.trim().toUpperCase();
+    const next = normalizeSymbolInput(sym);
     if (next && next !== config.symbol) updateConfig({ symbol: next });
     setEditingSymbol(false);
-    setSearchHits([]);
   }, [config.symbol, updateConfig]);
 
   const startEditSymbol = useCallback(() => {
     setSymbolDraft(config.symbol);
-    setSearchHits([]);
     setEditingSymbol(true);
     requestAnimationFrame(() => {
       symbolInputRef.current?.focus();
@@ -1130,37 +1125,12 @@ function ChartWidget({ instance, updateConfig }: WidgetRenderProps<ChartConfig>)
     });
   }, [config.symbol]);
 
-  // Debounced search while editing. Kept in the component (not extracted) —
-  // this is the only caller and the state is small.
-  useEffect(() => {
-    if (!editingSymbol) return;
-    const q = symbolDraft.trim();
-    if (!q) {
-      setSearchHits([]);
-      setSearchLoading(false);
-      return;
-    }
-    setSearchLoading(true);
-    const timer = setTimeout(async () => {
-      try {
-        const res = await searchStocks(q, 8);
-        setSearchHits(((res.results || []) as SymbolHit[]).slice(0, 8));
-      } catch {
-        setSearchHits([]);
-      } finally {
-        setSearchLoading(false);
-      }
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [symbolDraft, editingSymbol]);
-
   // Outside-click dismiss for the editor + dropdown.
   useEffect(() => {
     if (!editingSymbol) return;
     const onMouseDown = (e: MouseEvent) => {
       if (symbolEditorRef.current && !symbolEditorRef.current.contains(e.target as Node)) {
         setEditingSymbol(false);
-        setSearchHits([]);
       }
     };
     document.addEventListener('mousedown', onMouseDown);
@@ -1186,14 +1156,18 @@ function ChartWidget({ instance, updateConfig }: WidgetRenderProps<ChartConfig>)
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   // Prefer the top search hit so users can type "nvid" and
-                  // land on NVDA. Fall back to the raw draft for exact
-                  // symbols the search doesn't know (e.g. freshly listed).
-                  const pick = searchHits[0]?.symbol || symbolDraft;
-                  selectSymbol(pick);
+                  // land on NVDA. Neither the hit nor the draft is taken while
+                  // a search is resting or in flight, the same rule as
+                  // SymbolSearch: "goog" + a fast Enter must not open GOOG
+                  // while GOOGL is on its way, and the listed hits may still
+                  // answer the draft that was typed over.
+                  const hit = searchHits[0]?.symbol;
+                  const typed = readTypedTicker(symbolDraft);
+                  if (hit && !searchLoading) selectSymbol(hit);
+                  else if (typed && !searchLoading) selectSymbol(typed);
                 } else if (e.key === 'Escape') {
                   setEditingSymbol(false);
                   setSymbolDraft(config.symbol);
-                  setSearchHits([]);
                 }
               }}
               className="text-sm font-semibold tabular-nums bg-transparent border-b px-0 py-0 w-24"
@@ -1253,9 +1227,9 @@ function ChartWidget({ instance, updateConfig }: WidgetRenderProps<ChartConfig>)
                   {t('dashboard.widgets.chart.noMatchesEnter', { symbol: symbolDraft.trim().toUpperCase() })}
                 </div>
               ) : (
-                searchHits.map((hit) => (
+                searchHits.map((hit, i) => (
                   <button
-                    key={hit.symbol}
+                    key={`${hit.symbol}-${i}`}
                     type="button"
                     onMouseDown={(e) => {
                       // Use onMouseDown so the click fires before the input

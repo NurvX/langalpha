@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown } from 'lucide-react';
@@ -14,7 +14,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { searchStocks } from '@/lib/marketUtils';
+import type { StockSearchHit } from '@/lib/marketUtils';
+import { useSymbolSearch } from '@/hooks/useSymbolSearch';
 import { toast } from '@/components/ui/use-toast';
 import CronScheduleBuilder from './CronScheduleBuilder';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
@@ -54,7 +55,7 @@ export function isIndexSymbol(symbol: string): boolean {
   return INDEX_SYMBOL_SET.has(symbol.toUpperCase());
 }
 
-interface SearchResult { symbol: string; name?: string; exchangeShortName?: string; isIndex?: boolean }
+type SearchResult = StockSearchHit & { isIndex: boolean };
 
 interface TickerAutocompleteProps {
   value: string;
@@ -65,7 +66,7 @@ interface TickerAutocompleteProps {
 function TickerAutocomplete({ value, onChange, placeholder = 'AAPL, SPX...' }: TickerAutocompleteProps) {
   useTranslation();
   const [query, setQuery] = useState(value);
-  const [results, setResults] = useState<SearchResult[]>([]);
+  const { hits } = useSymbolSearch(query, 20);
   const [showDropdown, setShowDropdown] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -74,35 +75,16 @@ function TickerAutocomplete({ value, onChange, placeholder = 'AAPL, SPX...' }: T
     setQuery(value);
   }, [value]);
 
-  // Debounced search — merge index matches + stock API results
-  useEffect(() => {
-    if (!query || query.length < 1) {
-      setResults([]);
-      return;
-    }
+  // The static index list answers on the keystroke; the stock hits join it
+  // once the debounced search returns. The two never share a symbol.
+  const results = useMemo<SearchResult[]>(() => {
+    if (!query) return [];
     const q = query.toUpperCase();
-
-    // Instant: filter static index list
     const indexMatches: SearchResult[] = INDEX_SYMBOLS
       .filter((idx) => idx.symbol.includes(q) || idx.name.toUpperCase().includes(q))
       .map((idx) => ({ symbol: idx.symbol, name: idx.name, exchangeShortName: 'INDEX', isIndex: true }));
-
-    // Show index matches immediately
-    if (indexMatches.length > 0) {
-      setResults(indexMatches);
-      setShowDropdown(true);
-    }
-
-    // Debounced: fetch stock results and merge
-    const timer = setTimeout(async () => {
-      const data = await searchStocks(query, 20);
-      const stockResults: SearchResult[] = (data.results as SearchResult[]).map((r) => ({ ...r, isIndex: false }));
-      // Deduplicate: index symbols already shown won't appear in stock results (different symbols)
-      setResults([...indexMatches, ...stockResults]);
-      if (indexMatches.length > 0 || stockResults.length > 0) setShowDropdown(true);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [query]);
+    return [...indexMatches, ...hits.map((r) => ({ ...r, isIndex: false }))];
+  }, [query, hits]);
 
   // Click outside to close
   useEffect(() => {
