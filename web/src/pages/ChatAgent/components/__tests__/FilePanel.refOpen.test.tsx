@@ -5,6 +5,15 @@ import { renderWithProviders } from '@/test/utils';
 
 const wsStatus = { value: 'running' };
 
+// `renderWithProviders` mounts no Toaster, so a toast has nowhere to appear in
+// the DOM. The spy stands in for that viewport, and the assertion below pins
+// the sentence the reader would have read, not merely that a toast happened.
+const { toastSpy } = vi.hoisted(() => ({ toastSpy: vi.fn() }));
+vi.mock('@/components/ui/use-toast', async (importOriginal) => {
+  const orig = await importOriginal<Record<string, unknown>>();
+  return { ...orig, toast: toastSpy };
+});
+
 vi.mock('@/pages/ChatAgent/utils/api', async (importOriginal) => {
   const orig = await importOriginal<Record<string, unknown>>();
   return {
@@ -29,8 +38,13 @@ vi.mock('@/pages/ChatAgent/components/FilePanelMemo', () => ({
 }));
 vi.mock('@/pages/ChatAgent/components/SandboxSettingsPanel', () => ({ SandboxSettingsContent: () => null }));
 vi.mock('@/pages/ChatAgent/components/viewers/CodeEditor', () => ({
-  default: ({ value, fileName }: { value?: string; fileName: string }) => (
-    <textarea data-testid="editor" data-file={fileName} value={value ?? ''} readOnly />
+  default: ({ value, fileName, onChange }: { value?: string; fileName: string; onChange?: (v: string) => void }) => (
+    <textarea
+      data-testid="editor"
+      data-file={fileName}
+      value={value ?? ''}
+      onChange={(e) => onChange?.(e.target.value)}
+    />
   ),
 }));
 
@@ -253,5 +267,63 @@ describe('FilePanel reference opens', () => {
     });
 
     expect(await screen.findByText('File not found')).toBeTruthy();
+  });
+
+  // A write holds the whole body and the client sets no timeout, so the reader
+  // reaches the next file long before a hung save answers. This leaves one
+  // write in flight on `notes.md` with the panel already showing `report.py`.
+  const EDIT_FILES = ['notes.md', 'report.py'];
+
+  const hangSaveThenOpenNextFile = async () => {
+    let rejectWrite: (err: unknown) => void = () => {};
+    (api.writeWorkspaceFile as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((_resolve, reject) => { rejectWrite = reject; }),
+    );
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const { rerender } = renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={EDIT_FILES} targetFile="notes.md" />,
+    );
+    await screen.findByText('My private notes body.');
+    fireEvent.click(screen.getByTitle('Edit file'));
+    fireEvent.change(await screen.findByTestId('editor'), { target: { value: '# Notes\n\nEdited body.' } });
+    fireEvent.click(screen.getByTitle('Save (Cmd+S)'));
+    await waitFor(() => expect(api.writeWorkspaceFile).toHaveBeenCalledWith('ws', 'notes.md', '# Notes\n\nEdited body.'));
+
+    rerender(<FilePanel workspaceId="ws" onClose={() => {}} files={EDIT_FILES} targetFile="report.py" />);
+    await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('ws', 'report.py'));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    return { rejectWrite };
+  };
+
+  it('a hung save on one file does not disable Save on the next', async () => {
+    // `isSaving` was one hook-wide flag, and only the write that set it could
+    // clear it. A save that never answered therefore outlived its own file and
+    // left Save greyed out on every file opened after it, with no way back
+    // short of reloading the page.
+    await hangSaveThenOpenNextFile();
+
+    fireEvent.click(screen.getByTitle('Edit file'));
+    const editor = await screen.findByTestId('editor');
+    expect(editor.getAttribute('data-file')).toBe('report.py');
+    fireEvent.change(editor, { target: { value: 'print("edited")\n' } });
+
+    expect(screen.getByTitle('Save (Cmd+S)')).not.toBeDisabled();
+  });
+
+  it('a save that fails after the reader has left the file says so', async () => {
+    // The panel has moved on, so there is no header left to carry the inline
+    // error and the failure used to return in silence. A reader who then
+    // answered "discard unsaved changes" lost the edit believing it had landed.
+    const { rejectWrite } = await hangSaveThenOpenNextFile();
+
+    await act(async () => {
+      rejectWrite({ response: { status: 500, data: { detail: 'Sandbox is gone' } } });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(toastSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ description: "Couldn't save notes.md", variant: 'destructive' }),
+    );
   });
 });

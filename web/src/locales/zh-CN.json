@@ -1684,6 +1684,7 @@
     "fileTooLarge": "文件过大，无法在浏览器中编辑（>500KB）",
     "loadEditFailed": "加载文件编辑失败",
     "saveFailed": "保存失败",
+    "saveFailedFile": "无法保存 {{name}}",
     "deleteFailed": "删除失败",
     "deletePartialFail": "{{count}} 个文件删除失败",
     "backToFileList": "返回文件列表",

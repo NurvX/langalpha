@@ -1686,6 +1686,7 @@
     "fileTooLarge": "File is too large to edit in the browser (>500KB)",
     "loadEditFailed": "Failed to load file for editing",
     "saveFailed": "Save failed",
+    "saveFailedFile": "Couldn't save {{name}}",
     "deleteFailed": "Delete failed",
     "deletePartialFail": "{{count}} file(s) failed to delete",
     "backToFileList": "Back to file list",
