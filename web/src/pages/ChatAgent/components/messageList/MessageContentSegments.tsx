@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, memo } from 'react';
 import ActivityBlock from '../ActivityBlock';
-import { INLINE_ARTIFACT_MAP } from '../charts/InlineArtifactCards';
+import { INLINE_ARTIFACT_MAP, openCardTarget } from '../charts/InlineArtifactCards';
 import type { OpenFileHandler } from '../../utils/fileLocation';
 import ReasoningMessageContent from '../ReasoningMessageContent';
 import PlanApprovalCard from '../PlanApprovalCard';
@@ -120,7 +120,7 @@ function TextBlock({ block, isFirst, isStreaming, hasError, structuredError, isS
 
 export const MessageContentSegments = memo(function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesses, todoListProcesses: _todoListProcesses, subagentTasks, planApprovals = EMPTY_OBJ, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, hasError, structuredError, compactToolCalls = false, isSubagentView = false, readOnly = false, ptcAgentProposals = EMPTY_OBJ, secretaryActionProposals = EMPTY_OBJ, creditPauses = EMPTY_OBJ, toolApprovals = EMPTY_OBJ, htmlWidgetProcesses = EMPTY_OBJ, flashContext }: MessageContentSegmentsProps): React.ReactElement {
   const {
-    onOpenSubagentTask, onOpenFile, onToolCallDetailClick,
+    onOpenSubagentTask, onOpenFile, onToolCallDetailClick, onOpenChart,
     onApprovePlan, onRejectPlan, onPlanDetailClick,
     onAnswerQuestion, onSkipQuestion,
     onApproveCreateWorkspace, onRejectCreateWorkspace,
@@ -249,6 +249,7 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
               isFirst={blockIdx === 0}
               onToolCallClick={onToolCallDetailClick as any} // TODO: type properly
               onOpenFile={onOpenFile}
+              onOpenChart={onOpenChart}
             />
           );
         }
@@ -261,7 +262,7 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
             <div key={block.key} className="mt-1 mb-1">
               <ChartComponent
                 artifact={artifact!}
-                onClick={() => onToolCallDetailClick?.((block as CompactArtifactRenderBlock).proc)}
+                onClick={() => openCardTarget(artifact, onOpenChart, () => onToolCallDetailClick?.((block as CompactArtifactRenderBlock).proc))}
               />
             </div>
           );
@@ -465,6 +466,7 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
           isFirst={renderBlocks.length === 0}
           onToolCallClick={onToolCallDetailClick as any} // TODO: type properly
           onOpenFile={onOpenFile}
+          onOpenChart={onOpenChart}
         />
       )}
       {/* At the foot of the message, not beside the card that stopped. The

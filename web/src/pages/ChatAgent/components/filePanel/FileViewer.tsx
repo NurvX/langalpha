@@ -6,9 +6,9 @@ import Markdown from '../Markdown';
 import ImageLightbox from '../ImageLightbox';
 import DocumentErrorBoundary from '../viewers/DocumentErrorBoundary';
 import { stripLineNumbers } from '../toolDisplayConfig';
-import type { FileLocation } from '../../utils/fileLocation';
+import type { OpenFileHandler } from '../../utils/fileLocation';
 import type { ContextPayload, EditorTextSelectData } from './types';
-import { EXT_TO_LANG, getFileExtension } from './fileMeta';
+import { EXT_TO_LANG, LARGE_TOOL_RESULTS_PREFIX, getFileExtension } from './fileMeta';
 import { imageMime, type FileBody } from './fileBody';
 import { FileErrorDisplay, type FileError } from './fileErrors';
 import { DocumentErrorFallback, DocumentLoadingFallback } from './fallbacks';
@@ -19,18 +19,7 @@ const CsvViewer = React.lazy(() => import('../viewers/CsvViewer'));
 const HtmlViewer = React.lazy(() => import('../viewers/HtmlViewer'));
 const CodeEditor = React.lazy(() => import('../viewers/CodeEditor'));
 
-/**
- * The spreadsheet viewer is growing a cell cursor and a formula bar in a
- * parallel change; these are the props it is agreed to take, all optional, so
- * the panel can wire the ones it owns before that lands.
- */
-interface ExcelViewerProps {
-  data: ArrayBuffer;
-  filePath?: string;
-  onAddContext?: (ctx: ContextPayload) => void;
-  focusCell?: string | null;
-}
-const ExcelViewer = React.lazy(() => import('../viewers/ExcelViewer')) as React.ComponentType<ExcelViewerProps>;
+const ExcelViewer = React.lazy(() => import('../viewers/ExcelViewer'));
 
 export interface FileViewerProps {
   path: string;
@@ -57,7 +46,7 @@ export interface FileViewerProps {
 
   onAddContext: ((ctx: ContextPayload) => void) | null;
   onContentMouseUp: () => void;
-  onViewerLink: (path: string, workspaceId?: string, location?: FileLocation, rooted?: boolean) => void;
+  onViewerLink: OpenFileHandler;
   onAnchorLink: (fragment: string) => void;
   servedUrl?: string;
   onCopyShareLink?: ((filePath: string) => void) | null;
@@ -128,10 +117,15 @@ export function FileViewer(props: FileViewerProps): React.ReactElement {
       <Suspense fallback={<DocumentLoadingFallback />}>
         <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={props.onDownloadInFallback} />}>
           <ExcelViewer
+            // The parse is async and keeps the last workbook's cells until it
+            // lands, so a second workbook gets its own instance rather than
+            // the first one's grid under its own path.
+            key={path}
             data={body.buffer!}
             filePath={path}
             onAddContext={props.onAddContext ?? undefined}
             focusCell={props.focus.focusCell}
+            focusSeq={props.focus.seq ?? undefined}
           />
         </DocumentErrorBoundary>
       </Suspense>
@@ -177,7 +171,7 @@ export function FileViewer(props: FileViewerProps): React.ReactElement {
           <img src={imageUrl} alt={fileName} className="max-w-full rounded cursor-pointer" onClick={() => setLightboxOpen(true)} />
           <ImageLightbox src={imageUrl} alt={fileName} open={lightboxOpen} onClose={() => setLightboxOpen(false)} />
         </>
-      ) : path.startsWith('/large_tool_results/') ? (
+      ) : path.startsWith(LARGE_TOOL_RESULTS_PREFIX) ? (
         <div className="markdown-print-content">
           <Markdown variant="panel" content={stripLineNumbers(body?.content ?? null) ?? ''} className="text-sm" />
         </div>

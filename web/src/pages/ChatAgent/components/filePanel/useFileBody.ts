@@ -91,11 +91,17 @@ export function useFileBody({ cache, path, workspaceStatus }: UseFileBodyArgs) {
     return query.error ? categorizeFileError(query.error, workspaceStatus) : null;
   }, [path, mode, query.error, workspaceStatus]);
 
+  // React Query keeps the previous body and its timestamp through a background
+  // refetch and after a failed one, so the timestamp alone would say bytes are
+  // in hand that have not arrived, and a changed tab would lose its marker on
+  // the stale body it still shows.
+  const settled = query.isSuccess && !query.isFetching;
   return {
     body: (path && mode !== 'none' ? query.data : null) ?? null,
     loading: !!path && mode !== 'none' && query.isPending,
     error,
-    updatedAt: query.dataUpdatedAt,
+    /** When the bytes on screen were read; 0 while a read is in flight or failed. */
+    readAt: settled ? query.dataUpdatedAt : 0,
     refetch: query.refetch,
   };
 }

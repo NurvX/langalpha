@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { useRightPanel } from '../useRightPanel';
 
 const { getPreviewUrl } = vi.hoisted(() => ({ getPreviewUrl: vi.fn() }));
-vi.mock('../../../utils/api', () => ({ getPreviewUrl }));
+vi.mock('../../../utils/api', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), getPreviewUrl }));
 
 function open(isMobile: boolean) {
   // Hoisted out of the render callback: a fresh identity per render would
@@ -62,7 +62,7 @@ describe('a running app opened from chat', () => {
   it('clears once the panel has opened it, so a later file click is not overruled', () => {
     const result = open(false);
     act(() => result.current.handleOpenPreview(APP));
-    act(() => result.current.handleTargetPreviewHandled());
+    act(() => result.current.handleTargetHandled());
 
     expect(result.current.panelTarget).toBeNull();
     expect(result.current.rightPanelType).toBe('file');

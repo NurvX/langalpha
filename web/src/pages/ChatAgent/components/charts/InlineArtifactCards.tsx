@@ -1078,6 +1078,30 @@ export const INLINE_ARTIFACT_MAP: Record<
   order_receipt: OrderReceiptCard,
 };
 
+/** The compact cards that are about one listed stock, and so have a chart to open. */
+const CHART_CARD_TYPES = new Set(['quote', 'stock_prices', 'company_overview']);
+
+/** The symbol whose live chart a card opens, or null for a card about no one stock. */
+export function chartSymbolOf(artifact: Record<string, unknown> | null | undefined): string | null {
+  if (!artifact || !CHART_CARD_TYPES.has(artifact.type as string)) return null;
+  return typeof artifact.symbol === 'string' ? artifact.symbol : null;
+}
+
+/**
+ * What a click on a card does: a card about one stock opens that stock's live
+ * chart, and every other card falls back to the raw tool result. Either way the
+ * tool-call row beside the card stays the way to the result itself.
+ */
+export function openCardTarget(
+  artifact: Record<string, unknown> | null | undefined,
+  onOpenChart: ((spec: { symbol: string }) => void) | null | undefined,
+  fallback: () => void,
+): void {
+  const symbol = chartSymbolOf(artifact);
+  if (symbol && onOpenChart) onOpenChart({ symbol });
+  else fallback();
+}
+
 /**
  * Whether a completed tool call has an artifact this build draws a card for.
  *

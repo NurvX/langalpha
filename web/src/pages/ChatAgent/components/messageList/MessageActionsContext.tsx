@@ -17,12 +17,11 @@ import React from 'react';
 import type { FeedbackResult, SubagentInfo, ToolCallProcessRecord } from './types';
 import type { ToolApprovalPosition } from '@/types/chat';
 import type { OpenFileHandler } from '../../utils/fileLocation';
+import type { ChartTabSpec } from '../filePanel/types';
 
 export interface MessageActions {
   onOpenSubagentTask?: (info: SubagentInfo) => void;
   onOpenFile?: OpenFileHandler;
-  /** Opens in a tab of its own; absent where the panel has no tab strip. */
-  onOpenFileInNewTab?: OpenFileHandler;
   /** Brings a turn's deliverables deck into view as it unfolds. The deck owns
    *  no scroll container and must not grab one: the host's scroll controller
    *  re-asserts its own position on every content growth, which a fanning deck
@@ -33,6 +32,8 @@ export interface MessageActions {
    *  absence is what hides the deliverable card's Download item. */
   onDownloadFile?: (path: string, workspaceId?: string) => void;
   onOpenSources?: (messageId: string) => void;
+  /** Opens a live chart for a symbol beside the chat; absent where there is no panel to land in. */
+  onOpenChart?: (spec: ChartTabSpec) => void;
   onToolCallDetailClick?: (proc: ToolCallProcessRecord) => void;
   onApprovePlan?: () => void;
   onRejectPlan?: () => void;

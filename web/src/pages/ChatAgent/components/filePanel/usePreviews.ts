@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getPreviewUrl } from '../../utils/api';
+import { appendPathSuffix, getPreviewUrl } from '../../utils/api';
+import type { PreviewSpec } from './types';
 
 /**
  * A dev server the agent started in the sandbox, as the panel knows it.
@@ -16,30 +17,20 @@ export interface PreviewEntry {
   /** How the agent started the server; the backend replays it when the port is idle. */
   command?: string;
   url: string;
+  /** When `url` was minted (ms since epoch); a reopen past `URL_FRESH_MS` mints again. */
+  mintedAt?: number;
   loading: boolean;
   error: boolean;
   /** Bumped when the iframe must reload although the URL is unchanged. */
   reloadToken: number;
 }
 
-export interface PreviewSpec {
-  port: number;
-  title?: string;
-  path?: string;
-  command?: string;
-}
-
-/** Append a path suffix to a signed URL (`…/preview` + `/timeline.html`). */
-function withPathSuffix(baseUrl: string, path?: string): string {
-  if (!path) return baseUrl;
-  try {
-    const parsed = new URL(baseUrl);
-    parsed.pathname = parsed.pathname.replace(/\/+$/, '') + path;
-    return parsed.toString();
-  } catch {
-    return baseUrl;
-  }
-}
+/**
+ * How long a minted URL is trusted on a reopen. The signed URL outlives this,
+ * but a tab left in the background for longer is more likely to come back to a
+ * dead link than to save a request, and the re-mint is one call.
+ */
+export const URL_FRESH_MS = 10 * 60_000;
 
 /** A caller that names nothing keeps what the entry already knows — the tree
  *  reopens an app by port alone and must not blank the agent's own labels. */
@@ -99,12 +90,15 @@ export function usePreviews(workspaceId: string) {
   /** Mint a signed URL for a port and land it, unless a newer request overtook this one. */
   const mint = useCallback(async (spec: PreviewSpec, force: boolean) => {
     if (!workspaceId) return;
+    const ws = workspaceId;
     const { port } = spec;
     const ticket = (seqRef.current.get(port) ?? 0) + 1;
     seqRef.current.set(port, ticket);
     patch(port, () => ({ loading: true, error: false }));
-    const ask = () => getPreviewUrl(workspaceId, port, spec.command, force);
-    const stale = () => !aliveRef.current || seqRef.current.get(port) !== ticket;
+    const ask = () => getPreviewUrl(ws, port, spec.command, force);
+    // A workspace switch resets the counters, so a ticket alone could pass
+    // again in the next workspace on the same port.
+    const stale = () => !aliveRef.current || lastWorkspace.current !== ws || seqRef.current.get(port) !== ticket;
     try {
       let result: { url: string };
       try {
@@ -118,7 +112,8 @@ export function usePreviews(workspaceId: string) {
       }
       if (stale()) return;
       patch(port, (entry) => ({
-        url: withPathSuffix(result.url, spec.path ?? entry.path),
+        url: appendPathSuffix(result.url, spec.path ?? entry.path),
+        mintedAt: Date.now(),
         loading: false,
         error: false,
         // The token exists to reload a frame the URL alone would leave alone.
@@ -147,17 +142,20 @@ export function usePreviews(workspaceId: string) {
   /** The agent published an app, or the reader asked for it again: always a fresh URL. */
   const open = useCallback((spec: PreviewSpec) => {
     register(spec);
-    void mint({ ...merge(spec, mapRef.current.get(spec.port)) }, false);
+    void mint(merge(spec, mapRef.current.get(spec.port)), false);
   }, [register, mint]);
 
   /**
-   * Coming back to a preview tab. A URL already in hand is still good, and a
-   * failure stays a failure until Refresh is pressed — re-minting on every
-   * activation would hammer a port nothing is listening on.
+   * Coming back to a preview tab. A URL minted recently is still good, an older
+   * one is minted again before it is trusted, and a failure stays a failure
+   * until Refresh is pressed: re-minting on every activation would hammer a
+   * port nothing is listening on.
    */
   const ensure = useCallback((port: number) => {
     const entry = mapRef.current.get(port);
-    if (!entry || entry.url || entry.loading || entry.error) return;
+    if (!entry || entry.loading || entry.error) return;
+    const fresh = entry.url && Date.now() - (entry.mintedAt ?? 0) < URL_FRESH_MS;
+    if (fresh) return;
     void mint(entry, false);
   }, [mint]);
 

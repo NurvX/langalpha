@@ -1,9 +1,11 @@
 import React, { useCallback, useRef } from 'react';
-import { ArrowLeft, FolderOpen, Globe, PanelRight, Plus, Settings, X } from 'lucide-react';
+import { ArrowLeft, CandlestickChart, FolderOpen, Globe, PanelRight, Plus, Settings, X, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { fileGlyph } from './fileMeta';
 import type { FileTab } from './useFileTabs';
+import './TabStrip.css';
 
 interface TabStripProps {
   tabs: FileTab[];
@@ -11,8 +13,9 @@ interface TabStripProps {
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
   onPin: (id: string) => void;
-  onNewTab: () => void;
-  /** The file changed under this tab since it last read it — the amber dot. */
+  /** Null where an empty tab would offer nothing: a read-only or single-file panel. */
+  onNewTab: (() => void) | null;
+  /** The file changed under this tab since it last read it: the amber dot. */
   hasChanged: (path: string) => boolean;
   treeOpen: boolean;
   /** Null where the panel is locked to one file and has no tree to show. */
@@ -21,6 +24,30 @@ interface TabStripProps {
   onPanelClose: (() => void) | null;
   /** Mobile leaves the panel by a back arrow rather than an X. */
   backArrow?: boolean;
+}
+
+/**
+ * How a tab reads on the strip. `name` is the pill; `detail` is what the pill
+ * leaves out and the hover card gives back underneath in a quieter voice:
+ * where the file lives, which port the app answers on, which interval the
+ * chart is on. A running app with no title is named by its port, the only
+ * thing that tells two of them apart; a chart is named by its ticker.
+ */
+function describe(tab: FileTab, t: TFunction): { name: string; Glyph: LucideIcon; detail: string | null } {
+  switch (tab.kind) {
+    case 'empty':
+      return { name: t('filePanel.openFile'), Glyph: FolderOpen, detail: null };
+    case 'file': {
+      const slash = tab.path.lastIndexOf('/');
+      return { name: tab.path.slice(slash + 1), Glyph: fileGlyph(tab.path), detail: slash > 0 ? tab.path.slice(0, slash) : null };
+    }
+    case 'settings':
+      return { name: t('chat.workspaceSettings'), Glyph: Settings, detail: null };
+    case 'preview':
+      return { name: tab.title || `:${tab.port}`, Glyph: Globe, detail: [`:${tab.port}`, tab.previewPath].filter(Boolean).join(' ') };
+    case 'chart':
+      return { name: tab.symbol, Glyph: CandlestickChart, detail: `${t('filePanel.chartTab')} · ${tab.timeframe}` };
+  }
 }
 
 /**
@@ -71,6 +98,8 @@ export function TabStrip({
       all[(at + step + all.length) % all.length]?.focus();
       return;
     }
+    // Enter or Space on the close button bubbles here; it means close, not activate.
+    if (event.target !== event.currentTarget) return;
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       onActivate(tab.id);
@@ -80,26 +109,12 @@ export function TabStrip({
   return (
     <div className="file-panel-header file-panel-tabstrip">
       <TooltipProvider delayDuration={350} skipDelayDuration={600}>
-      <div className="file-panel-tabs" role="tablist" aria-label={t('filePanel.openFiles')} ref={listRef}>
+      <div className="file-panel-tabs clips-focus-ring" role="tablist" aria-label={t('filePanel.openFiles')} ref={listRef}>
         {tabs.map((tab) => {
-          // A running app with no title of its own is named by the port it
-          // answers on, which is the only thing that tells two of them apart.
-          const name = tab.kind === 'settings'
-            ? t('chat.workspaceSettings')
-            : tab.kind === 'preview'
-              ? tab.title || `:${tab.port}`
-              : tab.path ? tab.path.split('/').pop()! : t('filePanel.openFile');
-          const Glyph = tab.kind === 'settings'
-            ? Settings
-            : tab.kind === 'preview' ? Globe : tab.path ? fileGlyph(tab.path) : FolderOpen;
-          // The pill fades a long name; the hover gives it back whole, with the
-          // one thing the pill leaves out — where the file lives, or which port
-          // the app answers on — underneath in a quieter voice.
-          const detail = tab.kind === 'preview'
-            ? [`:${tab.port}`, tab.previewPath].filter(Boolean).join(' ')
-            : tab.path && tab.path.includes('/') ? tab.path.slice(0, tab.path.lastIndexOf('/')) : null;
-          const hasHint = tab.kind !== 'settings' && (tab.path || tab.kind === 'preview');
+          const { name, Glyph, detail } = describe(tab, t);
+          const hasHint = detail != null || tab.kind === 'file';
           const active = tab.id === activeId;
+          const onLoan = tab.kind === 'file' && tab.preview;
           const pill = (
             <div
               key={tab.id}
@@ -107,7 +122,7 @@ export function TabStrip({
               data-tab-id={tab.id}
               tabIndex={active ? 0 : -1}
               aria-selected={active}
-              className={`file-panel-tab${tab.preview ? ' is-preview' : ''}`}
+              className={`file-panel-tab${onLoan ? ' is-preview' : ''}`}
               onClick={() => onActivate(tab.id)}
               onDoubleClick={() => onPin(tab.id)}
               onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeFrom(tab.id, false); } }}
@@ -115,7 +130,7 @@ export function TabStrip({
             >
               <Glyph className="h-3.5 w-3.5 flex-shrink-0" />
               <span className="file-panel-tab-name">{name}</span>
-              {tab.path && hasChanged(tab.path) && (
+              {tab.kind === 'file' && hasChanged(tab.path) && (
                 <span className="file-panel-tab-dot" title={t('filePanel.changedSinceRead')} aria-hidden="true" />
               )}
               <button
@@ -134,7 +149,7 @@ export function TabStrip({
             <Tooltip key={tab.id}>
               <TooltipTrigger asChild>{pill}</TooltipTrigger>
               <TooltipContent side="bottom" align="start" className="file-panel-tab-hint">
-                <div className="file-panel-tab-hint-name">{tab.kind === 'preview' ? name : tab.path!.split('/').pop()}</div>
+                <div className="file-panel-tab-hint-name">{name}</div>
                 {detail && <div className="file-panel-tab-hint-detail">{detail}</div>}
               </TooltipContent>
             </Tooltip>
@@ -143,9 +158,11 @@ export function TabStrip({
       </div>
       </TooltipProvider>
 
-      <button type="button" onClick={onNewTab} className="file-panel-icon-btn" title={t('filePanel.newTab')} aria-label={t('filePanel.newTab')}>
-        <Plus className="h-4 w-4" />
-      </button>
+      {onNewTab && (
+        <button type="button" onClick={onNewTab} className="file-panel-icon-btn" title={t('filePanel.newTab')} aria-label={t('filePanel.newTab')}>
+          <Plus className="h-4 w-4" />
+        </button>
+      )}
 
       <div className="file-panel-strip-right">
         {onToggleTree && (

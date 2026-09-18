@@ -13,6 +13,7 @@ import { Sunrise, Sunset } from 'lucide-react';
 import { useTheme } from '../../../../contexts/ThemeContext';
 import { createThemeResolver, useThemeTokens } from '@/lib/themeTokens';
 import { useTranslation } from 'react-i18next';
+import { buildMarketViewUrl } from '@/pages/MarketView/utils/marketRoute';
 
 // ─── Shared Constants ───────────────────────────────────────────────
 
@@ -136,12 +137,8 @@ function OpenInMarketLink({ symbol }: OpenInMarketLinkProps): React.ReactElement
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const qs = new URLSearchParams({ symbol });
-    // Encode current chat route so MarketView can offer a "Return to Chat" button
-    if (params.threadId) {
-      qs.set('returnTo', `/chat/t/${params.threadId}`);
-    }
-    navigate(`/market?${qs.toString()}`);
+    // The current chat route lets MarketView offer a "Return to Chat" button
+    navigate(buildMarketViewUrl({ symbol, returnTo: params.threadId ? `/chat/t/${params.threadId}` : null }));
   };
 
   return (

@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Download, FolderOpen, PanelRight, RefreshCw, ScrollText, TextSelect } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +9,8 @@ export type FileMenuAction = 'add-context' | 'add-to-memo' | 'open' | 'open-new-
 interface FileContextMenuProps {
   menu: ContextMenuData;
   onAction: (action: FileMenuAction, filePath: string) => void;
+  /** Dismissed without choosing: Escape. An outside click is the owner's to notice. */
+  onClose: () => void;
   canAddContext: boolean;
   /** Null where this file cannot go in the memo store at all. */
   memoState: 'absent' | 'present' | null;
@@ -35,17 +37,42 @@ function useClampedPosition(x: number, y: number) {
   return { ref, pos };
 }
 
+const items = (menu: HTMLElement) => Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+
 /** The tree's right-click menu: what can be done with one file without opening it. */
 export function FileContextMenu({
-  menu, onAction, canAddContext, memoState, canDownload, selectedCount,
+  menu, onAction, onClose, canAddContext, memoState, canDownload, selectedCount,
 }: FileContextMenuProps): React.ReactElement {
   const { t } = useTranslation();
   const { ref, pos } = useClampedPosition(menu.x, menu.y);
+
+  // The menu takes focus as it opens, so the keyboard is already in it.
+  useEffect(() => {
+    const el = ref.current;
+    if (el) items(el)[0]?.focus();
+  }, [ref, menu.filePath]);
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const el = ref.current;
+    if (!el) return;
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      onClose();
+      return;
+    }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const all = items(el);
+    const at = all.indexOf(document.activeElement as HTMLElement);
+    const step = e.key === 'ArrowDown' ? 1 : -1;
+    all[(at + step + all.length) % all.length]?.focus();
+  };
+
   const item = (action: FileMenuAction, icon: React.ReactNode, label: string) => (
-    <div className="file-panel-context-menu-item" onClick={() => onAction(action, menu.filePath)}>
+    <button type="button" role="menuitem" className="file-panel-context-menu-item" onClick={() => onAction(action, menu.filePath)}>
       {icon}
       {label}
-    </div>
+    </button>
   );
 
   // Portaled to the body: the tree column clips its overflow for the open and
@@ -54,8 +81,10 @@ export function FileContextMenu({
     <div
       ref={ref}
       className="file-panel-context-menu"
+      role="menu"
       style={pos}
       onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
+      onKeyDown={onKeyDown}
     >
       {canAddContext && item('add-context', <TextSelect {...ICON} />, t('context.addToContext'))}
       {memoState === 'present' && item('add-to-memo', <RefreshCw {...ICON} />, t('context.syncWithMemo'))}

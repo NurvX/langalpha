@@ -9,7 +9,8 @@ import {
   READ_ONLY_MESSAGE_ACTIONS,
   type MessageActions,
 } from '../ChatAgent/components/messageList/MessageActionsContext';
-import FilePanel from '../ChatAgent/components/FilePanel';
+import FilePanel, { type PanelTarget } from '../ChatAgent/components/FilePanel';
+import { dirTarget, fileTarget } from '../ChatAgent/components/filePanel/types';
 import { WorkspaceProvider } from '../ChatAgent/contexts/WorkspaceContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useTranslation } from 'react-i18next';
@@ -77,10 +78,8 @@ export default function SharedChatView() {
   const [showFilePanel, setShowFilePanel] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
-  const [filePanelTargetFile, setFilePanelTargetFile] = useState<string | null>(null);
-  const [filePanelTargetLocation, setFilePanelTargetLocation] = useState<FileLocation | null>(null);
-  const [filePanelTargetDir, setFilePanelTargetDir] = useState<string | null>(null);
-  const [filePanelTargetDirSeq, setFilePanelTargetDirSeq] = useState(0);
+  const [filePanelTarget, setFilePanelTarget] = useState<PanelTarget | null>(null);
+  const filePanelTargetSeq = useRef(0);
   const [rightPanelWidth, setRightPanelWidth] = useState(750);
   const isDraggingRef = useRef(false);
   // Armed for the duration of a divider drag; unmount mid-drag would otherwise
@@ -400,17 +399,14 @@ export default function SharedChatView() {
   );
 
   // Open file from chat (tool call artifacts, file mention cards)
-  const handleOpenFile = useCallback(async (filePath: string, _workspaceId?: string, location?: FileLocation) => {
+  const handleOpenFile = useCallback(async (filePath: string, _workspaceId?: string, location?: FileLocation, opts?: { pin?: boolean }) => {
     if (!canBrowseFiles) return;
     setShowFilePanel(true);
     const dir = computeAgentArtifactRouting(filePath).targetDirectory;
-    // `''` is the workspace root, not the absence of a folder, and the panel
-    // reads a folder request off the counter rather than off a changed string,
-    // so the same folder clicked twice arrives twice here too.
-    setFilePanelTargetDir(dir);
-    setFilePanelTargetDirSeq((n) => n + 1);
-    setFilePanelTargetFile(dir == null ? filePath : null);
-    setFilePanelTargetLocation(location ?? null);
+    // The panel reads a request off the counter rather than off a changed
+    // string, so the same folder clicked twice arrives twice here too.
+    const seq = ++filePanelTargetSeq.current;
+    setFilePanelTarget(dir == null ? fileTarget(filePath, { location, pin: opts?.pin }, seq) : dirTarget(dir, seq));
     // Ensure files are loaded
     if (files.length === 0) {
       setFilesLoading(true);
@@ -672,12 +668,8 @@ export default function SharedChatView() {
               onClose={() => setShowFilePanel(false)}
               files={files}
               filesLoading={filesLoading}
-              targetFile={filePanelTargetFile}
-              targetLocation={filePanelTargetLocation}
-              onTargetFileHandled={() => setFilePanelTargetFile(null)}
-              targetDirectory={filePanelTargetDir}
-              targetDirSeq={filePanelTargetDirSeq}
-              onTargetDirHandled={() => setFilePanelTargetDir(null)}
+              target={filePanelTarget}
+              onTargetHandled={() => setFilePanelTarget(null)}
               onOpenFile={handleOpenFile}
               getRecentWritePaths={getRecentWritePaths}
             />

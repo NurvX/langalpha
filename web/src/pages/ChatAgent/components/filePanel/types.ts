@@ -1,3 +1,6 @@
+import type { FileLocation } from '../../utils/fileLocation';
+import type { MemoryTier } from '../../utils/agentPaths';
+
 // --- Types ---
 
 export interface TreeNode {
@@ -35,6 +38,8 @@ export interface ContextPayload {
   lineStart?: number | null;
   lineEnd?: number | null;
   lineCount?: number;
+  /** What made the snippet, when it is not a file's text: `chat`, `paste`, `chart`. */
+  source?: string;
 }
 
 export interface EditorTextSelectData {
@@ -75,4 +80,83 @@ export interface BackupResult {
 export interface SortOption {
   value: string;
   label: string;
+}
+
+// --- Panel targets ---
+
+/** The port range the sandbox preview endpoint serves; a tab outside it can never resolve. */
+export const PREVIEW_PORT_MIN = 3000;
+export const PREVIEW_PORT_MAX = 9999;
+
+/** What a preview tab is opened with. The port is the identity; the rest is labelling. */
+export interface PreviewSpec {
+  port: number;
+  title?: string;
+  /** A path suffix on the served app, e.g. `/timeline.html`. */
+  path?: string;
+  command?: string;
+}
+
+/** What a chart tab is opened with. The symbol is the identity; the interval is where it starts. */
+export interface ChartTabSpec {
+  symbol: string;
+  timeframe?: string;
+}
+
+/**
+ * What the right panel is currently pointed at: one discriminated value, so
+ * exactly one target is set at a time and the active tab derives from `.kind`.
+ *
+ * `dir` outlives the click that set it: it is the tree's active filter, shown
+ * in the header and cleared by the back button. So it cannot also say that a
+ * request happened, and `seq` does, counting the clicks. The same folder asked
+ * for twice is two requests carrying one directory.
+ */
+export type PanelTarget =
+  | {
+    kind: 'file';
+    path?: string | null;
+    dir?: string | null;
+    location?: FileLocation | null;
+    seq?: number;
+    /** Open in a tab of its own rather than the preview slot. */
+    pin?: boolean;
+  }
+  /** A dev server the agent started in the sandbox; it opens as a tab in the
+   *  Files panel. `seq` counts the asks, so the same port twice is two. */
+  | ({ kind: 'preview'; seq: number } & PreviewSpec)
+  /** A live market chart; it opens as a tab in the Files panel, one per symbol. */
+  | ({ kind: 'chart'; seq: number } & ChartTabSpec)
+  | { kind: 'memory'; key: string; tier: MemoryTier }
+  | { kind: 'memo'; key: string }
+  | { kind: 'sources'; messageId: string }
+  | { kind: 'status' };
+
+/** The kinds the Files tab owns: it consumes each and clears it once handled. */
+export const FILES_PANEL_KINDS = ['file', 'preview', 'chart'] as const satisfies readonly PanelTarget['kind'][];
+export type FilesPanelKind = (typeof FILES_PANEL_KINDS)[number];
+
+export function isFilesPanelKind(kind: PanelTarget['kind'] | null | undefined): kind is FilesPanelKind {
+  return (FILES_PANEL_KINDS as readonly string[]).includes(kind ?? '');
+}
+
+/** A target as a caller states it; the landing stamps `seq`. */
+export type UnsequencedTarget = PanelTarget extends infer T ? (T extends { seq?: number } ? Omit<T, 'seq'> : T) : never;
+
+/** Stamp an ask with its sequence number, so the same ask twice arrives twice. */
+export function stampTarget(target: UnsequencedTarget, seq: number): PanelTarget {
+  return { ...target, seq } as PanelTarget;
+}
+
+export function fileTarget(
+  path: string,
+  { location = null, pin = false }: { location?: FileLocation | null; pin?: boolean },
+  seq: number,
+): PanelTarget {
+  return stampTarget({ kind: 'file', path, location, pin }, seq);
+}
+
+/** `''` is the workspace root, not the absence of a folder. */
+export function dirTarget(dir: string, seq: number): PanelTarget {
+  return stampTarget({ kind: 'file', dir }, seq);
 }

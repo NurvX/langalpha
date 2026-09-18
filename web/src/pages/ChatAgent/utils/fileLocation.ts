@@ -3,6 +3,8 @@
  * `model.py#L40-L55`, `model.py:42`, `filing.pdf#page=12`,
  * `model.xlsx#Model!B4:D9`.
  */
+import { parseLocator } from './a1';
+
 export interface FileLocation {
   line?: number;
   lineEnd?: number;
@@ -27,18 +29,24 @@ export type OpenFileHandler = (
   path: string,
   workspaceId?: string,
   location?: FileLocation,
-  rooted?: boolean,
+  /** `rooted`: the reference named where it starts, so it is not joined onto
+   *  the viewing file's directory. `pin`: open in a tab of its own rather than
+   *  the preview slot. */
+  opts?: { rooted?: boolean; pin?: boolean },
 ) => void;
 
 // Uppercase only, as GitHub writes it: `#l2` is a heading slug ("L2"), not line 2.
 const LINE_FRAGMENT_RE = /^L(\d+)(?:-L?(\d+))?$/;
 const PAGE_FRAGMENT_RE = /(?:^|&)page=(\d+)(?:&|$)/i;
-// A1 with an optional sheet qualifier: `B7`, `B4:D9`, `Model!B7`, `'My Sheet'!B4:D9`.
-// Uppercase columns only, for the same reason `#l2` stays a heading slug: a
-// lowercase run is prose far more often than it is a column. `L42` never reaches
-// this test anyway -- the line fragment above claims it first.
-const CELL = "\\$?[A-Z]{1,3}\\$?[1-9]\\d{0,6}";
-const CELL_FRAGMENT_RE = new RegExp(`^(?:('(?:[^']|'')+'|[^'!\\[\\]]+)!)?(${CELL}(?::${CELL})?)$`);
+// A1 with an optional sheet qualifier (`B7`, `Model!B4:D9`, `'My Sheet'!B:D`),
+// read by the shared grammar. Uppercase columns only, for the same reason `#l2`
+// stays a heading slug: a lowercase run is prose far more often than it is a
+// column. `L42` never reaches this test anyway; the line fragment above claims
+// it first.
+function isCellFragment(frag: string): boolean {
+  const range = frag.slice(frag.lastIndexOf('!') + 1);
+  return !/[a-z]/.test(range) && parseLocator(frag) !== null;
+}
 
 // `name.ext:42`, `name.ext:40-55`, `name.ext:42:7` (the column is ignored).
 // The extension must hold a letter, so `localhost:8000` and `127.0.0.1:8000`
@@ -69,7 +77,7 @@ export function parseFragment(fragment: string): FileLocation | null {
   if (line) return lineRange(line[1], line[2]);
   const page = frag.match(PAGE_FRAGMENT_RE);
   if (page) return Number(page[1]) >= 1 ? { page: Number(page[1]) } : null;
-  return CELL_FRAGMENT_RE.test(frag) ? { cell: frag, anchor: frag } : { anchor: frag };
+  return isCellFragment(frag) ? { cell: frag, anchor: frag } : { anchor: frag };
 }
 
 /** Split a link destination into the file part and the location it points at. */

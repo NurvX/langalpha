@@ -15,6 +15,7 @@ import type { TreeFilter } from './useTreeFilter';
 import type { FileSelection } from './useFileSelection';
 import type { FileBackup } from './useFileBackup';
 import type { PreviewEntry } from './usePreviews';
+import './TreeColumn.css';
 
 export interface TreeColumnProps {
   /** The three models the column is a view of. */
@@ -61,15 +62,14 @@ export interface TreeColumnProps {
   onDismissOverlay: () => void;
 }
 
-/** Matches `.file-panel-tree` in FilePanel.css; the fold animates to this. */
+/** Matches `.file-panel-tree` in TreeColumn.css; the fold animates to this. */
 const TREE_WIDTH = 260;
 
 export function TreeColumn(props: TreeColumnProps): React.ReactElement {
   const { filter, selection, backup } = props;
   const { t } = useTranslation();
   const listRef = useRef<HTMLDivElement>(null);
-  const sortRef = useRef<HTMLDivElement>(null);
-  const { onKeyDown } = useTreeKeyboard({
+  const { onKeyDown, focusFirst } = useTreeKeyboard({
     listRef,
     expandedDirs: filter.expandedDirs,
     toggleDir: filter.toggleDir,
@@ -167,20 +167,41 @@ export function TreeColumn(props: TreeColumnProps): React.ReactElement {
                   </button>
                 </>
               )}
-              <div className="file-panel-sort-wrapper" ref={sortRef}>
-                <button className="file-panel-icon-btn" title={t('filePanel.sortFiles')} onClick={toggleSortMenu}>
+              <div
+                className="file-panel-sort-wrapper"
+                ref={filter.sortMenuRef}
+                // On the wrapper rather than the menu: Escape closes it from the
+                // trigger too, and the panel's own Escape (fold the tree) is
+                // not what a reader dismissing a menu asked for.
+                onKeyDown={(e) => {
+                  if (e.key !== 'Escape' || !filter.showSortMenu) return;
+                  e.stopPropagation();
+                  filter.setShowSortMenu(false);
+                }}
+              >
+                <button
+                  className="file-panel-icon-btn"
+                  title={t('filePanel.sortFiles')}
+                  aria-label={t('filePanel.sortFiles')}
+                  aria-haspopup="menu"
+                  aria-expanded={filter.showSortMenu}
+                  onClick={toggleSortMenu}
+                >
                   <ArrowUpDown className="h-4 w-4" />
                 </button>
                 {filter.showSortMenu && (
-                  <div className="file-panel-sort-menu">
+                  <div className="file-panel-sort-menu" role="menu" aria-label={t('filePanel.sortFiles')}>
                     {SORT_OPTIONS.map((opt) => (
-                      <div
+                      <button
                         key={opt.value}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={filter.sortBy === opt.value}
                         className={`file-panel-sort-item ${filter.sortBy === opt.value ? 'active' : ''}`}
                         onClick={() => onSort(opt.value)}
                       >
                         {opt.label}
-                      </div>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -262,7 +283,7 @@ export function TreeColumn(props: TreeColumnProps): React.ReactElement {
         {filter.availableTypes.length > 1 && !selection.selectMode && (
           <div className="file-panel-tree-chips">
             <button className={`file-panel-chip ${filter.filterType === 'All' ? 'active' : ''}`} onClick={() => filter.setFilterType('All')}>
-              All
+              {t('filePanel.filterAll')}
             </button>
             {filter.availableTypes.map((type) => (
               <button
@@ -315,7 +336,12 @@ export function TreeColumn(props: TreeColumnProps): React.ReactElement {
           className="file-panel-tree-list file-tree-root"
           role="tree"
           aria-label={t('chat.workspaceFiles')}
+          aria-multiselectable={selection.selectMode}
           ref={listRef}
+          // The rows rove with tabIndex -1, so the tree itself is the tab stop;
+          // landing on it hands focus to the first row.
+          tabIndex={0}
+          onFocus={(e) => { if (e.target === e.currentTarget) focusFirst(); }}
           onKeyDown={onKeyDown}
         >
           {props.filesLoading ? (

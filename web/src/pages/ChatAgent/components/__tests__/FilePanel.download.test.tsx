@@ -63,7 +63,7 @@ describe('a download started from a viewer that could not render', () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     renderWithProviders(
-      <FilePanel workspaceId="ws" onClose={() => {}} files={['data.csv']} targetFile="data.csv" />,
+      <FilePanel workspaceId="ws" onClose={() => {}} files={['data.csv']} target={{ kind: 'file', path: 'data.csv' }} />,
     );
 
     const offer = await screen.findByText('Download instead');
@@ -88,7 +88,7 @@ describe('a download started from a viewer that could not render', () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     renderWithProviders(
-      <FilePanel workspaceId="ws" onClose={() => {}} files={['data.csv']} targetFile="data.csv" />,
+      <FilePanel workspaceId="ws" onClose={() => {}} files={['data.csv']} target={{ kind: 'file', path: 'data.csv' }} />,
     );
     fireEvent.click(await screen.findByText('Download instead'));
 

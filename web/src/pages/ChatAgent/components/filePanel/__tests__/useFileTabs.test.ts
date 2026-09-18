@@ -1,8 +1,16 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { useEffect, useState } from 'react';
 import { act, renderHook } from '@testing-library/react';
-import { useFileTabs, tabsStorageKey, threadTabsStorageKey } from '../useFileTabs';
+import { useFileTabs, lastChartSymbol, lastChartStorageKey, tabsStorageKey, threadTabsStorageKey, type FileTab } from '../useFileTabs';
 
-const paths = (tabs: { path: string | null }[]) => tabs.map((t) => t.path);
+/** File paths in strip order; the empty tab reads as null. */
+const paths = (tabs: FileTab[]) => tabs.map((t) => (t.kind === 'file' ? t.path : null));
+const activePath = ({ tabs, activeId }: { tabs: FileTab[]; activeId: string }) => {
+  const tab = tabs.find((t) => t.id === activeId);
+  return tab?.kind === 'file' ? tab.path : null;
+};
+const ports = (tabs: FileTab[]) => tabs.map((t) => (t.kind === 'preview' ? t.port : undefined));
+const stored = (key: string) => JSON.parse(localStorage.getItem(key)!);
 
 beforeEach(() => localStorage.clear());
 
@@ -10,7 +18,7 @@ describe('useFileTabs preview semantics', () => {
   it('opens on a single empty tab', () => {
     const { result } = renderHook(() => useFileTabs('ws'));
     expect(paths(result.current.tabs)).toEqual([null]);
-    expect(result.current.activeTab.path).toBeNull();
+    expect(result.current.activeTab.kind).toBe('empty');
   });
 
   it('reuses the one preview tab so browsing never piles tabs up', () => {
@@ -19,7 +27,7 @@ describe('useFileTabs preview semantics', () => {
     act(() => result.current.openFile('b.md'));
 
     expect(paths(result.current.tabs)).toEqual(['b.md']);
-    expect(result.current.activeTab.preview).toBe(true);
+    expect(result.current.activeTab).toMatchObject({ kind: 'file', preview: true });
   });
 
   it('keeps a pinned tab when the next file is only previewed', () => {
@@ -28,7 +36,7 @@ describe('useFileTabs preview semantics', () => {
     act(() => result.current.openFile('b.md'));
 
     expect(paths(result.current.tabs)).toEqual(['a.md', 'b.md']);
-    expect(result.current.activeTab.path).toBe('b.md');
+    expect(result.current.activeTab).toMatchObject({ path: 'b.md' });
   });
 
   it('fills the empty tab the user is looking at, not the preview elsewhere', () => {
@@ -38,8 +46,8 @@ describe('useFileTabs preview semantics', () => {
     act(() => result.current.openFile('b.md'));
 
     expect(paths(result.current.tabs)).toEqual(['a.md', 'b.md']);
-    expect(result.current.activeTab.path).toBe('b.md');
-    expect(result.current.tabs[0].preview).toBe(true);
+    expect(result.current.activeTab).toMatchObject({ path: 'b.md' });
+    expect(result.current.tabs[0]).toMatchObject({ preview: true });
   });
 
   it('opens beside the active tab rather than at the end of the strip', () => {
@@ -68,18 +76,16 @@ describe('useFileTabs preview semantics', () => {
     act(() => result.current.openFile('a.md'));
 
     expect(paths(result.current.tabs)).toEqual(['a.md', 'b.md']);
-    expect(result.current.activeTab.path).toBe('a.md');
     // Re-opening as a preview must not un-pin what was already kept.
-    expect(result.current.activeTab.preview).toBe(false);
+    expect(result.current.activeTab).toMatchObject({ path: 'a.md', preview: false });
   });
 
   it('replays a location asked for twice, so a repeat click highlights again', () => {
     const { result } = renderHook(() => useFileTabs('ws'));
     act(() => result.current.openFile('a.md', { location: { line: 4 } }));
-    const first = result.current.activeTab.locationSeq;
     act(() => result.current.openFile('a.md', { location: { line: 4 } }));
 
-    expect(result.current.activeTab.locationSeq).toBe(first + 1);
+    expect(result.current.activeTab).toMatchObject({ location: { line: 4 }, locationSeq: 2 });
   });
 
   it('keeps each tab its own location so switching back returns there', () => {
@@ -89,7 +95,15 @@ describe('useFileTabs preview semantics', () => {
     act(() => result.current.openFile('b.md', { pin: true, location: { page: 3 } }));
     act(() => result.current.activate(aId));
 
-    expect(result.current.activeTab.location).toEqual({ line: 9 });
+    expect(result.current.activeTab).toMatchObject({ location: { line: 9 } });
+  });
+
+  it('does not carry one file’s location onto the next file browsed into its tab', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openFile('a.md', { location: { line: 4 } }));
+    act(() => result.current.openFile('b.md'));
+
+    expect(result.current.activeTab).toMatchObject({ path: 'b.md', location: null, locationSeq: 0 });
   });
 });
 
@@ -98,11 +112,9 @@ describe('useFileTabs running apps', () => {
     const { result } = renderHook(() => useFileTabs('ws'));
     act(() => result.current.openPreview({ port: 8050 }));
 
-    expect(result.current.activeTab.kind).toBe('preview');
-    expect(result.current.activeTab.port).toBe(8050);
-    expect(result.current.activeTab.path).toBeNull();
-    // An app is not on loan the way a browsed file is — it stays until closed.
-    expect(result.current.activeTab.preview).toBe(false);
+    expect(result.current.activeTab).toMatchObject({ kind: 'preview', port: 8050 });
+    // An app is not on loan the way a browsed file is: it stays until closed.
+    expect(result.current.activeTab).not.toHaveProperty('preview');
   });
 
   it('gives a port one tab however often it is opened', () => {
@@ -112,9 +124,8 @@ describe('useFileTabs running apps', () => {
     act(() => result.current.openPreview({ port: 8050 }));
 
     expect(result.current.tabs).toHaveLength(2);
-    expect(result.current.activeTab.port).toBe(8050);
     // Re-opening by port alone must not blank the title the agent gave it.
-    expect(result.current.activeTab.title).toBe('Dashboard');
+    expect(result.current.activeTab).toMatchObject({ port: 8050, title: 'Dashboard' });
   });
 
   it('gives two ports two tabs, opened beside the active one', () => {
@@ -123,8 +134,8 @@ describe('useFileTabs running apps', () => {
     act(() => result.current.openPreview({ port: 8050 }));
     act(() => result.current.openPreview({ port: 8051 }));
 
-    expect(result.current.tabs.map((t) => t.port)).toEqual([undefined, 8050, 8051]);
-    expect(result.current.activeTab.port).toBe(8051);
+    expect(ports(result.current.tabs)).toEqual([undefined, 8050, 8051]);
+    expect(result.current.activeTab).toMatchObject({ port: 8051 });
   });
 
   it('fills the empty tab the reader is looking at', () => {
@@ -140,23 +151,19 @@ describe('useFileTabs running apps', () => {
       port: 8050, title: 'Dashboard', path: '/timeline.html', command: 'python app.py',
     }));
 
-    expect(JSON.parse(localStorage.getItem(tabsStorageKey('ws'))!)).toEqual({
-      tabs: [{
-        path: null, kind: 'preview', preview: false, port: 8050,
-        title: 'Dashboard', previewPath: '/timeline.html', command: 'python app.py',
-      }],
+    expect(stored(tabsStorageKey('ws'))).toEqual({
+      tabs: [{ kind: 'preview', port: 8050, title: 'Dashboard', previewPath: '/timeline.html', command: 'python app.py' }],
       active: 0,
     });
   });
 
   it('brings the start command back with a restored preview tab', () => {
     localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({
-      tabs: [{ path: null, kind: 'preview', preview: false, port: 8050, command: 'python app.py' }],
+      tabs: [{ kind: 'preview', port: 8050, command: 'python app.py' }],
       active: 0,
     }));
     const { result } = renderHook(() => useFileTabs('ws'));
-    expect(result.current.activeTab.port).toBe(8050);
-    expect(result.current.activeTab.command).toBe('python app.py');
+    expect(result.current.activeTab).toMatchObject({ port: 8050, command: 'python app.py' });
   });
 
   it('reopens a running app as a port to mint against', () => {
@@ -165,20 +172,28 @@ describe('useFileTabs running apps', () => {
     first.unmount();
 
     const { result } = renderHook(() => useFileTabs('ws'));
-    expect(result.current.activeTab.kind).toBe('preview');
-    expect(result.current.activeTab.port).toBe(8050);
-    expect(result.current.activeTab.title).toBe('Dashboard');
+    expect(result.current.activeTab).toMatchObject({ kind: 'preview', port: 8050, title: 'Dashboard' });
   });
 
   it('drops a stored preview tab that names no port', () => {
     localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({
-      tabs: [{ path: null, kind: 'preview', preview: false }],
+      tabs: [{ kind: 'preview' }],
       active: 0,
     }));
     const { result } = renderHook(() => useFileTabs('ws'));
 
     expect(paths(result.current.tabs)).toEqual([null]);
-    expect(result.current.activeTab.kind).toBeUndefined();
+    expect(result.current.activeTab.kind).toBe('empty');
+  });
+
+  it('drops a stored preview whose port the preview endpoint would refuse', () => {
+    localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({
+      tabs: [{ kind: 'preview', port: 80 }, { kind: 'preview', port: 10000 }, { kind: 'preview', port: 5173 }],
+      active: 0,
+    }));
+    const { result } = renderHook(() => useFileTabs('ws'));
+
+    expect(ports(result.current.tabs)).toEqual([5173]);
   });
 });
 
@@ -189,7 +204,7 @@ describe('useFileTabs closing', () => {
     act(() => result.current.closeTab(result.current.activeId));
 
     expect(paths(result.current.tabs)).toEqual([null]);
-    expect(result.current.activeTab.path).toBeNull();
+    expect(result.current.activeTab.kind).toBe('empty');
   });
 
   it('hands the active slot to the tab that takes the closed one’s place', () => {
@@ -201,7 +216,7 @@ describe('useFileTabs closing', () => {
     act(() => result.current.closeTab(bId));
 
     expect(paths(result.current.tabs)).toEqual(['a.md', 'c.md']);
-    expect(result.current.activeTab.path).toBe('c.md');
+    expect(result.current.activeTab).toMatchObject({ path: 'c.md' });
   });
 
   it('leaves the active tab alone when another one closes', () => {
@@ -211,7 +226,7 @@ describe('useFileTabs closing', () => {
     act(() => result.current.openFile('b.md', { pin: true }));
     act(() => result.current.closeTab(aId));
 
-    expect(result.current.activeTab.path).toBe('b.md');
+    expect(result.current.activeTab).toMatchObject({ path: 'b.md' });
   });
 });
 
@@ -221,8 +236,8 @@ describe('useFileTabs persistence', () => {
     act(() => result.current.openFile('a.md', { pin: true }));
     act(() => result.current.openFile('b.md'));
 
-    expect(JSON.parse(localStorage.getItem(tabsStorageKey('ws'))!)).toEqual({
-      tabs: [{ path: 'a.md', preview: false }, { path: 'b.md', preview: true }],
+    expect(stored(tabsStorageKey('ws'))).toEqual({
+      tabs: [{ kind: 'file', path: 'a.md', preview: false }, { kind: 'file', path: 'b.md', preview: true }],
       active: 1,
     });
   });
@@ -236,7 +251,7 @@ describe('useFileTabs persistence', () => {
 
     const { result } = renderHook(() => useFileTabs('ws'));
     expect(paths(result.current.tabs)).toEqual(['a.md', 'b.md']);
-    expect(result.current.activeTab.path).toBe('a.md');
+    expect(result.current.activeTab).toMatchObject({ path: 'a.md' });
   });
 
   it('keeps the empty tab out of storage', () => {
@@ -244,9 +259,64 @@ describe('useFileTabs persistence', () => {
     act(() => result.current.openFile('a.md', { pin: true }));
     act(() => result.current.newTab());
 
-    expect(JSON.parse(localStorage.getItem(tabsStorageKey('ws'))!).tabs).toEqual([
-      { path: 'a.md', preview: false },
-    ]);
+    expect(stored(tabsStorageKey('ws')).tabs).toEqual([{ kind: 'file', path: 'a.md', preview: false }]);
+  });
+
+  it('still reads a strip written before tabs carried a kind', () => {
+    // File tabs were stored as `{ path, preview }` and every other kind carried
+    // `path: null, preview: false` beside its own fields; a chart could also
+    // have no interval yet.
+    localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({
+      tabs: [
+        { path: 'a.md', preview: true },
+        { path: null, kind: 'settings', preview: false },
+        { path: null, kind: 'preview', preview: false, port: 8050, title: 'Dashboard' },
+        { path: null, kind: 'chart', preview: false, symbol: 'NVDA' },
+      ],
+      active: 3,
+    }));
+    const { result } = renderHook(() => useFileTabs('ws'));
+
+    expect(result.current.tabs.map((t) => t.kind)).toEqual(['file', 'settings', 'preview', 'chart']);
+    expect(result.current.tabs[0]).toMatchObject({ path: 'a.md', preview: true, location: null, locationSeq: 0 });
+    expect(result.current.tabs[2]).toMatchObject({ port: 8050, title: 'Dashboard' });
+    expect(result.current.activeTab).toMatchObject({ kind: 'chart', symbol: 'NVDA', timeframe: '1day' });
+  });
+
+  it('drops the entries it cannot read and keeps the rest', () => {
+    localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({
+      tabs: [{ kind: 'file', path: 'a.md', preview: false }, { kind: 'file', path: 7 }, 'junk', { kind: 'unknown' }],
+      active: 'nope',
+    }));
+    const { result } = renderHook(() => useFileTabs('ws'));
+
+    expect(paths(result.current.tabs)).toEqual(['a.md']);
+  });
+
+  it('keeps the tab that was in front when an entry before it is dropped', () => {
+    localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({
+      tabs: [
+        { kind: 'file', path: 'a.md', preview: false },
+        { kind: 'unknown' },
+        { kind: 'file', path: 'b.md', preview: false },
+        { kind: 'file', path: 'c.md', preview: false },
+      ],
+      active: 2,
+    }));
+    const { result } = renderHook(() => useFileTabs('ws'));
+
+    expect(paths(result.current.tabs)).toEqual(['a.md', 'b.md', 'c.md']);
+    expect(activePath(result.current)).toBe('b.md');
+  });
+
+  it('falls back to the surviving tab before one that was itself dropped', () => {
+    localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({
+      tabs: [{ kind: 'file', path: 'a.md', preview: false }, { kind: 'unknown' }, { kind: 'file', path: 'c.md', preview: false }],
+      active: 1,
+    }));
+    const { result } = renderHook(() => useFileTabs('ws'));
+
+    expect(activePath(result.current)).toBe('a.md');
   });
 
   it('gives each workspace its own strip', () => {
@@ -282,10 +352,10 @@ describe('useFileTabs thread scope', () => {
     );
     act(() => result.current.openFile('a.md', { pin: true }));
     act(() => result.current.openFile('b.md', { pin: true }));
-    expect(JSON.parse(localStorage.getItem(threadTabsStorageKey('ws', 't1'))!).tabs.map((t: { path: string }) => t.path))
+    expect(stored(threadTabsStorageKey('ws', 't1')).tabs.map((t: { path: string }) => t.path))
       .toEqual(['a.md', 'b.md']);
     // The workspace strip mirrors whatever was shown last.
-    expect(JSON.parse(localStorage.getItem(tabsStorageKey('ws'))!).tabs).toHaveLength(2);
+    expect(stored(tabsStorageKey('ws')).tabs).toHaveLength(2);
 
     // A thread with nothing saved starts from that mirror, then diverges.
     rerender({ thread: 't2' });
@@ -298,6 +368,30 @@ describe('useFileTabs thread scope', () => {
     expect(paths(result.current.tabs)).toEqual(['a.md', 'b.md']);
     rerender({ thread: 't2' });
     expect(paths(result.current.tabs)).toEqual(['b.md']);
+  });
+
+  it('does not write the outgoing thread’s strip over the incoming thread’s saved one', () => {
+    const strip = (path: string) => JSON.stringify({ tabs: [{ kind: 'file', path, preview: false }], active: 0 });
+    localStorage.setItem(threadTabsStorageKey('ws', 't1'), strip('one.md'));
+    localStorage.setItem(threadTabsStorageKey('ws', 't2'), strip('two.md'));
+    // A sibling effect updating the same component first, the way a real panel
+    // has several: with an update already pending, React defers the switch's
+    // updater to the next render instead of computing it on the spot, and the
+    // persist effect runs before it, holding t2's strip under t1's key.
+    const { result, rerender } = renderHook(
+      ({ thread }: { thread: string }) => {
+        const [, bump] = useState(0);
+        useEffect(() => { bump((n) => n + 1); }, [thread]);
+        return useFileTabs('ws', thread);
+      },
+      { initialProps: { thread: 't2' } },
+    );
+    expect(paths(result.current.tabs)).toEqual(['two.md']);
+
+    rerender({ thread: 't1' });
+    expect(paths(result.current.tabs)).toEqual(['one.md']);
+    expect(stored(threadTabsStorageKey('ws', 't1')).tabs.map((t: { path: string }) => t.path)).toEqual(['one.md']);
+    expect(stored(threadTabsStorageKey('ws', 't2')).tabs.map((t: { path: string }) => t.path)).toEqual(['two.md']);
   });
 
   it('carries the strip over when a fresh chat gets its thread id', () => {
@@ -314,8 +408,51 @@ describe('useFileTabs thread scope', () => {
     expect(localStorage.getItem(threadTabsStorageKey('ws', 't9'))).not.toBeNull();
   });
 
+  it('keeps a strip the reader emptied empty, rather than reseeding it from the workspace', () => {
+    localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({ tabs: [{ kind: 'file', path: 'z.md', preview: false }], active: 0 }));
+    localStorage.setItem(threadTabsStorageKey('ws', 't1'), JSON.stringify({ tabs: [], active: 0 }));
+    const { result } = renderHook(() => useFileTabs('ws', 't1'));
+    expect(paths(result.current.tabs)).toEqual([null]);
+  });
+
+  it('comes back parked on the empty tab when that is where it was left', () => {
+    const first = renderHook(() => useFileTabs('ws', 't1'));
+    act(() => first.result.current.openFile('a.md', { pin: true }));
+    act(() => first.result.current.newTab());
+    expect(stored(threadTabsStorageKey('ws', 't1')).active).toBe(-1);
+
+    const { result } = renderHook(() => useFileTabs('ws', 't1'));
+    expect(paths(result.current.tabs)).toEqual(['a.md', null]);
+    expect(result.current.activeTab.kind).toBe('empty');
+  });
+
+  it('drops a stored strip’s excess and out-of-range entries rather than the whole strip', () => {
+    const tabs = Array.from({ length: 70 }, (_, i) => ({ kind: 'file', path: `f${i}.md`, preview: false }));
+    localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({
+      tabs: [{ kind: 'preview', port: 0 }, { kind: 'chart', symbol: 'X'.repeat(40) }, ...tabs],
+      active: 0,
+    }));
+    const { result } = renderHook(() => useFileTabs('ws'));
+    expect(result.current.tabs).toHaveLength(62);
+    expect(result.current.tabs.every((t) => t.kind === 'file')).toBe(true);
+  });
+
+  it('drops a stored chart whose symbol is not a ticker and uppercases one that is', () => {
+    localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({
+      tabs: [
+        { kind: 'chart', symbol: '   ' },
+        { kind: 'chart', symbol: 'amd' },
+        { kind: 'file', path: 'a.md', preview: false },
+      ],
+      active: 1,
+    }));
+    const { result } = renderHook(() => useFileTabs('ws'));
+    expect(result.current.tabs.map((t) => t.kind)).toEqual(['chart', 'file']);
+    expect(result.current.activeTab).toMatchObject({ kind: 'chart', symbol: 'AMD' });
+  });
+
   it('reads a new workspace’s own seed rather than carrying the old strip across', () => {
-    localStorage.setItem(tabsStorageKey('ws2'), JSON.stringify({ tabs: [{ path: 'z.md', preview: false }], active: 0 }));
+    localStorage.setItem(tabsStorageKey('ws2'), JSON.stringify({ tabs: [{ kind: 'file', path: 'z.md', preview: false }], active: 0 }));
     const { result, rerender } = renderHook(
       ({ ws }: { ws: string }) => useFileTabs(ws, 't1'),
       { initialProps: { ws: 'ws' } },
@@ -323,5 +460,137 @@ describe('useFileTabs thread scope', () => {
     act(() => result.current.openFile('a.md', { pin: true }));
     rerender({ ws: 'ws2' });
     expect(paths(result.current.tabs)).toEqual(['z.md']);
+  });
+
+  it('starts over when a strip that is not stored is pointed at another workspace', () => {
+    // A peek beside a gallery keeps its strip in memory, but it is still this
+    // workspace's: a second reference to another workspace swaps the id under
+    // a live strip, and the tabs left on screen would be read through it.
+    localStorage.setItem(tabsStorageKey('ws2'), JSON.stringify({ tabs: [{ kind: 'file', path: 'z.md', preview: false }], active: 0 }));
+    const { result, rerender } = renderHook(
+      ({ ws }: { ws: string }) => useFileTabs(ws, null, { persist: false }),
+      { initialProps: { ws: 'ws' } },
+    );
+    act(() => result.current.openFile('a.md', { pin: true }));
+    expect(paths(result.current.tabs)).toEqual(['a.md']);
+
+    rerender({ ws: 'ws2' });
+    // Blank rather than ws2's seed: a strip that writes nothing reads nothing.
+    expect(paths(result.current.tabs)).toEqual([null]);
+    expect(stored(tabsStorageKey('ws2')).tabs).toEqual([{ kind: 'file', path: 'z.md', preview: false }]);
+    expect(localStorage.getItem(tabsStorageKey('ws'))).toBeNull();
+  });
+});
+
+describe('useFileTabs chart tabs', () => {
+  it('opens one tab per symbol and comes back to it', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openChart({ symbol: 'GOOGL', timeframe: '1day' }));
+    act(() => result.current.openFile('notes.md', { pin: true }));
+    act(() => result.current.openChart({ symbol: 'googl' }));
+
+    const charts = result.current.tabs.filter((t) => t.kind === 'chart');
+    expect(charts).toHaveLength(1);
+    expect(result.current.activeTab).toMatchObject({ kind: 'chart', symbol: 'GOOGL', timeframe: '1day' });
+  });
+
+  it('opens on the daily interval when none is named', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openChart({ symbol: 'GOOGL' }));
+    expect(result.current.activeTab).toMatchObject({ kind: 'chart', timeframe: '1day' });
+  });
+
+  it('moves the chart to a named interval and keeps the last one otherwise', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openChart({ symbol: 'GOOGL', timeframe: '1day' }));
+    act(() => result.current.openChart({ symbol: 'GOOGL', timeframe: '1hour' }));
+    expect(result.current.activeTab).toMatchObject({ timeframe: '1hour' });
+
+    act(() => result.current.openChart({ symbol: 'GOOGL' }));
+    expect(result.current.activeTab).toMatchObject({ timeframe: '1hour' });
+  });
+
+  it('persists the symbol and interval, and restores the tab from them', () => {
+    const first = renderHook(() => useFileTabs('ws'));
+    act(() => first.result.current.openChart({ symbol: 'NVDA', timeframe: '4hour' }));
+    expect(stored(tabsStorageKey('ws')).tabs).toEqual([{ kind: 'chart', symbol: 'NVDA', timeframe: '4hour' }]);
+    first.unmount();
+
+    const { result } = renderHook(() => useFileTabs('ws'));
+    expect(result.current.activeTab).toMatchObject({ kind: 'chart', symbol: 'NVDA', timeframe: '4hour' });
+  });
+
+  it('restores a chart tab whose stored interval this build no longer has on the daily view', () => {
+    localStorage.setItem(
+      tabsStorageKey('ws'),
+      JSON.stringify({ tabs: [{ kind: 'chart', symbol: 'NVDA', timeframe: '7min' }], active: 0 }),
+    );
+    const { result } = renderHook(() => useFileTabs('ws'));
+    expect(result.current.activeTab).toMatchObject({ kind: 'chart', symbol: 'NVDA', timeframe: '1day' });
+  });
+
+  it('drops a stored chart tab with no symbol', () => {
+    localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({ tabs: [{ kind: 'chart' }], active: 0 }));
+    const { result } = renderHook(() => useFileTabs('ws'));
+    expect(paths(result.current.tabs)).toEqual([null]);
+  });
+
+  it('lets a chart tab be patched in place, which is how the toolbar interval is remembered', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openChart({ symbol: 'GOOGL' }));
+    const id = result.current.activeId;
+    act(() => result.current.patchTab(id, (t) => (t.kind === 'chart' ? { ...t, timeframe: '1hour' } : t)));
+
+    expect(result.current.activeTab).toMatchObject({ id, symbol: 'GOOGL', timeframe: '1hour' });
+    expect(result.current.tabs).toHaveLength(1);
+  });
+});
+
+describe('useFileTabs chart retarget', () => {
+  it('points a chart tab at another symbol in place, keeping its interval', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openChart({ symbol: 'GOOGL', timeframe: '1hour' }));
+    const id = result.current.activeId;
+    act(() => result.current.retargetChart(id, 'msft'));
+
+    expect(result.current.tabs).toHaveLength(1);
+    expect(result.current.activeTab).toMatchObject({ id, symbol: 'MSFT', timeframe: '1hour' });
+  });
+
+  it('folds into the tab that already shows the symbol, on the interval being looked at', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openChart({ symbol: 'GOOGL', timeframe: '1day' }));
+    const googl = result.current.activeId;
+    act(() => result.current.newTab());
+    act(() => result.current.openChart({ symbol: 'NVDA', timeframe: '1hour' }));
+    act(() => result.current.retargetChart(result.current.activeId, 'GOOGL'));
+
+    expect(result.current.tabs.filter((t) => t.kind === 'chart')).toHaveLength(1);
+    expect(result.current.activeId).toBe(googl);
+    expect(result.current.activeTab).toMatchObject({ symbol: 'GOOGL', timeframe: '1hour' });
+  });
+
+  it('ignores a blank ticker', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openChart({ symbol: 'GOOGL' }));
+    act(() => result.current.retargetChart(result.current.activeId, '   '));
+    expect(result.current.activeTab).toMatchObject({ symbol: 'GOOGL' });
+  });
+
+  it('remembers the last symbol for the next chart opened blind', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    expect(lastChartSymbol('ws')).toBe('SPY');
+    act(() => result.current.openChart({ symbol: 'AMD' }));
+    expect(lastChartSymbol('ws')).toBe('AMD');
+    expect(lastChartSymbol('other')).toBe('SPY');
+  });
+
+  it('falls back to the default when the stored symbol is not a ticker', () => {
+    localStorage.setItem(lastChartStorageKey('ws'), '   ');
+    expect(lastChartSymbol('ws')).toBe('SPY');
+    localStorage.setItem(lastChartStorageKey('ws'), 'not a ticker at all');
+    expect(lastChartSymbol('ws')).toBe('SPY');
+    localStorage.setItem(lastChartStorageKey('ws'), 'amd');
+    expect(lastChartSymbol('ws')).toBe('AMD');
   });
 });

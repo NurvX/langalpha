@@ -19,7 +19,8 @@ import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { LineChart, ExternalLink, Check, ArrowRight, X } from 'lucide-react';
+import { LineChart, ExternalLink, Check, ArrowRight, X, PanelRight } from 'lucide-react';
+import { useMessageActions } from '../messageList/MessageActionsContext';
 
 import {
   Dialog,
@@ -43,6 +44,9 @@ import { useWorkspaceId } from '../../contexts/WorkspaceContext';
 import { useChartSurface } from '../../contexts/ChartSurfaceContext';
 import { AnnotationPreviewChart } from './AnnotationPreviewChart';
 import { CARD_BG, CARD_BORDER } from './inlineCardsShared';
+import { buildMarketViewUrl } from '@/pages/MarketView/utils/marketRoute';
+import { cn } from '@/lib/utils';
+import './InlineChartAnnotationCard.css';
 
 // Lazy: the surface pulls in the whole MarketView chart stack (lightweight-charts,
 // html2canvas, TradingView). Keep it out of the chat bundle until a chart opens.
@@ -54,7 +58,6 @@ const MarketChartSurface = lazy(() =>
 
 const TEXT_COLOR = 'var(--color-text-tertiary)';
 const ACCENT = 'var(--color-accent-primary)';
-const ACCENT_SOFT = 'var(--color-accent-soft)';
 const FOCUS_RING = 'var(--color-focus-ring)';
 
 const RESTING_SHADOW = '0 1px 2px rgba(0,0,0,0.05), 0 16px 36px -18px rgba(0,0,0,0.5)';
@@ -86,12 +89,32 @@ interface InlineChartAnnotationCardProps {
   onClick?: () => void;
 }
 
+/** A button in the expanded chart's slim chrome; `primary` is the accent-tinted one. */
+function ActionButton({ icon, label, onClick, primary = false }: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  primary?: boolean;
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn('chart-annotation-action', primary && 'chart-annotation-action--primary')}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
 export function InlineChartAnnotationCard({
   artifact,
 }: InlineChartAnnotationCardProps): React.ReactElement | null {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
+  const { onOpenChart } = useMessageActions();
   const params = useParams();
   const ctxWorkspaceId = useWorkspaceId();
   const { chartPresent, activeSymbol, activeTimeframe, onJumpToChart } = useChartSurface();
@@ -132,15 +155,21 @@ export function InlineChartAnnotationCard({
 
   const handleOpenInMarketView = useCallback(() => {
     if (!symbol) return;
-    const sp = new URLSearchParams();
-    sp.set('symbol', symbol);
-    sp.set('tf', timeframe);
-    sp.set('mode', 'ptc');
-    if (workspaceId) sp.set('ws', workspaceId);
-    if (threadId && threadId !== '__default__') sp.set('thread', threadId);
-    sp.set('returnTo', location.pathname + location.search);
-    navigate(`/market?${sp.toString()}`);
+    navigate(buildMarketViewUrl({
+      symbol,
+      timeframe,
+      workspaceId,
+      threadId: threadId !== '__default__' ? threadId : null,
+      returnTo: location.pathname + location.search,
+    }));
   }, [symbol, timeframe, workspaceId, threadId, location, navigate]);
+
+  // The same chart, as a tab beside the chat rather than a page of its own.
+  const handleOpenInPanel = useCallback(() => {
+    if (!symbol || !onOpenChart) return;
+    setOpen(false);
+    onOpenChart({ symbol, timeframe });
+  }, [symbol, timeframe, onOpenChart]);
 
   if (!artifact || !symbol) return null;
 
@@ -549,30 +578,19 @@ export function InlineChartAnnotationCard({
                 flexShrink: 0,
               }}
             >
-              <button
-                type="button"
+              {onOpenChart && (
+                <ActionButton
+                  icon={<PanelRight size={13} />}
+                  label={t('chat.chartAnnotationCard.openInPanel')}
+                  onClick={handleOpenInPanel}
+                />
+              )}
+              <ActionButton
+                primary
+                icon={<ExternalLink size={13} />}
+                label={t('filePanel.openInMarketView')}
                 onClick={handleOpenInMarketView}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '6px 12px',
-                  borderRadius: 8,
-                  border: `1px solid ${CARD_BORDER}`,
-                  background: ACCENT_SOFT,
-                  color: ACCENT,
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                  transition: 'border-color 0.15s',
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.borderColor = ACCENT)}
-                onMouseLeave={(e) => (e.currentTarget.style.borderColor = CARD_BORDER)}
-              >
-                {t('chat.chartAnnotationCard.openInMarketView')}
-                <ExternalLink size={13} />
-              </button>
+              />
               <DialogClose
                 aria-label={t('chat.chartAnnotationCard.close')}
                 style={{

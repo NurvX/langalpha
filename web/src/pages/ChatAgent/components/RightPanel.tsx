@@ -1,10 +1,10 @@
-import React, { Suspense, useMemo, useState } from 'react';
+import React, { Suspense, useCallback, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { AnimatedTabs } from '@/components/ui/animated-tabs';
-import type { ContextPayload } from './FilePanel';
-import type { MemoryTier } from '../utils/agentPaths';
-import type { FileLocation, OpenFileHandler } from '../utils/fileLocation';
+import { isFilesPanelKind, type ChartTabSpec, type ContextPayload, type FilesPanelKind, type PanelTarget } from './filePanel/types';
+import type { OpenFileHandler } from '../utils/fileLocation';
+import type { WriteEvent } from '../utils/fileRefResolver';
 import type { MarketWatchState } from '../hooks/utils/streamEventHandlers';
 import type { ProvenanceRecord } from '@/types/chat';
 
@@ -14,41 +14,38 @@ const MemoPanel = React.lazy(() => import('./MemoPanel'));
 const SourcesPanel = React.lazy(() => import('./SourcesPanel'));
 const StatusPanel = React.lazy(() => import('./StatusPanel'));
 
+export type { PanelTarget };
+
 export type RightPanelTab = 'files' | 'memory' | 'memo' | 'sources' | 'status';
 
-/**
- * What the panel is currently pointed at — one discriminated value replacing the
- * former parallel `targetFile`/`…Dir`/`…MemoryKey`/`…MemoKey`/`…Sources`/`…Status`
- * props. The active tab, tab visibility, and snap-back all derive from `.kind`,
- * so exactly one target can be set at a time (no sibling-nulling dance).
- *
- * `dir` outlives the click that set it: it is the tree's active filter, shown
- * in the header and cleared by the back button. So it cannot also say that a
- * request happened, and `seq` does, counting the clicks. The same folder asked
- * for twice is two requests carrying one directory.
- */
-export type PanelTarget =
-  | { kind: 'file'; path?: string | null; dir?: string | null; location?: FileLocation | null; seq?: number; /** Open in a tab of its own rather than the preview slot. */ pin?: boolean }
-  /** A dev server the agent started in the sandbox; it opens as a tab in the
-   *  Files panel. `seq` counts the asks, so the same port twice is two. */
-  | { kind: 'preview'; port: number; title?: string; path?: string; command?: string; seq: number }
-  | { kind: 'memory'; key: string; tier: MemoryTier }
-  | { kind: 'memo'; key: string }
-  | { kind: 'sources'; messageId: string }
-  | { kind: 'status' };
+/** The tab that owns each kind the Files panel does not; `FILES_PANEL_KINDS` covers the rest. */
+const OTHER_KIND_TO_TAB: Record<Exclude<PanelTarget['kind'], FilesPanelKind>, RightPanelTab> = {
+  memory: 'memory',
+  memo: 'memo',
+  sources: 'sources',
+  status: 'status',
+};
+
+/** The tab that owns a target kind; a null target leaves the tab where it is. */
+function tabForKind(kind: PanelTarget['kind']): RightPanelTab {
+  return isFilesPanelKind(kind) ? 'files' : OTHER_KIND_TO_TAB[kind];
+}
 
 interface RightPanelProps {
   workspaceId: string;
   /** The open conversation, which owns the file panel's tab strip. */
   threadId?: string | null;
   onClose: () => void;
-  /** The panel's current target (file/memory/memo/sources/status), or null. */
+  /** Mirrors the Files panel's unsaved state up to whoever can unmount this panel. */
+  onDirtyChange?: ((dirty: boolean) => void) | null;
+  /** The panel's current target (file/preview/chart/memory/memo/sources/status), or null. */
   panelTarget?: PanelTarget | null;
-  onTargetFileHandled?: () => void;
-  onTargetDirHandled?: () => void;
+  /** The Files panel consumed a file, preview or chart target. */
+  onTargetHandled?: () => void;
   onTargetMemoryHandled?: () => void;
   onTargetMemoHandled?: () => void;
-  onTargetPreviewHandled?: () => void;
+  /** Leaves the panel for the full MarketView page on a chart tab's symbol. */
+  onOpenInMarketView?: ((spec: ChartTabSpec) => void) | null;
   /** Live provenance records for the targeted message (keyed by record id). */
   sourcesRecords?: Record<string, ProvenanceRecord>;
   /** Provenance records merged across every turn in the thread (keyed by record
@@ -63,6 +60,8 @@ interface RightPanelProps {
   /** This thread's Write/Edit paths, newest first; read when a file reference
    * has to be resolved. */
   getRecentWritePaths?: () => string[];
+  /** Every Write/Edit in the thread, newest first; what marks an open tab changed. */
+  getWriteLog?: () => WriteEvent[];
   files?: string[];
   filesLoading?: boolean;
   filesError?: string | null;
@@ -72,6 +71,9 @@ interface RightPanelProps {
   onToggleSystemFiles?: (() => void) | null;
   readOnly?: boolean;
   singleFileMode?: boolean;
+  /** False for a panel that browses on the side of a conversation, so what it
+   *  opens is never written over the workspace's own tab strip. */
+  persistTabs?: boolean;
   /** Initial tab — callers can deep-link into the Memory tab once it stabilizes. */
   initialTab?: RightPanelTab;
   /** Copy a shareable link to an HTML report (authenticated app only). */
@@ -82,17 +84,18 @@ export default function RightPanel({
   workspaceId,
   threadId = null,
   onClose,
+  onDirtyChange,
   panelTarget = null,
-  onTargetFileHandled,
-  onTargetDirHandled,
+  onTargetHandled,
   onTargetMemoryHandled,
   onTargetMemoHandled,
-  onTargetPreviewHandled,
+  onOpenInMarketView = null,
   sourcesRecords,
   allSourcesRecords,
   marketWatch,
   onOpenFile,
   getRecentWritePaths,
+  getWriteLog,
   files,
   filesLoading,
   filesError,
@@ -102,6 +105,7 @@ export default function RightPanel({
   onToggleSystemFiles,
   readOnly,
   singleFileMode,
+  persistTabs = true,
   initialTab = 'files',
   onCopyShareLink,
 }: RightPanelProps): React.ReactElement {
@@ -109,18 +113,36 @@ export default function RightPanel({
   const [tab, setTab] = useState<RightPanelTab>(initialTab);
   const watchSymbolCount = marketWatch?.symbols?.length ?? 0;
 
-  // Fan the single target back out to the per-panel pre-select props. Exactly
-  // one kind is ever set, so these are mutually exclusive by construction.
+  // The Files panel holds its drafts in memory, so closing the panel or
+  // leaving for another tab throws away an unsaved edit the same way closing
+  // one file tab does, and asks the same question. It goes back to false when
+  // the panel unmounts, so only a live Files tab can raise it.
+  const [filesDirty, setFilesDirty] = useState(false);
+  const handleDirtyChange = useCallback((dirty: boolean) => {
+    setFilesDirty(dirty);
+    onDirtyChange?.(dirty);
+  }, [onDirtyChange]);
+  const mayLeaveFiles = useCallback(
+    () => !filesDirty || window.confirm(t('filePanel.discardUnsaved')),
+    [filesDirty, t],
+  );
+
+  const handleClose = useCallback(() => {
+    if (mayLeaveFiles()) onClose();
+  }, [mayLeaveFiles, onClose]);
+
+  const handleTabChange = useCallback((id: RightPanelTab) => {
+    if (id === tab) return;
+    if (tab === 'files' && !mayLeaveFiles()) return;
+    setTab(id);
+  }, [tab, mayLeaveFiles]);
+
+  // The Files panel reads the target itself; Memory and Memo take their keys.
+  // Exactly one kind is ever set, so these are mutually exclusive by construction.
   const kind = panelTarget?.kind;
-  const targetFile = panelTarget?.kind === 'file' ? panelTarget.path ?? null : null;
-  const targetDirectory = panelTarget?.kind === 'file' ? panelTarget.dir ?? null : null;
-  const targetDirSeq = panelTarget?.kind === 'file' ? panelTarget.seq ?? null : null;
-  const targetLocation = panelTarget?.kind === 'file' ? panelTarget.location ?? null : null;
-  const targetPin = panelTarget?.kind === 'file' ? !!panelTarget.pin : false;
   const targetMemoryKey = panelTarget?.kind === 'memory' ? panelTarget.key : null;
   const targetMemoryTier = panelTarget?.kind === 'memory' ? panelTarget.tier : null;
   const targetMemoKey = panelTarget?.kind === 'memo' ? panelTarget.key : null;
-  const targetPreview = panelTarget?.kind === 'preview' ? panelTarget : null;
 
   const tabs = useMemo<{ id: RightPanelTab; label: string }[]>(
     () => {
@@ -146,19 +168,20 @@ export default function RightPanel({
     [t, kind, watchSymbolCount],
   );
 
-  // Snap to the tab that owns the current target. Only one kind is ever set, so
-  // a single switch replaces the former precedence ladder; a null target leaves
-  // the tab where the user (or a prior snap) put it.
+  // Snap to the tab that owns the current target. Keyed on the target object,
+  // not just its kind, so re-asking for the same kind snaps back too. Leaving
+  // Files asks the same question a tab click does; a declined one-shot target
+  // is consumed, or the next visit to its tab would land it unasked.
   React.useEffect(() => {
-    switch (kind) {
-      case 'status': setTab('status'); break;
-      case 'sources': setTab('sources'); break;
-      case 'memory': setTab('memory'); break;
-      case 'memo': setTab('memo'); break;
-      case 'file': setTab('files'); break;
-      case 'preview': setTab('files'); break;
+    if (!kind) return;
+    const next = tabForKind(kind);
+    if (next !== 'files' && tab === 'files' && !mayLeaveFiles()) {
+      if (kind === 'memory') onTargetMemoryHandled?.();
+      else if (kind === 'memo') onTargetMemoHandled?.();
+      return;
     }
-  }, [panelTarget, kind]);
+    setTab(next);
+  }, [panelTarget, kind]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The Status/Sources tabs are conditional (see `tabs`). If the current tab
   // disappears — Status when its target clears with no active watch, Sources
@@ -184,11 +207,11 @@ export default function RightPanel({
         <AnimatedTabs
           tabs={tabs}
           value={tab}
-          onChange={(id) => setTab(id as RightPanelTab)}
+          onChange={(id) => handleTabChange(id as RightPanelTab)}
           layoutId="right-panel-tabs"
         />
         <button
-          onClick={onClose}
+          onClick={handleClose}
           className="file-panel-icon-btn"
           title={t('rightPanel.close')}
         >
@@ -204,17 +227,13 @@ export default function RightPanel({
               workspaceId={workspaceId}
               threadId={threadId}
               onClose={onClose}
-              targetFile={targetFile}
-              targetLocation={targetLocation}
-              targetPin={targetPin}
-              onTargetFileHandled={onTargetFileHandled}
-              targetDirectory={targetDirectory}
-              targetDirSeq={targetDirSeq}
-              onTargetDirHandled={onTargetDirHandled}
-              targetPreview={targetPreview}
-              onTargetPreviewHandled={onTargetPreviewHandled}
+              onDirtyChange={handleDirtyChange}
+              target={panelTarget}
+              onTargetHandled={onTargetHandled}
+              onOpenInMarketView={onOpenInMarketView}
               onOpenFile={onOpenFile}
               getRecentWritePaths={getRecentWritePaths}
+              getWriteLog={getWriteLog}
               files={files}
               filesLoading={filesLoading}
               filesError={filesError}
@@ -224,8 +243,9 @@ export default function RightPanel({
               onToggleSystemFiles={onToggleSystemFiles}
               readOnly={readOnly}
               singleFileMode={singleFileMode}
+              persistTabs={persistTabs}
               hideClose
-              onSwitchToMemoTab={() => setTab('memo')}
+              onSwitchToMemoTab={() => handleTabChange('memo')}
               onCopyShareLink={onCopyShareLink}
             />
           )}

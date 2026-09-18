@@ -1,7 +1,8 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { renderWithProviders } from '@/test/utils';
+import { QueryClient } from '@tanstack/react-query';
 
 const wsStatus = { value: 'running' };
 
@@ -25,6 +26,7 @@ vi.mock('@/pages/ChatAgent/utils/api', async (importOriginal) => {
     downloadWorkspaceFileAsArrayBuffer: vi.fn(),
     triggerFileDownload: vi.fn(),
     resolveWorkspaceFile: vi.fn(),
+    deleteWorkspaceFiles: vi.fn(async (_ws: string, paths: string[]) => ({ deleted: paths, errors: [] })),
   };
 });
 vi.mock('@/hooks/useWorkspace', () => ({ useWorkspace: () => ({ data: { status: wsStatus.value, name: 'ws' } }) }));
@@ -94,13 +96,13 @@ describe('FilePanel reference opens', () => {
   it('leaves edit mode when a reference opens another file', async () => {
     const files = ['notes.md', 'report.py'];
     const { rerender } = renderWithProviders(
-      <FilePanel workspaceId="ws" onClose={() => {}} files={files} targetFile="notes.md" />,
+      <FilePanel workspaceId="ws" onClose={() => {}} files={files} target={{ kind: 'file', path: 'notes.md' }} />,
     );
     await screen.findByText('My private notes body.');
     fireEvent.click(screen.getByTitle('Edit file'));
     await screen.findByTestId('editor');
 
-    rerender(<FilePanel workspaceId="ws" onClose={() => {}} files={files} targetFile="report.py" />);
+    rerender(<FilePanel workspaceId="ws" onClose={() => {}} files={files} target={{ kind: 'file', path: 'report.py' }} />);
     await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('ws', 'report.py'));
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 
@@ -111,16 +113,163 @@ describe('FilePanel reference opens', () => {
   it('asks the server for a known path that is no longer there', async () => {
     resolveMock().mockResolvedValue({ status: 'resolved', path: 'results/report2.md', matches: ['results/report2.md'] });
     renderWithProviders(
-      <FilePanel workspaceId="ws" onClose={() => {}} files={[]} getRecentWritePaths={() => ['report2.md']} targetFile="report2.md" />,
+      <FilePanel workspaceId="ws" onClose={() => {}} files={[]} getRecentWritePaths={() => ['report2.md']} target={{ kind: 'file', path: 'report2.md' }} />,
     );
     await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('ws', 'results/report2.md'));
     expect(api.resolveWorkspaceFile).toHaveBeenCalledWith('ws', ['report2.md'], ['report2.md']);
   });
 
+  it('lets a file opened from the tree win over a reference still being looked up', async () => {
+    let answer!: (r: { status: string; path?: string; matches: string[] }) => void;
+    resolveMock().mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    const files = ['notes.md', 'report.py'];
+    renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={files} target={{ kind: 'file', path: 'missing.md' }} />,
+    );
+    await waitFor(() => expect(api.resolveWorkspaceFile).toHaveBeenCalled());
+
+    fireEvent.click(await screen.findByText('report.py', { selector: '[data-row-path] *' }));
+    await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('ws', 'report.py'));
+
+    answer({ status: 'resolved', path: 'notes.md', matches: ['notes.md'] });
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(api.readWorkspaceFile).not.toHaveBeenCalledWith('ws', 'notes.md');
+  });
+
+  it('lets a tab opened by hand win over a reference still being looked up', async () => {
+    let answer!: (r: { status: string; path?: string; matches: string[] }) => void;
+    resolveMock().mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={['notes.md']} target={{ kind: 'file', path: 'missing.md' }} />,
+    );
+    await waitFor(() => expect(api.resolveWorkspaceFile).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByLabelText('New tab'));
+
+    answer({ status: 'resolved', path: 'notes.md', matches: ['notes.md'] });
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(api.readWorkspaceFile).not.toHaveBeenCalledWith('ws', 'notes.md');
+  });
+
+  it('closes the tab of a file the tree just deleted and reads it afresh if reopened', async () => {
+    // A panel-side delete never reaches the write log, so the change marker
+    // cannot force the re-read; the delete has to drop the tab and its bytes.
+    const first = { kind: 'file', path: 'notes.md', seq: 1 } as const;
+    const { rerender } = renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={['notes.md', 'report.py']} target={first} />,
+    );
+    await screen.findByText('My private notes body.');
+
+    fireEvent.click(screen.getByTitle('Select files'));
+    fireEvent.click(within(screen.getByRole('tree')).getByText('notes.md'));
+    fireEvent.click(screen.getByTitle('Delete selected'));
+    fireEvent.click(await screen.findByText('Delete 1?'));
+
+    await waitFor(() => expect(screen.queryByLabelText('Close notes.md')).toBeNull());
+    expect(screen.queryByText('My private notes body.')).toBeNull();
+
+    rerender(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={['report.py']} target={{ kind: 'file', path: 'notes.md', seq: 2 }} />,
+    );
+    await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps the change marker on a returning tab until the fresh bytes land', async () => {
+    // The body query keeps the old bytes through the refetch a changed tab
+    // triggers, so the marker must wait for the read to settle, not for a body
+    // to be present. The default test client evicts a left tab at once, which
+    // would hide the cached-body case this is about.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 5 * 60_000 } } });
+    const log = { current: [] as { id: string; path: string }[] };
+    const getWriteLog = () => log.current;
+    const files = ['notes.md', 'report.py'];
+    const first = { kind: 'file', path: 'notes.md', seq: 1 } as const;
+    const { rerender } = renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={files} getWriteLog={getWriteLog} target={first} />,
+      { queryClient },
+    );
+    await screen.findByText('My private notes body.');
+    // Pinned, so the next single open sits beside it instead of taking its tab.
+    fireEvent.doubleClick(within(screen.getByRole('tablist')).getByText('notes.md'));
+
+    rerender(<FilePanel workspaceId="ws" onClose={() => {}} files={files} getWriteLog={getWriteLog} target={{ kind: 'file', path: 'report.py', seq: 2 }} />);
+    await screen.findByLabelText('Close report.py');
+    log.current = [{ id: 'w1', path: 'notes.md' }];
+    rerender(<FilePanel workspaceId="ws" onClose={() => {}} files={files} getWriteLog={getWriteLog} target={{ kind: 'file', path: 'report.py', seq: 2 }} />);
+    await screen.findByTitle('Changed since you opened it');
+
+    let land: (v: { content: string; mime: string; truncated: boolean }) => void = () => {};
+    (api.readWorkspaceFile as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise((r) => { land = r; }));
+    fireEvent.click(within(screen.getByRole('tablist')).getByText('notes.md'));
+    await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenLastCalledWith('ws', 'notes.md'));
+    // Still the old bytes on screen, so still marked as changed.
+    expect(screen.getByText('My private notes body.')).toBeInTheDocument();
+    expect(screen.getByTitle('Changed since you opened it')).toBeInTheDocument();
+
+    await act(async () => { land({ content: 'Rewritten notes body.', mime: 'text/markdown', truncated: false }); });
+    await screen.findByText('Rewritten notes body.');
+    expect(screen.queryByTitle('Changed since you opened it')).toBeNull();
+  });
+
+  it('re-reads a restored tab whose file was rewritten while the panel was closed', async () => {
+    // The body outlives the panel mount in the shared query cache, the read
+    // marks do not. A remount inside the fresh window has to read again
+    // rather than adopt the old bytes and stamp the newer write as read.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 5 * 60_000 } } });
+    const log = { current: [] as { id: string; path: string }[] };
+    const getWriteLog = () => log.current;
+    const files = ['notes.md'];
+    const first = renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={files} getWriteLog={getWriteLog} target={{ kind: 'file', path: 'notes.md', seq: 1 }} />,
+      { queryClient },
+    );
+    await screen.findByText('My private notes body.');
+    first.unmount();
+
+    log.current = [{ id: 'w1', path: 'notes.md' }];
+    (api.readWorkspaceFile as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      { content: 'Rewritten notes body.', mime: 'text/markdown', truncated: false },
+    );
+    // No target: the strip comes back from storage with notes.md active.
+    renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={files} getWriteLog={getWriteLog} />,
+      { queryClient },
+    );
+    await screen.findByText('Rewritten notes body.');
+    expect(screen.queryByTitle('Changed since you opened it')).toBeNull();
+  });
+
+  it('reads a file again when it was rewritten while its tab was closed', async () => {
+    // The body query stays fresh for a minute after a read. Closing the tab
+    // forgets the change marker, so the marker cannot force the re-read; the
+    // close has to drop the cached bytes instead.
+    const log = { current: [] as { id: string; path: string }[] };
+    const getWriteLog = () => log.current;
+    // One target object across the write, so the re-render only carries the
+    // log and does not itself re-open the file.
+    const first = { kind: 'file', path: 'notes.md', seq: 1 } as const;
+    const { rerender } = renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={['notes.md']} getWriteLog={getWriteLog} target={first} />,
+    );
+    // The marker is stamped once the bytes are in hand, so the write has to
+    // come after the body is on screen to count as a change.
+    await screen.findByText('My private notes body.');
+
+    log.current = [{ id: 'w1', path: 'notes.md' }];
+    rerender(<FilePanel workspaceId="ws" onClose={() => {}} files={['notes.md']} getWriteLog={getWriteLog} target={first} />);
+    await screen.findByTitle('Changed since you opened it');
+    fireEvent.click(screen.getByLabelText('Close notes.md'));
+
+    rerender(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={['notes.md']} getWriteLog={getWriteLog} target={{ kind: 'file', path: 'notes.md', seq: 2 }} />,
+    );
+    await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledTimes(2));
+  });
+
   it('asks the server when a stopped workspace reports the path as not backed up', async () => {
     wsStatus.value = 'stopped';
     resolveMock().mockResolvedValue({ status: 'resolved', path: 'results/tools/x.py', matches: ['results/tools/x.py'] });
-    renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={[]} targetFile="tools/x.py" />);
+    renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={[]} target={{ kind: 'file', path: 'tools/x.py' }} />);
     await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('ws', 'results/tools/x.py'));
   });
 
@@ -129,7 +278,7 @@ describe('FilePanel reference opens', () => {
     // path is live: the card would offer to save a name nothing occupies.
     resolveMock().mockResolvedValue({ status: 'resolved', path: 'results/deck.docx', matches: ['results/deck.docx'] });
     renderWithProviders(
-      <FilePanel workspaceId="ws" onClose={() => {}} files={['deck.docx']} targetFile="deck.docx" />,
+      <FilePanel workspaceId="ws" onClose={() => {}} files={['deck.docx']} target={{ kind: 'file', path: 'deck.docx' }} />,
     );
     await waitFor(() => expect(api.resolveWorkspaceFile).toHaveBeenCalledWith('ws', ['deck.docx'], []));
     expect(api.readWorkspaceFile).not.toHaveBeenCalled();
@@ -137,14 +286,14 @@ describe('FilePanel reference opens', () => {
 
   it('lands on the matches when the server cannot pick one', async () => {
     resolveMock().mockResolvedValue({ status: 'ambiguous', matches: ['a/model.py', 'b/model.py'] });
-    renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={['a/model.py', 'b/model.py']} targetFile="model.py" />);
+    renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={['a/model.py', 'b/model.py']} target={{ kind: 'file', path: 'model.py' }} />);
     await screen.findByText(/More than one file matches model\.py/);
     expect(api.readWorkspaceFile).not.toHaveBeenCalled();
   });
 
   it('reads the path as written when the server cannot look yet', async () => {
     resolveMock().mockResolvedValue({ status: 'unavailable', reason: 'sandbox_starting', matches: [] });
-    renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={[]} targetFile="results/new.csv" />);
+    renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={[]} target={{ kind: 'file', path: 'results/new.csv' }} />);
     await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('ws', 'results/new.csv'));
   });
 
@@ -152,7 +301,7 @@ describe('FilePanel reference opens', () => {
   // quoting it, so joining it against that file's directory opens a namesake.
   const openDocAndClick = async (linkText: string) => {
     renderWithProviders(
-      <FilePanel workspaceId="ws" onClose={() => {}} files={NAMESAKES} targetFile="docs/index.md" />,
+      <FilePanel workspaceId="ws" onClose={() => {}} files={NAMESAKES} target={{ kind: 'file', path: 'docs/index.md' }} />,
     );
     await screen.findByText('Index');
     (api.readWorkspaceFile as ReturnType<typeof vi.fn>).mockClear();
@@ -191,7 +340,7 @@ describe('FilePanel reference opens', () => {
         workspaceId="ws"
         onClose={() => {}}
         files={NAMESAKES}
-        targetFile="docs/index.md"
+        target={{ kind: 'file', path: 'docs/index.md' }}
         onOpenFile={onOpenFile}
       />,
     );
@@ -240,11 +389,11 @@ describe('FilePanel reference opens', () => {
     );
 
     const { rerender } = renderWithProviders(
-      <FilePanel workspaceId="ws" onClose={() => {}} files={files} targetFile="data.parquet" />,
+      <FilePanel workspaceId="ws" onClose={() => {}} files={files} target={{ kind: 'file', path: 'data.parquet' }} />,
     );
     fireEvent.click(await screen.findByText('Download instead'));
 
-    rerender(<FilePanel workspaceId="ws" onClose={() => {}} files={files} targetFile="notes.md" />);
+    rerender(<FilePanel workspaceId="ws" onClose={() => {}} files={files} target={{ kind: 'file', path: 'notes.md' }} />);
     await screen.findByText('My private notes body.');
 
     await act(async () => {
@@ -268,7 +417,7 @@ describe('FilePanel reference opens', () => {
     );
 
     renderWithProviders(
-      <FilePanel workspaceId="ws" onClose={() => {}} files={files} targetFile="data.parquet" />,
+      <FilePanel workspaceId="ws" onClose={() => {}} files={files} target={{ kind: 'file', path: 'data.parquet' }} />,
     );
     fireEvent.click(await screen.findByText('Download instead'));
 
@@ -293,7 +442,7 @@ describe('FilePanel reference opens', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     const { rerender } = renderWithProviders(
-      <FilePanel workspaceId="ws" onClose={() => {}} files={EDIT_FILES} targetFile="notes.md" />,
+      <FilePanel workspaceId="ws" onClose={() => {}} files={EDIT_FILES} target={{ kind: 'file', path: 'notes.md' }} />,
     );
     await screen.findByText('My private notes body.');
     fireEvent.click(screen.getByTitle('Edit file'));
@@ -301,7 +450,7 @@ describe('FilePanel reference opens', () => {
     fireEvent.click(screen.getByTitle('Save (Cmd+S)'));
     await waitFor(() => expect(api.writeWorkspaceFile).toHaveBeenCalledWith('ws', 'notes.md', '# Notes\n\nEdited body.'));
 
-    rerender(<FilePanel workspaceId="ws" onClose={() => {}} files={EDIT_FILES} targetFile="report.py" />);
+    rerender(<FilePanel workspaceId="ws" onClose={() => {}} files={EDIT_FILES} target={{ kind: 'file', path: 'report.py' }} />);
     await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('ws', 'report.py'));
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     return { rejectWrite };
@@ -340,34 +489,34 @@ describe('FilePanel reference opens', () => {
 
   // A folder accepted from chat points the tree, which is now a column beside
   // the viewer rather than the thing the viewer was replaced by — so honouring
-  // one never costs the reader the file they were reading. `targetDirectory`
+  // one never costs the reader the file they were reading. the target's `dir`
   // is stored with its trailing slash stripped (`computeAgentArtifactRouting`)
   // and the scope chip adds the slash back.
   const scopeChip = () => document.querySelector('.file-panel-tree-scope');
   const treeList = () => document.querySelector('.file-panel-tree-list');
 
   const openDocThenFolder = async ({ edit = false }: { edit?: boolean } = {}) => {
-    const onTargetDirHandled = vi.fn();
+    const onTargetHandled = vi.fn();
     const panel = (extra: Record<string, unknown>) => (
       <FilePanel
         workspaceId="ws"
         onClose={() => {}}
         files={NAMESAKES}
-        onTargetDirHandled={onTargetDirHandled}
+        onTargetHandled={onTargetHandled}
         {...extra}
       />
     );
-    const { rerender } = renderWithProviders(panel({ targetFile: 'docs/index.md' }));
+    const { rerender } = renderWithProviders(panel({ target: { kind: 'file', path: 'docs/index.md' } }));
     await screen.findByText('Index');
     if (edit) {
       fireEvent.click(screen.getByTitle('Edit file'));
       fireEvent.change(await screen.findByTestId('editor'), { target: { value: '# Index\n\nEdited.' } });
     }
-    onTargetDirHandled.mockClear();
+    onTargetHandled.mockClear();
 
-    rerender(panel({ targetFile: undefined, targetDirectory: 'docs' }));
+    rerender(panel({ target: { kind: 'file', dir: 'docs' } }));
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
-    return { onTargetDirHandled };
+    return { onTargetHandled };
   };
 
   it('a folder target scopes the tree without closing the open file', async () => {
@@ -381,15 +530,15 @@ describe('FilePanel reference opens', () => {
     // The folder is answered by the column beside the editor, so there is
     // nothing to discard and nothing to ask about.
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    const { onTargetDirHandled } = await openDocThenFolder({ edit: true });
+    const { onTargetHandled } = await openDocThenFolder({ edit: true });
 
     expect(screen.getByTestId('editor').getAttribute('data-file')).toBe('docs/index.md');
     expect((screen.getByTestId('editor') as HTMLTextAreaElement).value).toContain('Edited.');
     expect(scopeChip()?.textContent).toContain('docs/');
     expect(confirmSpy).not.toHaveBeenCalled();
-    // The scope is the prop's value for as long as it filters, so it is not
-    // handed back until the reader clears it.
-    expect(onTargetDirHandled).not.toHaveBeenCalled();
+    // The folder is handed back once applied, like any other target, so a
+    // remount does not replay it; the scope itself stays on as the panel's own.
+    expect(onTargetHandled).toHaveBeenCalled();
   });
 
   const folderPanel = (extra: Record<string, unknown>) => (
@@ -397,8 +546,8 @@ describe('FilePanel reference opens', () => {
   );
 
   const openFileInsideFolder = async () => {
-    const { rerender } = renderWithProviders(folderPanel({ targetDirectory: 'docs', targetDirSeq: 1 }));
-    rerender(folderPanel({ targetDirectory: 'docs', targetDirSeq: 1, targetFile: 'docs/index.md' }));
+    const { rerender } = renderWithProviders(folderPanel({ target: { kind: 'file', dir: 'docs', seq: 1 } }));
+    rerender(folderPanel({ target: { kind: 'file', dir: 'docs', seq: 1, path: 'docs/index.md' } }));
     await screen.findByText('Index');
     return rerender;
   };
@@ -411,7 +560,7 @@ describe('FilePanel reference opens', () => {
     fireEvent.click(screen.getByTitle('Toggle file tree'));
     await waitFor(() => expect(treeList()).toBeNull());
 
-    rerender(folderPanel({ targetDirectory: 'docs', targetDirSeq: 2 }));
+    rerender(folderPanel({ target: { kind: 'file', dir: 'docs', seq: 2 } }));
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 
     expect(treeList()).toBeTruthy();
@@ -424,7 +573,7 @@ describe('FilePanel reference opens', () => {
     const rerender = await openFileInsideFolder();
     fireEvent.click(screen.getByTitle('Toggle file tree'));
 
-    rerender(folderPanel({ targetDirectory: 'docs', targetDirSeq: 1 }));
+    rerender(folderPanel({ target: { kind: 'file', dir: 'docs', seq: 1 } }));
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 
     await waitFor(() => expect(treeList()).toBeNull());
@@ -435,15 +584,38 @@ describe('FilePanel reference opens', () => {
     // The router returns `''` for the root, which is a folder like any other.
     // Read as "no folder was asked for", it left the tree scoped to wherever
     // it already was and the link did nothing at all.
-    const { rerender } = renderWithProviders(folderPanel({ targetFile: 'docs/index.md' }));
+    const { rerender } = renderWithProviders(folderPanel({ target: { kind: 'file', path: 'docs/index.md' } }));
     await screen.findByText('Index');
 
-    rerender(folderPanel({ targetFile: undefined, targetDirectory: '', targetDirSeq: 1 }));
+    rerender(folderPanel({ target: { kind: 'file', dir: '', seq: 1 } }));
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 
     // The root filters nothing, so the chip names the whole workspace.
     expect(scopeChip()?.textContent).toContain('/');
     expect(screen.getByText('Index')).toBeTruthy();
+  });
+
+  it('re-reads the file a retry was pressed on, not the reference another tab still owes', async () => {
+    resolveMock().mockResolvedValueOnce({ status: 'unavailable', reason: 'sandbox_starting', matches: [] });
+    (api.readWorkspaceFile as ReturnType<typeof vi.fn>).mockImplementation(async (_ws: string, p: string) => {
+      if (!(p in CONTENT)) throw { response: { status: 503, data: { detail: 'Sandbox is starting' } } };
+      return { content: CONTENT[p], mime: 'text/markdown', truncated: false };
+    });
+    const { rerender } = renderWithProviders(
+      <FilePanel workspaceId="ws" onClose={() => {}} files={['notes.md']} target={{ kind: 'file', path: 'report.md', seq: 1 }} />,
+    );
+    await screen.findByText('Try again');
+
+    // A second file opens in its own tab and fails on its own account.
+    delete CONTENT['notes.md'];
+    rerender(<FilePanel workspaceId="ws" onClose={() => {}} files={['notes.md']} target={{ kind: 'file', path: 'notes.md', seq: 2 }} />);
+    await waitFor(() => expect(screen.getAllByText('Try again').length).toBeGreaterThan(0));
+    CONTENT['notes.md'] = '# Notes\n\nMy private notes body.';
+
+    fireEvent.click(screen.getByText('Try again'));
+
+    await screen.findByText('My private notes body.');
+    expect(resolveMock()).toHaveBeenCalledTimes(1);
   });
 
   it('asks the lookup again when a retry follows a lookup that could not answer', async () => {
@@ -458,7 +630,7 @@ describe('FilePanel reference opens', () => {
       if (!(p in CONTENT)) throw { response: { status: 503, data: { detail: 'Sandbox is starting' } } };
       return { content: CONTENT[p], mime: 'text/markdown', truncated: false };
     });
-    renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={[]} targetFile="report.md" />);
+    renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={[]} target={{ kind: 'file', path: 'report.md' }} />);
     await screen.findByText('Try again');
 
     resolveMock().mockResolvedValueOnce({ status: 'resolved', path: 'results/report.md', matches: ['results/report.md'] });
