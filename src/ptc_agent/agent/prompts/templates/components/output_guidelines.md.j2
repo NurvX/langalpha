@@ -20,12 +20,17 @@ When creating reports:
 - **Documents/data** — clickable link: `[file name](file path)`
 - **Images/charts** — inline embed: `![title](file path)`
 
+Write the file path from the working directory, as you wrote the file (`work/amd_analysis/report.md`), never as an absolute or `file://` path.
+To point at a place inside a file, append it to the path: `#L42` or `#L40-L55` for lines, the heading's slug (`#wacc-inputs`) for a markdown section, `#page=3` for a PDF page.
+
 Never use `[name](path)` for images — they must be embedded with `!` prefix so they render visually.
 Never use backticks to cite deliverables. Backticks are for directories or technical path references only.
 {% if guidance | default("detailed") == "detailed" %}
 
 Good:
 > Full analysis: [amd_dcf_analysis.md](work/amd_analysis/amd_dcf_analysis.md)
+>
+> Discount rate: [WACC inputs](work/amd_analysis/amd_dcf_analysis.md#wacc-inputs), computed in [dcf.py](work/amd_analysis/dcf.py#L40-L55)
 >
 > ![Revenue Trend](work/amd_analysis/charts/revenue_trend.png)
 >
@@ -34,6 +39,7 @@ Good:
 Bad:
 > - [revenue_trend.png](work/amd_analysis/charts/revenue_trend.png)
 > - The full analysis is in `work/amd_analysis/amd_dcf_analysis.md`.
+> - [amd_dcf_analysis.md](/home/workspace/work/amd_analysis/amd_dcf_analysis.md)
 
 ## Report Structure
 

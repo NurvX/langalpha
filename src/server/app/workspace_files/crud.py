@@ -26,6 +26,14 @@ from src.server.services.persistence.file import FilePersistenceService
 from src.server.utils.secret_redactor import get_redactor, get_vault_secrets_for_redaction
 from src.utils.mime import resolve_content_type
 
+from .file_refs import (
+    ResolveFileRefRequest,
+    clean_candidates,
+    clean_path,
+    name_glob,
+    resolve_file_ref,
+    visible_paths,
+)
 from ._shared import (
     DEFAULT_READ_LIMIT_LINES,
     _USER_PROFILE_FILES,
@@ -181,6 +189,51 @@ async def list_workspace_files(
     }
 
 
+@router.post("/{workspace_id}/files/resolve")
+async def resolve_workspace_file(
+    workspace_id: str,
+    x_user_id: CurrentUserId,
+    body: ResolveFileRefRequest,
+) -> dict[str, Any]:
+    """Resolve a file reference to one workspace path, or say why it cannot.
+
+    One name search over the live sandbox (or the persisted files of a stopped
+    workspace) answers every reading of the reference at once, so the client
+    never guesses from a listing that may predate the file.
+    """
+    workspace = await db_get_workspace(workspace_id)
+    require_workspace_owner(workspace, user_id=x_user_id)
+
+    if _is_flash_workspace(workspace):
+        return {"status": "unavailable", "reason": "flash_workspace", "matches": []}
+
+    work_dir = _get_work_dir()
+    candidates = clean_candidates(body.candidates, work_dir)
+    if not candidates:
+        raise HTTPException(status_code=400, detail="A file reference is required")
+    recent_writes = [p for p in (clean_path(w, work_dir) for w in body.recent_writes) if p]
+
+    profile = next((c for c in candidates if _is_user_profile_file(c)), None)
+    if profile:
+        return {"status": "resolved", "path": profile, "match": "exact", "matches": [profile]}
+
+    name = candidates[0].rsplit("/", 1)[-1]
+    if workspace.get("status") in ("stopped", "stopping", "starting"):
+        file_tree = await FilePersistenceService.get_file_tree(workspace_id)
+        paths = [f["path"] for f in file_tree if f["path"].rsplit("/", 1)[-1] == name]
+        source = "database"
+    else:
+        sandbox = await _acquire_sandbox(workspace_id, x_user_id)
+        if not sandbox.is_ready():
+            return {"status": "unavailable", "reason": "sandbox_starting", "matches": []}
+        absolute_paths: list[str] = await sandbox.aglob_files(name_glob(name), path=".")
+        paths = [_to_client_path(sandbox, p) for p in absolute_paths]
+        source = "sandbox"
+
+    result = resolve_file_ref(candidates, visible_paths(paths, candidates), recent_writes)
+    return {**result, "source": source}
+
+
 @router.get("/{workspace_id}/files/read")
 async def read_workspace_file(
     workspace_id: str,
@@ -318,9 +371,11 @@ async def read_workspace_file(
     # Apply line range (skip when unlimited=True for edit mode)
     if unlimited:
         content = text_content
+        truncated = False
     else:
         lines = text_content.splitlines()
         content = "\n".join(lines[offset : offset + limit])
+        truncated = len(lines) > offset + limit
 
     client_path = _to_client_path(sandbox, normalized)
     if _is_always_hidden_path(client_path):
@@ -337,7 +392,7 @@ async def read_workspace_file(
         "limit": limit,
         "content": content,
         "mime": mime,
-        "truncated": False,  # limit is enforced; UI can request more with offset.
+        "truncated": truncated,
     }
 
 

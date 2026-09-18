@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { AnimatedTabs } from '@/components/ui/animated-tabs';
 import type { ContextPayload } from './FilePanel';
 import type { MemoryTier } from '../utils/agentPaths';
+import type { FileLocation, OpenFileHandler } from '../utils/fileLocation';
 import type { MarketWatchState } from '../hooks/utils/streamEventHandlers';
 import type { ProvenanceRecord } from '@/types/chat';
 
@@ -20,9 +21,14 @@ export type RightPanelTab = 'files' | 'memory' | 'memo' | 'sources' | 'status';
  * former parallel `targetFile`/`…Dir`/`…MemoryKey`/`…MemoKey`/`…Sources`/`…Status`
  * props. The active tab, tab visibility, and snap-back all derive from `.kind`,
  * so exactly one target can be set at a time (no sibling-nulling dance).
+ *
+ * `dir` outlives the click that set it: it is the tree's active filter, shown
+ * in the header and cleared by the back button. So it cannot also say that a
+ * request happened, and `seq` does, counting the clicks. The same folder asked
+ * for twice is two requests carrying one directory.
  */
 export type PanelTarget =
-  | { kind: 'file'; path?: string | null; dir?: string | null }
+  | { kind: 'file'; path?: string | null; dir?: string | null; location?: FileLocation | null; seq?: number }
   | { kind: 'memory'; key: string; tier: MemoryTier }
   | { kind: 'memo'; key: string }
   | { kind: 'sources'; messageId: string }
@@ -47,7 +53,10 @@ interface RightPanelProps {
   /** Routes a clicked file/memory/memo path through ChatView's path-aware
    * router. Lets in-panel markdown links (e.g., a sibling memory entry
    * referenced from memory.md) jump to the right tab + entry. */
-  onOpenFile?: (path: string, workspaceId?: string) => void;
+  onOpenFile?: OpenFileHandler;
+  /** This thread's Write/Edit paths, newest first; read when a file reference
+   * has to be resolved. */
+  getRecentWritePaths?: () => string[];
   files?: string[];
   filesLoading?: boolean;
   filesError?: string | null;
@@ -75,6 +84,7 @@ export default function RightPanel({
   allSourcesRecords,
   marketWatch,
   onOpenFile,
+  getRecentWritePaths,
   files,
   filesLoading,
   filesError,
@@ -96,6 +106,8 @@ export default function RightPanel({
   const kind = panelTarget?.kind;
   const targetFile = panelTarget?.kind === 'file' ? panelTarget.path ?? null : null;
   const targetDirectory = panelTarget?.kind === 'file' ? panelTarget.dir ?? null : null;
+  const targetDirSeq = panelTarget?.kind === 'file' ? panelTarget.seq ?? null : null;
+  const targetLocation = panelTarget?.kind === 'file' ? panelTarget.location ?? null : null;
   const targetMemoryKey = panelTarget?.kind === 'memory' ? panelTarget.key : null;
   const targetMemoryTier = panelTarget?.kind === 'memory' ? panelTarget.tier : null;
   const targetMemoKey = panelTarget?.kind === 'memo' ? panelTarget.key : null;
@@ -181,9 +193,13 @@ export default function RightPanel({
               workspaceId={workspaceId}
               onClose={onClose}
               targetFile={targetFile}
+              targetLocation={targetLocation}
               onTargetFileHandled={onTargetFileHandled}
               targetDirectory={targetDirectory}
+              targetDirSeq={targetDirSeq}
               onTargetDirHandled={onTargetDirHandled}
+              onOpenFile={onOpenFile}
+              getRecentWritePaths={getRecentWritePaths}
               files={files}
               filesLoading={filesLoading}
               filesError={filesError}

@@ -94,11 +94,13 @@ _WSFILES_CSP = (
     "form-action 'none'"
 )
 
-# Viewer-embed script spliced after <head> when `?inject=theme` is set. Two
+# Viewer-embed script spliced after <head> when `?inject=theme` is set. Three
 # jobs: (1) theme sync — listens for `widget:themeUpdate` postMessages and
 # applies the `--color-*` custom properties to :root via a dedicated style
 # element (payload matches the inline-widget protocol the parent speaks,
-# useHtmlSandbox.pushTheme); (2) link routing — a plain <a href> would
+# useHtmlSandbox.pushTheme); (2) anchor scrolling on `widget:scrollTo`, so a
+# reference clicked twice lands twice (useHtmlSandbox.scrollToAnchor);
+# (3) link routing — a plain <a href> would
 # navigate the sandboxed IFRAME itself (where the target has no cookies and
 # bot checks break), so external links open via window.open(..., 'noopener')
 # while same-host links keep in-frame navigation (multi-file reports).
@@ -111,9 +113,16 @@ _THEME_INJECTION = (
     "(document.head||document.documentElement).appendChild(s);}"
     "s.textContent=':root{\\n'+css+'\\n}';}"
     "window.addEventListener('message',function(e){"
-    "var d=e&&e.data;"
-    "if(!d||d.type!=='widget:themeUpdate'||!d.css)return;"
-    "apply(d.css);});"
+    "var d=e&&e.data;if(!d)return;"
+    "if(d.type==='widget:themeUpdate'&&d.css){apply(d.css);return;}"
+    # A reference to the section the URL already names moves neither `src` nor
+    # `location.hash`, so the browser has nothing to navigate to and the click
+    # reads as dead. Scrolling on request rather than on the fragment changing
+    # is what makes the second click land. Looked up by id and by name, the two
+    # things a fragment matches; no selector parsing, so any anchor text is safe.
+    "if(d.type==='widget:scrollTo'&&d.id){"
+    "var el=document.getElementById(d.id)||document.getElementsByName(d.id)[0];"
+    "if(el&&el.scrollIntoView)el.scrollIntoView();}});"
     "document.addEventListener('click',function(e){"
     "if(e.defaultPrevented)return;"
     "var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;"

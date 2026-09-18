@@ -14,23 +14,22 @@ import {
 import { toast } from '@/components/ui/use-toast';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
+import { fileExtension } from '../utils/filePaths';
 import { exportServedPdf } from './viewers/html/useHtmlActions';
 
 const PDF_SCALE_CHOICES = [0.8, 1, 1.25];
 
 // --- File type detection helpers ---
 
-export function getFileExtension(fileName: string): string {
-  const dot = fileName.lastIndexOf('.');
-  return dot >= 0 ? fileName.slice(dot + 1).toLowerCase() : '';
-}
+/** The one extension reader; re-exported so this module's callers keep one import. */
+export { fileExtension as getFileExtension };
 
 export function isMarkdownFile(filePath: string, mime: string | null): boolean {
-  return getFileExtension(filePath.split('/').pop() || '') === 'md' || (mime?.includes('markdown') ?? false);
+  return fileExtension(filePath) === 'md' || (mime?.includes('markdown') ?? false);
 }
 
 export function isHtmlFile(filePath: string): boolean {
-  return ['html', 'htm'].includes(getFileExtension(filePath.split('/').pop() || ''));
+  return ['html', 'htm'].includes(fileExtension(filePath));
 }
 
 export function isTextMime(mime: string | null): boolean {
@@ -53,6 +52,13 @@ interface FileHeaderActionsProps {
   onStartEdit: () => void;
   onOpenExportModal: () => void;
   triggerDownloadFn: (workspaceId: string, filePath: string) => Promise<void>;
+  /** Whether this viewer may save the bytes. A copy-link share grants
+   *  `allow_files` without `allow_download`, and every item in the menu below
+   *  writes a file to disk, so the whole menu goes rather than leaving a
+   *  trigger over an empty list. Copy-to-clipboard goes with it: the menu is
+   *  labelled and iconed for downloading, and the viewer can still select the
+   *  text it is reading. */
+  canDownload?: boolean;
   readFileFullFn: (workspaceId: string, filePath: string) => Promise<{ content: string }>;
   /** Byte-faithful served URL for the selected HTML file (e.g. the public
    *  share serve URL). Defaults to the wsfiles route when omitted. */
@@ -82,6 +88,7 @@ function FileHeaderActions({
   onStartEdit,
   onOpenExportModal,
   triggerDownloadFn,
+  canDownload = true,
   readFileFullFn,
   htmlServedUrl,
   editorRef,
@@ -192,6 +199,17 @@ function FileHeaderActions({
 
   // --- View mode ---
 
+  // One handler for every save in this menu. Four sites carried this same body
+  // before, which is four places a new one could copy without the guard above.
+  const download = () => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => {
+    console.error('[FileHeaderActions] Download failed:', err);
+    // A save is the whole interaction: nothing opens, nothing navigates, and the
+    // browser shows no file. Without this the menu item is indistinguishable
+    // from a dead one. A toast rather than an inline error, because the document
+    // the reader is looking at is still fine and should stay on screen.
+    toast({ description: t('filePanel.downloadFailed'), variant: 'destructive' });
+  });
+
   const isMd = isMarkdownFile(selectedFile, fileMime);
   const isHtml = isHtmlFile(selectedFile);
   const isText = isTextMime(fileMime);
@@ -205,7 +223,7 @@ function FileHeaderActions({
             <FileText className="h-3.5 w-3.5" />
             {t('filePanel.downloadAsPdf')}
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FileHeaderActions] Download failed:', err))}>
+          <DropdownMenuItem onSelect={download}>
             <Download className="h-3.5 w-3.5" />
             {t('filePanel.downloadAsMarkdown')}
           </DropdownMenuItem>
@@ -220,7 +238,7 @@ function FileHeaderActions({
       // stays open while the user composes the export.
       return (
         <>
-          <DropdownMenuItem onSelect={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FileHeaderActions] Download failed:', err))}>
+          <DropdownMenuItem onSelect={download}>
             <Download className="h-3.5 w-3.5" />
             {t('filePanel.download')}
           </DropdownMenuItem>
@@ -276,7 +294,7 @@ function FileHeaderActions({
       // Non-markdown text file: Download + Copy to clipboard
       return (
         <>
-          <DropdownMenuItem onSelect={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FileHeaderActions] Download failed:', err))}>
+          <DropdownMenuItem onSelect={download}>
             <Download className="h-3.5 w-3.5" />
             {t('filePanel.download')}
           </DropdownMenuItem>
@@ -296,7 +314,7 @@ function FileHeaderActions({
 
     // Binary file: Download only
     return (
-      <DropdownMenuItem onSelect={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FileHeaderActions] Download failed:', err))}>
+      <DropdownMenuItem onSelect={download}>
         <Download className="h-3.5 w-3.5" />
         {t('filePanel.download')}
       </DropdownMenuItem>
@@ -305,19 +323,21 @@ function FileHeaderActions({
 
   return (
     <>
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
-          <button
-            className="file-panel-icon-btn"
-            aria-label={t('filePanel.downloadOptions') ?? 'Download options'}
-          >
-            <Download className="h-4 w-4" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" sideOffset={4}>
-          {renderDropdownItems()}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {canDownload && (
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="file-panel-icon-btn"
+              aria-label={t('filePanel.downloadOptions') ?? 'Download options'}
+            >
+              <Download className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" sideOffset={4}>
+            {renderDropdownItems()}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
 
       {canEdit && (
         <button

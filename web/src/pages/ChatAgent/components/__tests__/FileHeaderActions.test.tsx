@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 
+import { toast } from '@/components/ui/use-toast';
 import FileHeaderActions, {
   getFileExtension,
   isMarkdownFile,
@@ -191,6 +192,29 @@ describe('FileHeaderActions', () => {
     expect(triggerDownloadFn).toHaveBeenCalledWith('ws-123', 'report.md');
   });
 
+  // A save that fails shows nothing by itself: no file arrives, nothing opens
+  // and nothing navigates, so silence here reads as a dead menu item.
+  it('reports a failed download instead of only logging it', async () => {
+    const triggerDownloadFn = vi.fn().mockRejectedValue(new Error('sandbox stopped'));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(toast).mockClear();
+    render(
+      <FileHeaderActions
+        {...defaultProps}
+        triggerDownloadFn={triggerDownloadFn}
+      />,
+    );
+    fireEvent.click(screen.getByText('filePanel.downloadAsMarkdown'));
+
+    await waitFor(() => {
+      expect(toast).toHaveBeenCalledWith({
+        description: 'filePanel.downloadFailed',
+        variant: 'destructive',
+      });
+    });
+    logged.mockRestore();
+  });
+
   it('renders edit button when canEdit is true', () => {
     render(<FileHeaderActions {...defaultProps} canEdit={true} />);
     expect(
@@ -306,6 +330,38 @@ describe('FileHeaderActions', () => {
     expect(
       screen.queryByText('filePanel.copyToClipboard'),
     ).not.toBeInTheDocument();
+  });
+
+  // A copy-link share grants allow_files without allow_download, and the
+  // download endpoint refuses what allow_files alone opened. Every item behind
+  // this trigger saves a file, so the trigger goes with them rather than
+  // standing over an empty menu.
+  it.each([
+    ['markdown', 'report.md', 'text/markdown'],
+    ['html', 'report.html', 'text/html'],
+    ['text', 'data.txt', 'text/plain'],
+    ['binary', 'chart.png', 'image/png'],
+  ])('hides the whole download menu for a %s file when the share forbids saving', (_kind, file, mime) => {
+    render(
+      <FileHeaderActions
+        {...defaultProps}
+        selectedFile={file}
+        fileMime={mime}
+        canDownload={false}
+      />,
+    );
+    expect(screen.queryByTestId('dropdown-menu')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('filePanel.downloadOptions')).not.toBeInTheDocument();
+    expect(screen.queryByText('filePanel.download')).not.toBeInTheDocument();
+    expect(screen.queryByText('filePanel.downloadAsPdf')).not.toBeInTheDocument();
+    expect(screen.queryByText('filePanel.saveAsPdf')).not.toBeInTheDocument();
+    // The edit affordance is a separate permission and is not swept up.
+    expect(screen.getByTitle('filePanel.editFile')).toBeInTheDocument();
+  });
+
+  it('keeps the download menu when the prop is omitted', () => {
+    render(<FileHeaderActions {...defaultProps} />);
+    expect(screen.getByTestId('dropdown-menu')).toBeInTheDocument();
   });
 
   it('does not render download dropdown when isEditing is true', () => {

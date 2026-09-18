@@ -93,6 +93,87 @@ describe('HtmlViewer', () => {
     expect(highlighter).toHaveTextContent('<h1>Report</h1>');
   });
 
+  // A reference into a report asks for a place in the rendered document, and
+  // the Source tab cannot show one. The tab outlives both the file and the
+  // anchor, so without this the click left the reader on the same markup with
+  // nothing to say it had landed.
+  describe('an anchored open', () => {
+    const rerenderWith = (
+      rerender: (ui: ReactElement) => void,
+      props: { anchor?: string | null; anchorSeq?: number | null; filePath?: string },
+    ) => rerender(
+      <ThemeProvider>
+        <ThemeToggle />
+        <HtmlViewer {...defaultProps} {...props} />
+      </ThemeProvider>,
+    );
+
+    it('brings Preview back when a reference arrives while Source is open', () => {
+      const { rerender } = renderViewer(<HtmlViewer {...defaultProps} />);
+      fireEvent.click(screen.getByText('filePanel.htmlSource'));
+      expect(getPreviewIframe()).toBeFalsy();
+
+      rerenderWith(rerender, { anchor: 'risks', anchorSeq: 1 });
+      const iframe = getPreviewIframe();
+      expect(iframe).toBeTruthy();
+      expect(iframe.getAttribute('src')).toContain('#risks');
+    });
+
+    it('counts the same section asked for twice as two requests', () => {
+      const { rerender } = renderViewer(
+        <HtmlViewer {...defaultProps} anchor="risks" anchorSeq={1} />,
+      );
+      fireEvent.click(screen.getByText('filePanel.htmlSource'));
+      expect(getPreviewIframe()).toBeFalsy();
+
+      rerenderWith(rerender, { anchor: 'risks', anchorSeq: 2 });
+      expect(getPreviewIframe()).toBeTruthy();
+    });
+
+    it('leaves Source alone while the same request is still in effect', () => {
+      // The control: the switch follows a request, not the mere presence of an
+      // anchor, so a deliberate move to Source is not undone on the next render.
+      const { rerender } = renderViewer(
+        <HtmlViewer {...defaultProps} anchor="risks" anchorSeq={1} />,
+      );
+      fireEvent.click(screen.getByText('filePanel.htmlSource'));
+      rerenderWith(rerender, { anchor: 'risks', anchorSeq: 1 });
+      expect(getPreviewIframe()).toBeFalsy();
+      expect(screen.getByTestId('syntax-highlighter')).toBeInTheDocument();
+    });
+
+    it('asks the document to scroll when the same section is referenced again', () => {
+      const { rerender } = renderViewer(
+        <HtmlViewer {...defaultProps} anchor="risks" anchorSeq={1} />,
+      );
+      const iframe = getPreviewIframe();
+      const postMessage = vi.fn();
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: { postMessage },
+        configurable: true,
+      });
+
+      rerenderWith(rerender, { anchor: 'risks', anchorSeq: 2 });
+
+      // The URL is the one already loaded, so the browser navigates nowhere and
+      // the fragment cannot land this open. Without the request the second
+      // click moves nothing on screen.
+      expect(iframe.getAttribute('src')).toBe(
+        '/api/v1/wsfiles/ws-1/results/report.html?inject=theme#risks',
+      );
+      expect(postMessage).toHaveBeenCalledWith({ type: 'widget:scrollTo', id: 'risks' }, '*');
+    });
+
+    it('leaves Source alone when another file opens with no reference', () => {
+      const { rerender } = renderViewer(
+        <HtmlViewer {...defaultProps} anchor="risks" anchorSeq={1} />,
+      );
+      fireEvent.click(screen.getByText('filePanel.htmlSource'));
+      rerenderWith(rerender, { anchor: null, anchorSeq: null, filePath: 'results/other.html' });
+      expect(getPreviewIframe()).toBeFalsy();
+    });
+  });
+
   it('re-themes the Source highlighter when the app theme toggles', () => {
     renderViewer(<HtmlViewer {...defaultProps} />);
     fireEvent.click(screen.getByText('set-dark'));

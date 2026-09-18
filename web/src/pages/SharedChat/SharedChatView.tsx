@@ -12,6 +12,8 @@ import {
 import FilePanel from '../ChatAgent/components/FilePanel';
 import { WorkspaceProvider } from '../ChatAgent/contexts/WorkspaceContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useTranslation } from 'react-i18next';
+import { toast } from '@/components/ui/use-toast';
 import logoLight from '../../assets/img/logo.svg';
 import logoDark from '../../assets/img/logo-dark.svg';
 import {
@@ -30,6 +32,7 @@ import {
   replaySharedThread,
   getSharedFiles,
   readSharedFile,
+  resolveSharedFile,
   downloadSharedFileAs,
   fetchSharedServeObjectUrl,
   fetchSharedServeArrayBuffer,
@@ -38,6 +41,10 @@ import type { SharedThreadMetadata, SSEEvent } from './api';
 import type { TextSegment } from '@/types/chat';
 import { buildSharedServeUrl } from '../ChatAgent/components/viewers/html/wsfilesUrl';
 import { isTaskAgentId } from '../ChatAgent/utils/agentId';
+import type { FileLocation } from '../ChatAgent/utils/fileLocation';
+import { computeAgentArtifactRouting } from '../ChatAgent/utils/agentPaths';
+import { collectRecentWritePaths, downloadTarget, type TurnMessage } from '../ChatAgent/utils/fileRefResolver';
+import { useStableHandler } from '@/hooks/useStableHandler';
 
 // Message record type compatible with historyEventHandlers
 type MessageRecord = Record<string, unknown>;
@@ -57,6 +64,7 @@ function updateMessage(messages: MessageRecord[], messageId: string, updater: (m
  */
 export default function SharedChatView() {
   const { shareToken } = useParams<{ shareToken: string }>();
+  const { t } = useTranslation();
   const { theme } = useTheme();
   const logo = theme === 'dark' ? logoDark : logoLight;
 
@@ -70,6 +78,9 @@ export default function SharedChatView() {
   const [files, setFiles] = useState<string[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filePanelTargetFile, setFilePanelTargetFile] = useState<string | null>(null);
+  const [filePanelTargetLocation, setFilePanelTargetLocation] = useState<FileLocation | null>(null);
+  const [filePanelTargetDir, setFilePanelTargetDir] = useState<string | null>(null);
+  const [filePanelTargetDirSeq, setFilePanelTargetDirSeq] = useState(0);
   const [rightPanelWidth, setRightPanelWidth] = useState(750);
   const isDraggingRef = useRef(false);
   // Armed for the duration of a divider drag; unmount mid-drag would otherwise
@@ -345,7 +356,7 @@ export default function SharedChatView() {
   // Permissions
   const permissions = (metadata?.permissions || {}) as Record<string, unknown>;
   const canBrowseFiles = permissions.allow_files === true;
-  const _canDownload = permissions.allow_download === true;
+  const canDownload = permissions.allow_download === true;
 
   // File panel handlers
   const handleToggleFilePanel = useCallback(async () => {
@@ -377,6 +388,8 @@ export default function SharedChatView() {
     triggerDownload: (path: string) => downloadSharedFileAs(shareToken!, path, 'download'),
     buildServedUrl: (path: string, opts?: { injectTheme?: boolean }) =>
       buildSharedServeUrl(shareToken!, path, opts),
+    resolveFile: (candidates: string[], recentWrites: string[]) =>
+      resolveSharedFile(shareToken!, candidates, recentWrites),
   }), [shareToken]);
 
   // Inline markdown images render via the serve endpoint (allow_files) so they
@@ -387,10 +400,17 @@ export default function SharedChatView() {
   );
 
   // Open file from chat (tool call artifacts, file mention cards)
-  const handleOpenFile = useCallback(async (filePath: string) => {
+  const handleOpenFile = useCallback(async (filePath: string, _workspaceId?: string, location?: FileLocation) => {
     if (!canBrowseFiles) return;
     setShowFilePanel(true);
-    setFilePanelTargetFile(filePath);
+    const dir = computeAgentArtifactRouting(filePath).targetDirectory;
+    // `''` is the workspace root, not the absence of a folder, and the panel
+    // reads a folder request off the counter rather than off a changed string,
+    // so the same folder clicked twice arrives twice here too.
+    setFilePanelTargetDir(dir);
+    setFilePanelTargetDirSeq((n) => n + 1);
+    setFilePanelTargetFile(dir == null ? filePath : null);
+    setFilePanelTargetLocation(location ?? null);
     // Ensure files are loaded
     if (files.length === 0) {
       setFilesLoading(true);
@@ -402,6 +422,11 @@ export default function SharedChatView() {
     }
   }, [canBrowseFiles, files.length, shareToken]);
 
+  // This thread's writes break ties between namesakes, the same tiebreak the
+  // owner view passes. Identity-stable, so the actions memo below does not
+  // rebuild on every replayed message.
+  const getRecentWritePaths = useStableHandler(() => collectRecentWritePaths(messages as TurnMessage[]));
+
   // Read-only adapter for the transcript's action surface. The shared view has
   // no turn to edit/regenerate/rate and no interrupt to approve. Subagent-task
   // opening isn't declared here — MessageContentSegments strips it on readOnly
@@ -409,7 +434,38 @@ export default function SharedChatView() {
   const readOnlyActions = useMemo<MessageActions>(() => ({
     ...READ_ONLY_MESSAGE_ACTIONS,
     onOpenFile: handleOpenFile,
-  }), [handleOpenFile]);
+    // A copy-link share grants allow_files without allow_download, so the
+    // deliverable card offers Download only where the share actually permits
+    // saving the bytes.
+    onDownloadFile: canDownload
+      ? async (path: string, fileWorkspaceId?: string) => {
+          // A card relayed from the worker names the workspace holding it, and
+          // the share token authorizes this thread's workspace alone. Resolving
+          // it here would look the name up in the wrong place and save whatever
+          // namesake it found, so the click goes where an unplaceable one goes.
+          if (fileWorkspaceId) return void handleOpenFile(path, fileWorkspaceId);
+          try {
+            // The same lookup opening the card takes, so one card cannot open
+            // a report and then fail to save it.
+            const target = await downloadTarget(
+              path,
+              (candidates, recentWrites) => resolveSharedFile(shareToken!, candidates, recentWrites),
+              getRecentWritePaths(),
+            );
+            // Namesakes the lookup could not pick between leave nothing to
+            // save, so the click lands on the panel that asks, exactly as Open
+            // does with the same answer.
+            if (!target.placed) return void handleOpenFile(path, fileWorkspaceId);
+            await downloadSharedFileAs(shareToken!, target.path, 'download');
+          } catch (err: unknown) {
+            console.error('[SharedChatView] Download failed:', err);
+            // A reader on a shared link has no other way to learn the save did
+            // not happen: there is no panel error to fall back on here.
+            toast({ description: t('filePanel.downloadFailed'), variant: 'destructive' });
+          }
+        }
+      : undefined,
+  }), [handleOpenFile, canDownload, shareToken, getRecentWritePaths, t]);
 
   // Deep link: `?file=<path>` opens that report directly once metadata + file
   // permission are known. One-shot — the share-link target from §1.3b.
@@ -610,13 +666,20 @@ export default function SharedChatView() {
           <div className="flex-shrink-0" style={{ width: rightPanelWidth }}>
             <FilePanel
               readOnly
+              canDownload={canDownload}
               workspaceId=""
               apiAdapter={fileApiAdapter}
               onClose={() => setShowFilePanel(false)}
               files={files}
               filesLoading={filesLoading}
               targetFile={filePanelTargetFile}
+              targetLocation={filePanelTargetLocation}
               onTargetFileHandled={() => setFilePanelTargetFile(null)}
+              targetDirectory={filePanelTargetDir}
+              targetDirSeq={filePanelTargetDirSeq}
+              onTargetDirHandled={() => setFilePanelTargetDir(null)}
+              onOpenFile={handleOpenFile}
+              getRecentWritePaths={getRecentWritePaths}
             />
           </div>
         </>

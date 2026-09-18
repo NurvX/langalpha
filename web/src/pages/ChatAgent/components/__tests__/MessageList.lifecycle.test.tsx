@@ -134,7 +134,6 @@ const baseProps = {
   todoListProcesses: {},
   subagentTasks: {},
   hasError: false,
-  isAssistant: true,
 } satisfies Partial<SegmentsProps>;
 
 const SUMMARY_BUTTON_RE = /toolArtifact/i;

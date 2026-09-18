@@ -96,7 +96,6 @@ const baseProps = {
   todoListProcesses: {},
   subagentTasks: {},
   hasError: false,
-  isAssistant: true,
 } satisfies Partial<SegmentsProps>;
 
 // `cumulative` is the full annotation set returned by that draw, each draw is a

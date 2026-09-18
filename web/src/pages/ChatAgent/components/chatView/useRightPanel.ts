@@ -3,9 +3,12 @@ import type { Dispatch, SetStateAction } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getPreviewUrl } from '../../utils/api';
 import { computeAgentArtifactRouting } from '../../utils/agentPaths';
+import { collectRecentWritePaths, type TurnMessage } from '../../utils/fileRefResolver';
+import { useStableHandler } from '@/hooks/useStableHandler';
 import { isValidUuid } from '../../utils/uuid';
 import { clampPanelWidth as clampPanelWidthUtil } from '@/lib/panelUtils';
 import type { PanelTarget } from '../RightPanel';
+import type { FileLocation } from '../../utils/fileLocation';
 import type { PreviewData } from '../../hooks/utils/types';
 import type { ProvenanceRecord } from '@/types/chat';
 import type { PlanData, ToolCallProcessRecord } from './types';
@@ -53,6 +56,9 @@ export function useRightPanel({
   // panel close by the effect below; file/memory/memo self-clear once the child
   // panel consumes the pre-select (the handled callbacks).
   const [panelTarget, setPanelTarget] = useState<PanelTarget | null>(null);
+  // Counts folder requests, so a second click on the folder already filtering
+  // the tree is still a request. See `PanelTarget`.
+  const artifactSeqRef = useRef(0);
   // Stable handlers — these land in useEffect deps in MemoryPanel/MemoPanel/
   // FilePanel. Inline arrows would create a new identity on every ChatView
   // render, re-triggering those effects on every streaming chunk (the
@@ -233,7 +239,7 @@ export function useRightPanel({
    * its domain. The pure decision is computed by computeAgentArtifactRouting;
    * we apply the result atomically (clear everything, then set).
    */
-  const handleOpenAgentArtifactFromChat = useCallback((rawPath: string, targetWorkspaceId?: string) => {
+  const handleOpenAgentArtifactFromChat = useCallback((rawPath: string, targetWorkspaceId?: string, location?: FileLocation) => {
     const r = computeAgentArtifactRouting(rawPath, targetWorkspaceId);
     if (r.setWorkspaceId && !isValidUuid(r.setWorkspaceId)) {
       console.warn('[ChatView] ignoring artifact ref with invalid workspace id', r.setWorkspaceId);
@@ -248,8 +254,14 @@ export function useRightPanel({
       target = { kind: 'memory', key: r.targetMemoryKey, tier: r.targetMemoryTier };
     } else if (r.targetMemoKey != null) {
       target = { kind: 'memo', key: r.targetMemoKey };
+    } else if (r.targetDirectory != null) {
+      // `''` is the workspace root, which the router returns for `/home/workspace/`
+      // and `./`. Folding it to null said "no directory was asked for", and with a
+      // file open neither panel effect ran, so the link read as dead. The counter
+      // is what makes the same folder asked for twice arrive twice.
+      target = { kind: 'file', dir: r.targetDirectory, seq: ++artifactSeqRef.current };
     } else {
-      target = { kind: 'file', path: r.targetFile };
+      target = { kind: 'file', path: r.targetFile, location: location ?? null };
     }
     setPanelTarget(target);
     if (r.clearWorkspaceId) {
@@ -320,6 +332,11 @@ export function useRightPanel({
     return merged;
   }, [sourcesMessageId, messages]);
 
+  // Read at click time rather than derived per render: the file panel only
+  // needs this thread's Write/Edit paths when it resolves a reference, and a
+  // memo over `messages` would rebuild on every streamed chunk.
+  const getRecentWritePaths = useStableHandler(() => collectRecentWritePaths(messages as TurnMessage[]));
+
   // Drop a sticky sources/status target whenever the right panel is closed or
   // switches to a non-file view (detail/preview), so a later file/memory click
   // doesn't reopen that tab. These two are the only kinds that persist while
@@ -351,16 +368,6 @@ export function useRightPanel({
       { replace: true, state: location.state },
     );
   }, [isActive, workspaceId, location.search, location.pathname, location.state, navigate, handleOpenFileFromChat]);
-
-  // Open file panel filtered to a specific directory. The single 'file' target
-  // (with `dir`) replaces any pending memory/memo/status pre-select, so nothing
-  // can snap-back hijack the dir click.
-  const handleOpenDirFromChat = useCallback((dirPath: string) => {
-    setRightPanelWidth(clampPanelWidth(850));
-    setRightPanelType('file');
-    setPanelTarget({ kind: 'file', dir: dirPath });
-    pushPanelHistory();
-  }, [clampPanelWidth, pushPanelHistory]);
 
   // Determine detail panel width based on content type
   const getDetailPanelWidth = useCallback((toolCallProcess: ToolCallProcessRecord | null) => {
@@ -547,7 +554,6 @@ export function useRightPanel({
     handleOpenFileFromChat,
     handleOpenSourcesFromChat,
     handleOpenStatusFromChat,
-    handleOpenDirFromChat,
     handleToolCallDetailClick,
     handlePlanDetailClick,
     handleCloseDetailPanel,
@@ -559,5 +565,6 @@ export function useRightPanel({
     detailPlanData,
     sourcesRecords,
     allSourcesRecords,
+    getRecentWritePaths,
   };
 }

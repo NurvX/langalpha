@@ -47,6 +47,7 @@ import {
 } from '../utils/api';
 import Markdown from './Markdown';
 import { MEMO_USER_DIR } from '../utils/agentPaths';
+import type { FileLocation, OpenFileHandler } from '../utils/fileLocation';
 import './FilePanel.css';
 
 // --- Constants -------------------------------------------------------------
@@ -326,7 +327,7 @@ interface MemoPanelProps {
   /** Routes a clicked link inside the rendered memo body through the
    * parent's path-aware router. Bare sibling slugs are resolved against
    * the memo dir before calling. */
-  onOpenFile?: (path: string, workspaceId?: string) => void;
+  onOpenFile?: OpenFileHandler;
 }
 
 export default function MemoPanel({ targetKey, onTargetHandled, onOpenFile }: MemoPanelProps = {}) {
@@ -341,7 +342,7 @@ export default function MemoPanel({ targetKey, onTargetHandled, onOpenFile }: Me
   // href containing a `/` (e.g. `reports/q1.pdf`) is a sandbox file
   // referenced from the memo body and must pass through to file routing.
   const handleBodyLinkOpen = useCallback(
-    (href: string, wsId?: string) => {
+    (href: string, wsId?: string, location?: FileLocation) => {
       if (!onOpenFile || !href) return;
       const isAlreadyQualified =
         href.startsWith('.agents/') ||
@@ -349,7 +350,7 @@ export default function MemoPanel({ targetKey, onTargetHandled, onOpenFile }: Me
         href.startsWith('/') ||
         /^[a-z][a-z0-9+.-]*:/i.test(href);
       if (isAlreadyQualified) {
-        onOpenFile(href, wsId);
+        onOpenFile(href, wsId, location);
         return;
       }
       const clean = href.replace(/^\.\//, '');
@@ -357,10 +358,10 @@ export default function MemoPanel({ targetKey, onTargetHandled, onOpenFile }: Me
       // (or a 404 in the file panel) handles it instead of fabricating a
       // bogus `.agents/user/memo/reports/q1.pdf` path.
       if (clean.includes('/')) {
-        onOpenFile(clean, wsId);
+        onOpenFile(clean, wsId, location);
         return;
       }
-      onOpenFile(`${MEMO_USER_DIR}/${clean}`, wsId);
+      onOpenFile(`${MEMO_USER_DIR}/${clean}`, wsId, location);
     },
     [onOpenFile],
   );

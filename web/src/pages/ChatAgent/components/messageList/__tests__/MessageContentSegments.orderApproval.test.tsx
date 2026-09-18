@@ -67,7 +67,6 @@ function props(
     subagentTasks: {},
     toolApprovals: { 'int-1': approval },
     isStreaming,
-    isAssistant: true,
   };
 }
 

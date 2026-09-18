@@ -4,6 +4,7 @@
  */
 
 import { buildSharedServeUrl } from '../ChatAgent/components/viewers/html/wsfilesUrl';
+import type { FileRefResolution } from '../ChatAgent/components/filePanel/types';
 
 const baseURL: string = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -111,6 +112,20 @@ export async function replaySharedThread(
 }
 
 /**
+ * A failure the file panel can classify.
+ *
+ * `categorizeFileError` reads the status off `response.status`, which is what
+ * axios attaches: the owner path reaches the panel through the shared axios
+ * instance and this one does not, so a bare Error classified every shared
+ * failure as `unknown`. That gave a permanent 403 a Retry button, and made the
+ * panel read a real 404 as a successful landing, so the reference never fell
+ * through to the resolve the owner path takes.
+ */
+function sharedFileError(status: number, message: string): Error {
+  return Object.assign(new Error(message), { response: { status } });
+}
+
+/**
  * List files in a shared thread's workspace.
  */
 export async function getSharedFiles(
@@ -120,10 +135,30 @@ export async function getSharedFiles(
   const params = new URLSearchParams({ path });
   const res = await fetch(`${baseURL}/api/v1/public/shared/${shareToken}/files?${params}`);
   if (!res.ok) {
-    if (res.status === 403) throw new Error('File access not permitted');
-    throw new Error(`Failed to list shared files (${res.status})`);
+    if (res.status === 403) throw sharedFileError(res.status, 'File access not permitted');
+    throw sharedFileError(res.status, `Failed to list shared files (${res.status})`);
   }
   return res.json() as Promise<SharedFileListResponse>;
+}
+
+/**
+ * Resolve a file reference against the shared thread's file listing.
+ */
+export async function resolveSharedFile(
+  shareToken: string,
+  candidates: string[],
+  recentWrites: string[] = [],
+): Promise<FileRefResolution> {
+  const res = await fetch(`${baseURL}/api/v1/public/shared/${shareToken}/files/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ candidates, recent_writes: recentWrites }),
+  });
+  if (!res.ok) {
+    if (res.status === 403) throw sharedFileError(res.status, 'File access not permitted');
+    throw sharedFileError(res.status, `Failed to resolve shared file (${res.status})`);
+  }
+  return res.json() as Promise<FileRefResolution>;
 }
 
 /**
@@ -136,8 +171,8 @@ export async function readSharedFile(
   const params = new URLSearchParams({ path });
   const res = await fetch(`${baseURL}/api/v1/public/shared/${shareToken}/files/read?${params}`);
   if (!res.ok) {
-    if (res.status === 403) throw new Error('File access not permitted');
-    throw new Error(`Failed to read shared file (${res.status})`);
+    if (res.status === 403) throw sharedFileError(res.status, 'File access not permitted');
+    throw sharedFileError(res.status, `Failed to read shared file (${res.status})`);
   }
   return res.json() as Promise<SharedFileReadResponse>;
 }
@@ -152,8 +187,8 @@ export async function downloadSharedFile(
   const params = new URLSearchParams({ path });
   const res = await fetch(`${baseURL}/api/v1/public/shared/${shareToken}/files/download?${params}`);
   if (!res.ok) {
-    if (res.status === 403) throw new Error('File download not permitted');
-    throw new Error(`Failed to download shared file (${res.status})`);
+    if (res.status === 403) throw sharedFileError(res.status, 'File download not permitted');
+    throw sharedFileError(res.status, `Failed to download shared file (${res.status})`);
   }
   const blob = await res.blob();
   const blobUrl = URL.createObjectURL(blob);
@@ -185,8 +220,8 @@ export async function downloadSharedFileAs(
   const params = new URLSearchParams({ path });
   const res = await fetch(`${baseURL}/api/v1/public/shared/${shareToken}/files/download?${params}`);
   if (!res.ok) {
-    if (res.status === 403) throw new Error('File download not permitted');
-    throw new Error(`Failed to download shared file (${res.status})`);
+    if (res.status === 403) throw sharedFileError(res.status, 'File download not permitted');
+    throw sharedFileError(res.status, `Failed to download shared file (${res.status})`);
   }
 
   if (mode === 'blob') {
@@ -221,8 +256,8 @@ export async function downloadSharedFileAs(
 export async function fetchSharedServeObjectUrl(shareToken: string, path: string): Promise<string> {
   const res = await fetch(buildSharedServeUrl(shareToken, path));
   if (!res.ok) {
-    if (res.status === 403) throw new Error('File access not permitted');
-    throw new Error(`Failed to load shared file (${res.status})`);
+    if (res.status === 403) throw sharedFileError(res.status, 'File access not permitted');
+    throw sharedFileError(res.status, `Failed to load shared file (${res.status})`);
   }
   return URL.createObjectURL(await res.blob());
 }
@@ -231,8 +266,8 @@ export async function fetchSharedServeObjectUrl(shareToken: string, path: string
 export async function fetchSharedServeArrayBuffer(shareToken: string, path: string): Promise<ArrayBuffer> {
   const res = await fetch(buildSharedServeUrl(shareToken, path));
   if (!res.ok) {
-    if (res.status === 403) throw new Error('File access not permitted');
-    throw new Error(`Failed to load shared file (${res.status})`);
+    if (res.status === 403) throw sharedFileError(res.status, 'File access not permitted');
+    throw sharedFileError(res.status, `Failed to load shared file (${res.status})`);
   }
   return res.arrayBuffer();
 }

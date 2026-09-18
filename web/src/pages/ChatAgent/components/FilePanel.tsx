@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo, Suspense } from 'react';
-import { ArrowLeft, X, RefreshCw, Upload, ArrowUpDown, Trash2, CheckSquare, HardDrive, Pencil, TextSelect, FolderOpen, Settings, ScrollText } from 'lucide-react';
+import { ArrowLeft, X, RefreshCw, Upload, ArrowUpDown, Trash2, CheckSquare, HardDrive, Pencil, TextSelect, FolderOpen, Settings, ScrollText, Search } from 'lucide-react';
 import {
   memoMimeForName,
   useAddToMemo,
@@ -9,12 +9,17 @@ import {
   MemoDiffModal,
 } from './FilePanelMemo';
 import { Loader } from '@/components/ui/loader';
+import { toast } from '@/components/ui/use-toast';
 import { useWorkspace } from '@/hooks/useWorkspace';
 import { SandboxSettingsContent } from './SandboxSettingsPanel';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import SyntaxHighlighter, { oneDark, oneLight } from './SyntaxHighlighter';
 import { useTranslation } from 'react-i18next';
-import { readWorkspaceFile, readWorkspaceFileFull, writeWorkspaceFile, downloadWorkspaceFile, downloadWorkspaceFileAsArrayBuffer, triggerFileDownload } from '../utils/api';
+import { readWorkspaceFile, readWorkspaceFileFull, writeWorkspaceFile, downloadWorkspaceFile, downloadWorkspaceFileAsArrayBuffer, triggerFileDownload, resolveWorkspaceFile } from '../utils/api';
+import { basename, isSystemPath, linkCandidates, resolveExact } from '../utils/fileRefResolver';
+import { classifyAgentPath, normalizeAgentPath, parseAgentPath } from '../utils/agentPaths';
+import { useStableHandler } from '@/hooks/useStableHandler';
+import { parseFragment, type FileLocation, type OpenFileHandler } from '../utils/fileLocation';
 import { stripLineNumbers } from './toolDisplayConfig';
 import Markdown from './Markdown';
 import ImageLightbox from './ImageLightbox';
@@ -29,11 +34,12 @@ const HtmlViewer = React.lazy(() => import('./viewers/HtmlViewer'));
 const CodeEditor = React.lazy(() => import('./viewers/CodeEditor'));
 const ExportPreviewModal = React.lazy(() => import('./ExportPreviewModal'));
 
-import type { ApiAdapter, ContextPayload } from './filePanel/types';
+import type { ApiAdapter, ContextPayload, FileRefResolution } from './filePanel/types';
 import type { FileError } from './filePanel/fileErrors';
 import { categorizeFileError, FileErrorDisplay } from './filePanel/fileErrors';
-import { EDITABLE_EXTENSIONS, EXT_TO_LANG, getAvailableTypes, getFileExtension, getFileType, SORT_OPTIONS, sortFiles } from './filePanel/fileMeta';
+import { DOWNLOAD_ONLY_EXTENSIONS, EDITABLE_EXTENSIONS, EXT_TO_LANG, getAvailableTypes, getFileExtension, getFileType, SORT_OPTIONS, sortFiles } from './filePanel/fileMeta';
 import { buildFileTree } from './filePanel/fileTree';
+import type { TreeNode } from './filePanel/types';
 import { DirectoryNode } from './filePanel/DirectoryNode';
 import { DocumentErrorFallback, DocumentLoadingFallback } from './filePanel/fallbacks';
 import { useFileUpload } from './filePanel/useFileUpload';
@@ -41,6 +47,8 @@ import { useFileEdit } from './filePanel/useFileEdit';
 import { useSelectionContext } from './filePanel/useSelectionContext';
 import { useFileSelection } from './filePanel/useFileSelection';
 import { useFileBackup } from './filePanel/useFileBackup';
+import { useFileFocus, type FocusViewer } from './filePanel/useFileFocus';
+import { FocusChip } from './filePanel/FocusChip';
 
 // --- FilePanel ---
 
@@ -48,14 +56,28 @@ interface FilePanelProps {
   workspaceId: string;
   onClose: () => void;
   targetFile?: string | null;
+  /** Where in `targetFile` the reference pointed (a line, page or heading). */
+  targetLocation?: FileLocation | null;
   onTargetFileHandled?: () => void;
   targetDirectory?: string | null;
+  /** Which folder request `targetDirectory` carries. It stays on screen as the
+   *  tree's filter after the click that set it, so the string alone cannot say
+   *  a new request arrived; the same folder asked for twice bumps this. */
+  targetDirSeq?: number | null;
   onTargetDirHandled?: () => void;
+  /** Opens a reference to another workspace (a `__wsref__` link inside a viewed file). */
+  onOpenFile?: OpenFileHandler | null;
+  /** This thread's Write/Edit paths, newest first, for resolving a reference by name. */
+  getRecentWritePaths?: (() => string[]) | null;
   files?: string[];
   filesLoading?: boolean;
   filesError?: string | null;
   onRefreshFiles?: () => void;
   readOnly?: boolean;
+  /** Whether this viewer may save a file's bytes. A copy-link share grants
+   *  `allow_files` without `allow_download`, and the download endpoint refuses
+   *  what `allow_files` alone opened, so an offered save fails after the click. */
+  canDownload?: boolean;
   /** Lock to a single file — back button closes the panel instead of returning to the file tree. */
   singleFileMode?: boolean;
   apiAdapter?: ApiAdapter | null;
@@ -76,15 +98,20 @@ function FilePanel({
   workspaceId,
   onClose,
   targetFile,
+  targetLocation = null,
   onTargetFileHandled,
   targetDirectory,
+  targetDirSeq = null,
   onTargetDirHandled,
+  onOpenFile = null,
+  getRecentWritePaths = null,
   // Shared file list from useWorkspaceFiles hook
   files = [],
   filesLoading = false,
   filesError = null,
   onRefreshFiles,
   readOnly = false,
+  canDownload = true,
   singleFileMode = false,
   apiAdapter = null,
   onAddContext = null,
@@ -115,6 +142,10 @@ function FilePanel({
   const readFileFullFn = apiAdapter?.readFileFull
     ? (_: string, path: string) => apiAdapter.readFileFull!(path)
     : readWorkspaceFileFull;
+  // The server settles a reference against the real workspace (or a share's listing).
+  const resolveFileFn = apiAdapter
+    ? apiAdapter.resolveFile ?? null
+    : (candidates: string[], recentWrites: string[]) => resolveWorkspaceFile(workspaceId, candidates, recentWrites);
 
   // Workspace settings inline view
   const [showSettings, setShowSettings] = useState(false);
@@ -130,6 +161,21 @@ function FilePanel({
   const [imageLightboxOpen, setImageLightboxOpen] = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState<FileError | null>(null);
+  const [fileTruncated, setFileTruncated] = useState(false);
+  const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
+
+  // Tree search, and the landing a reference that did not resolve opens on:
+  // the query is its file name, `missedRef` names what was asked for, and
+  // `extraMatches` carries hits the loaded list hides (system directories).
+  const [searchQuery, setSearchQuery] = useState('');
+  const [missedRef, setMissedRef] = useState<string | null>(null);
+  const [extraMatches, setExtraMatches] = useState<string[]>([]);
+  // Bumped by every reference open, so a slow name search cannot land after
+  // the user has already clicked something else.
+  const openSeqRef = useRef(0);
+  // The reference behind a file the lookup could not place, kept so its Retry
+  // asks the lookup again rather than re-reading the path it fell back to.
+  const unresolvedRef = useRef<{ rawRef: string; fromFile: string | null; location: FileLocation | null } | null>(null);
 
   // Upload + drag-and-drop (filePanel/useFileUpload).
   const {
@@ -181,6 +227,28 @@ function FilePanel({
     handleEditorTextSelect,
     handleAddSelectionContext,
   } = useSelectionContext({ selectedFile, fileContent, onAddContext });
+
+  // Mirrors the viewer branches in the render below.
+  const focusViewer: FocusViewer = (() => {
+    if (!selectedFile || isEditing) return 'other';
+    const ext = getFileExtension(selectedFile);
+    if (fileMime === 'pdf') return 'pdf';
+    if (fileMime === 'excel' || fileMime === 'image' || ext === 'csv') return 'other';
+    if (ext === 'html' || ext === 'htm') return 'html';
+    if (selectedFile.startsWith('/large_tool_results/')) return 'other';
+    if (fileMime?.includes('markdown') || ext === 'md') return 'markdown';
+    return 'code';
+  })();
+  const fileFocus = useFileFocus({
+    selectedFile,
+    viewer: focusViewer,
+    ready: !fileLoading && !fileError,
+    editing: isEditing,
+    content: fileContent,
+    truncated: fileTruncated,
+    pageCount: pdfPageCount,
+    containerRef: contentWrapperRef,
+  });
 
   const handleAddToMemo = useAddToMemo({
     workspaceId,
@@ -243,11 +311,20 @@ function FilePanel({
     setMemoDiffOpen(true);
   }, []);
 
-  const availableTypes = useMemo(() => getAvailableTypes(files), [files]);
+  const listedFiles = useMemo(
+    // Search hits outside the listing belong to the reference search that found them.
+    () => (extraMatches.length && searchQuery ? [...new Set([...files, ...extraMatches])] : files),
+    [files, extraMatches, searchQuery],
+  );
+  const availableTypes = useMemo(() => getAvailableTypes(listedFiles), [listedFiles]);
+  const trimmedQuery = searchQuery.trim().toLowerCase();
 
-  // Apply directory filter, type filter, sort, then group
+  // Apply directory filter, search, type filter, sort, then group
   const filteredSortedFiles = useMemo(() => {
-    let result = files;
+    let result = listedFiles;
+    if (trimmedQuery) {
+      result = result.filter((fp) => fp.toLowerCase().includes(trimmedQuery));
+    }
     if (targetDirectory) {
       const prefix = targetDirectory.endsWith('/') ? targetDirectory : targetDirectory + '/';
       result = result.filter((fp) => fp.startsWith(prefix));
@@ -256,7 +333,7 @@ function FilePanel({
       result = result.filter((fp) => getFileType(fp) === filterType);
     }
     return sortFiles(result, sortBy);
-  }, [files, filterType, sortBy, targetDirectory]);
+  }, [listedFiles, trimmedQuery, filterType, sortBy, targetDirectory]);
 
   // Multi-select + delete (filePanel/useFileSelection).
   const {
@@ -293,6 +370,17 @@ function FilePanel({
     } catch { return new Set(); }
   });
   const fileTree = useMemo(() => buildFileTree(filteredSortedFiles), [filteredSortedFiles]);
+  // A search shows every hit, so it opens every directory on the way to one.
+  const visibleExpandedDirs = useMemo(() => {
+    if (!trimmedQuery) return expandedDirs;
+    const all = new Set<string>();
+    const walk = (node: TreeNode) => {
+      all.add(node.fullPath);
+      node.children.forEach(walk);
+    };
+    fileTree.forEach(walk);
+    return all;
+  }, [trimmedQuery, expandedDirs, fileTree]);
 
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify([...expandedDirs]));
@@ -328,115 +416,344 @@ function FilePanel({
 
   useEffect(() => {
     if (targetFile) {
-      handleFileClick(targetFile);
+      void openFileRef(targetFile, { location: targetLocation });
       onTargetFileHandled?.();
     }
   }, [targetFile]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleFileClick = async (filePath: string) => {
+  // A folder opened from chat supersedes a reference still being searched for.
+  useEffect(() => {
+    // `''` is the workspace root, a folder like any other here, so the test is
+    // for absence rather than emptiness.
+    if (targetDirectory == null) return;
+    // The body below prefers `selectedFile` over `targetDirectory`, so a folder
+    // accepted while a file is open stayed behind it and the click read as dead
+    // until the reader pressed Back. Leaving the file is what puts the folder on
+    // screen. Declining cannot simply return the way the click handlers do: the
+    // prop has already changed, so the target has to go back to its owner.
+    if (hasUnsavedChanges && !window.confirm(t('filePanel.discardUnsaved'))) {
+      onTargetDirHandled?.();
+      return;
+    }
+    openSeqRef.current += 1;
+    dropLanding();
+    leaveOpenFile();
+    // Keyed on the request, not on the folder: `targetDirectory` outlives the
+    // click as the tree's filter, so a reader who opened a file from `data/` and
+    // then clicked `data/` again changed nothing here, and the file stayed on
+    // screen. `targetDirectory` stays in the deps for a caller that sets no
+    // sequence, which is then the one-shot behaviour this had before.
+  }, [targetDirSeq, targetDirectory]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Leave edit mode without saving, so the next file never opens in the last one's editor. */
+  const resetEdit = () => {
+    setIsEditing(false);
+    setEditContent(null);
+    setShowDiff(false);
+    setOriginalContent(null);
+    editorRef.current = null;
+    setCanUndo(false);
+    setCanRedo(false);
+    setSaveError(null);
+  };
+
+  /** Clear the tree filter a missed reference set, so it does not outlive the miss. */
+  const dropLanding = () => {
+    if (!missedRef) return;
+    setSearchQuery('');
+    setExtraMatches([]);
+    setMissedRef(null);
+  };
+
+  /**
+   * Open a file in the viewer. Resolves to the read's error, or null once it
+   * loaded or a later open took over; a read that finishes after a later open
+   * started is dropped, so a slow file never lands under another file's name.
+   */
+  const handleFileClick = async (filePath: string): Promise<FileError | null> => {
+    const seq = ++openSeqRef.current;
+    // Every open lands here, so this is where a reference stops being the one a
+    // retry should re-run. `openFileRef` re-arms it after its own fallback open.
+    unresolvedRef.current = null;
+    const current = () => seq === openSeqRef.current;
     const ext = getFileExtension(filePath);
     setFileError(null);
+    // Measured on the file being replaced: only the text branch writes it, so
+    // leaving it set carries one file's truncation onto the next one's name.
+    setFileTruncated(false);
+    // The settings pane replaces the content wrapper the viewer scrolls, so a
+    // file opened behind it loads into no container and the line or heading it
+    // named is never found. `landOnSearch` already clears it for the same reason.
+    setShowSettings(false);
+    resetEdit();
 
-    // Binary files
-    if (['pdf', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'xlsx', 'xls', 'docx', 'zip'].includes(ext)) {
-      if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) {
-        if (fileMime === 'image' && fileContent) {
-          URL.revokeObjectURL(fileContent);
-        }
-        setSelectedFile(filePath);
-        setFileLoading(true);
-        setFileMime('image');
-        try {
-          const blobUrl = await downloadFileFn(workspaceId, filePath);
-          setFileContent(blobUrl);
-        } catch (err) {
-          console.error('[FilePanel] Failed to download image:', err);
-          setFileError(categorizeFileError(err, wsData?.status));
-          setFileContent(null);
-          setFileMime(null);
-        } finally {
-          setFileLoading(false);
-        }
-        return;
-      }
-      if (ext === 'pdf') {
-        setSelectedFile(filePath);
-        setFileLoading(true);
-        setFileMime('pdf');
-        try {
-          const buf = await downloadFileAsArrayBufferFn(workspaceId, filePath);
-          setFileArrayBuffer(buf);
-        } catch (err) {
-          console.error('[FilePanel] Failed to load PDF:', err);
-          setFileError(categorizeFileError(err, wsData?.status));
-          setFileMime(null);
-        } finally {
-          setFileLoading(false);
-        }
-        return;
-      }
-      if (ext === 'xlsx' || ext === 'xls') {
-        setSelectedFile(filePath);
-        setFileLoading(true);
-        setFileMime('excel');
-        try {
-          const buf = await downloadFileAsArrayBufferFn(workspaceId, filePath);
-          setFileArrayBuffer(buf);
-        } catch (err) {
-          console.error('[FilePanel] Failed to load Excel file:', err);
-          setFileError(categorizeFileError(err, wsData?.status));
-          setFileMime(null);
-        } finally {
-          setFileLoading(false);
-        }
-        return;
-      }
+    if (DOWNLOAD_ONLY_EXTENSIONS.has(ext)) {
+      setSelectedFile(filePath);
+      setFileContent(null);
+      setFileArrayBuffer(null);
+      setFileMime(null);
+      setFileLoading(false);
+      setFileError({ category: 'binary_file' });
+      return null;
+    }
+
+    const load = async (read: () => Promise<void>, label: string, onError?: () => void): Promise<FileError | null> => {
+      setSelectedFile(filePath);
+      setFileLoading(true);
       try {
-        await triggerDownloadFn(workspaceId, filePath);
+        await read();
+        return null;
       } catch (err) {
-        console.error('[FilePanel] Failed to download file:', err);
+        if (!current()) return null;
+        console.error(`[FilePanel] Failed to load ${label}:`, err);
+        const error = categorizeFileError(err, wsData?.status);
+        setFileError(error);
+        onError?.();
+        return error;
+      } finally {
+        if (current()) setFileLoading(false);
       }
-      return;
+    };
+
+    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp'].includes(ext)) {
+      if (fileMime === 'image' && fileContent) {
+        URL.revokeObjectURL(fileContent);
+      }
+      setFileMime('image');
+      return load(async () => {
+        const blobUrl = await downloadFileFn(workspaceId, filePath);
+        if (!current()) return URL.revokeObjectURL(blobUrl);
+        setFileContent(blobUrl);
+      }, 'image', () => { setFileContent(null); setFileMime(null); });
+    }
+
+    if (ext === 'pdf' || ext === 'xlsx' || ext === 'xlsm' || ext === 'xls') {
+      setFileMime(ext === 'pdf' ? 'pdf' : 'excel');
+      if (ext === 'pdf') setPdfPageCount(null);
+      return load(async () => {
+        const buf = await downloadFileAsArrayBufferFn(workspaceId, filePath);
+        if (current()) setFileArrayBuffer(buf);
+      }, ext === 'pdf' ? 'PDF' : 'Excel file', () => setFileMime(null));
     }
 
     // HTML files: read the full source (the viewer renders via the served URL,
     // but the Source tab needs untruncated content — the paginated read caps at 20k lines).
     if (['html', 'htm'].includes(ext)) {
-      setSelectedFile(filePath);
-      setFileLoading(true);
-      try {
+      return load(async () => {
         const data = await readFileFullFn(workspaceId, filePath);
+        if (!current()) return;
         setFileContent(data.content || '');
         setFileMime('text/html');
-      } catch (err) {
-        console.error('[FilePanel] Failed to read HTML file:', err);
-        setFileError(categorizeFileError(err, wsData?.status));
-        setFileContent(null);
-        setFileMime(null);
-      } finally {
-        setFileLoading(false);
-      }
-      return;
+      }, 'HTML file', () => { setFileContent(null); setFileMime(null); });
     }
 
     // Text files - read content
-    setSelectedFile(filePath);
-    setFileLoading(true);
-    try {
+    return load(async () => {
       const data = await readFileFn(workspaceId, filePath);
+      if (!current()) return;
       setFileContent(data.content || '');
       setFileMime(data.mime || 'text/plain');
-    } catch (err) {
-      console.error('[FilePanel] Failed to read file:', err);
-      setFileError(categorizeFileError(err, wsData?.status));
-      setFileContent(null);
-      setFileMime(null);
-    } finally {
-      setFileLoading(false);
-    }
+      setFileTruncated(!!data.truncated);
+    }, 'file', () => { setFileContent(null); setFileMime(null); });
   };
 
-  const selectedExt = selectedFile ? getFileExtension(selectedFile.split('/').pop() || '') : '';
+  /** Close the viewer, so whatever comes next is not rendered behind the last
+   *  file. The revoke is load-bearing: an image body is a blob URL this panel
+   *  minted, and dropping the reference without it leaks the bytes. */
+  const leaveOpenFile = () => {
+    if (fileMime === 'image' && fileContent) URL.revokeObjectURL(fileContent);
+    setSelectedFile(null);
+    setFileContent(null);
+    setFileArrayBuffer(null);
+    setFileMime(null);
+    setFileError(null);
+    setFileLoading(false);
+    resetEdit();
+    setShowSettings(false);
+  };
+
+  /** Leave any open file and show the tree filtered to a reference's name. */
+  const landOnSearch = (ref: string, matches: string[]) => {
+    leaveOpenFile();
+    setFilterType('All');
+    setSearchQuery(basename(ref));
+    setExtraMatches(matches);
+    setMissedRef(ref);
+    if (targetDirectory) onTargetDirHandled?.();
+  };
+
+  /**
+   * Open a file reference that may not name a real path. Certain matches
+   * open at once; otherwise the server's lookup decides between opening the
+   * file it names and landing on the tree filtered to the name.
+   */
+  const openFileRef = async (
+    rawRef: string,
+    { fromFile = null, location = null }: { fromFile?: string | null; location?: FileLocation | null } = {},
+  ) => {
+    const candidates = fromFile ? linkCandidates(rawRef, fromFile) : [normalizeAgentPath(rawRef)];
+    const primary = candidates[0];
+    if (!primary) return;
+    if (hasUnsavedChanges && !window.confirm(t('filePanel.discardUnsaved'))) return;
+    resetEdit();
+    dropLanding();
+    const openAt = (path: string) => {
+      fileFocus.focusAt(path, location);
+      return handleFileClick(path);
+    };
+    const tried = new Set<string>();
+    // Resolves true once the path opened (or failed for a reason a search cannot fix).
+    // A stopped workspace reports a missing path as not backed up.
+    const landed = async (path: string) => {
+      // A download-only file opens with no read, so opening one proves nothing
+      // about the path: a moved .docx would sit behind a download card built on
+      // a name the listing still remembers. Only the lookup settles it.
+      if (resolveFileFn && DOWNLOAD_ONLY_EXTENSIONS.has(getFileExtension(path))) return false;
+      tried.add(path);
+      const category = (await openAt(path))?.category;
+      return category !== 'not_found' && category !== 'not_backed_up';
+    };
+    const writes = getRecentWritePaths?.() ?? [];
+
+    // A known path can still be stale (the agent moved it), so a miss falls through to the lookup.
+    const exact = resolveExact(candidates, files, writes);
+    if (exact && await landed(exact)) return;
+    // Absolute and system paths are not in the default listing, and the agent
+    // names them exactly (tool rows, skill files), so read them first. A
+    // system-looking path can still be a folder inside the work tree.
+    const direct = candidates.find((c) => c.startsWith('/') || isSystemPath(c));
+    if (direct && !tried.has(direct) && await landed(direct)) return;
+    if (!resolveFileFn) {
+      if (!tried.has(primary)) void openAt(primary);
+      return;
+    }
+
+    const seq = ++openSeqRef.current;
+    setSelectedFile(primary);
+    setFileContent(null);
+    setFileArrayBuffer(null);
+    setFileMime(null);
+    setFileError(null);
+    setFileLoading(true);
+    let result: FileRefResolution | null = null;
+    try {
+      result = await resolveFileFn(candidates, writes);
+    } catch (err) {
+      console.error('[FilePanel] File reference lookup failed:', err);
+    }
+    if (seq !== openSeqRef.current) return;
+
+    // With no answer (sandbox starting, request failed), reading the path as
+    // written shows why, with a retry.
+    if (!result || result.status === 'unavailable') {
+      // The seq the fallback open is about to take, claimed before the await so
+      // an open that overtakes it leaves the reference alone.
+      const fallbackSeq = openSeqRef.current + 1;
+      await openAt(primary);
+      // Retrying the path alone asks the same unanswerable question: `report.md`
+      // is not where the file is, the lookup is the only thing that knows
+      // `work/report.md`, and the lookup is the part that was unavailable.
+      // Keeping the reference is what lets a retry once the sandbox is up
+      // resolve, instead of failing again on the guess.
+      if (openSeqRef.current === fallbackSeq) unresolvedRef.current = { rawRef, fromFile, location };
+      return;
+    }
+    if (result.status === 'resolved' && result.path) return void openAt(result.path);
+    // Name the reference as written; the joined reading is only our guess.
+    landOnSearch(candidates[candidates.length - 1], result.matches);
+  };
+
+  /** Try the failed open again, as the same question that was asked the first time. */
+  const retryOpen = () => {
+    const ref = unresolvedRef.current;
+    if (ref) return void openFileRef(ref.rawRef, { fromFile: ref.fromFile, location: ref.location });
+    if (selectedFile) void handleFileClick(selectedFile);
+  };
+
+  // Links inside a viewed file resolve against that file's directory first.
+  // Stable identity: Markdown memoizes its renderers on this handler.
+  const handleViewerLink = useStableHandler((
+    path: string,
+    linkWorkspaceId?: string,
+    location?: FileLocation,
+    rooted?: boolean,
+  ) => {
+    const otherWorkspace = !!linkWorkspaceId && linkWorkspaceId !== workspaceId;
+    const kind = classifyAgentPath(path).kind;
+    const directory = parseAgentPath(path).directory;
+    // A folder inside a viewed file is written relative to it, the same as a
+    // file link, but the router takes the path as given, so the join happens
+    // here: `../data/` read from `docs/index.md` names `data/`, and delegated
+    // unjoined it opened the tree at a prefix the workspace has no entry for.
+    // The join is the one `openFileRef` does below, skipped for exactly the
+    // references that named their own starting point.
+    const target = directory && kind === 'file' && !otherWorkspace
+      ? linkCandidates(path, rooted ? null : selectedFile)[0]
+      : path;
+    // Memory and memo entries live outside the sandbox and open in their own tabs.
+    // A folder goes with them: the router reads the trailing slash and opens the
+    // tree there, while resolving it here can only miss, because the lookup
+    // globs files and a directory never matches one.
+    if (otherWorkspace || kind !== 'file' || directory) {
+      // Resolving here would open a namesake from the wrong place.
+      onOpenFile?.(target, linkWorkspaceId, location);
+      return;
+    }
+    // A rooted reference named where it starts, so the open file's directory is
+    // not a reading it invited: joining would prefer a namesake one level down.
+    void openFileRef(path, { fromFile: rooted ? null : selectedFile, location });
+  });
+
+  // `[Valuation](#valuation)` inside the open file moves within it, no reload.
+  const handleAnchorLink = useStableHandler((fragment: string) => {
+    if (selectedFile) fileFocus.focusAt(selectedFile, parseFragment(fragment));
+  });
+
+  // Every save this panel offers comes from one of the two handlers below, and
+  // both are undefined when the share forbids saving. Reading the permission
+  // once here is what stops the next affordance from shipping without it: the
+  // menu, the binary-file error, four viewer error boundaries and the HTML
+  // fullscreen bar were nine copies of the same call before.
+  const handleDownloadSelected = canDownload
+    ? () => {
+        if (!selectedFile) return;
+        // A save pulls the whole body before the anchor click, and nothing stops
+        // the reader opening another file meanwhile. The token the read path
+        // already uses says whether the panel has moved on, so a late rejection
+        // does not replace the file now on screen with this one's error. Starting
+        // a save is not an open, so the token is read here rather than bumped.
+        const seq = openSeqRef.current;
+        triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => {
+          console.error('[FilePanel] Download failed:', err);
+          if (seq !== openSeqRef.current) return;
+          setFileError(categorizeFileError(err, wsData?.status));
+        });
+      }
+    : undefined;
+
+  // The same save from inside a viewer's error boundary, and the one the HTML
+  // viewer's own toolbar offers. Raising `fileError` here would replace the
+  // thing the reader is looking at with a second error, so the failure is
+  // reported additively: an error fallback keeps the message it is already
+  // showing, and a save started from a healthy report still says it went
+  // nowhere rather than reading as a dead button.
+  const handleDownloadInFallback = canDownload
+    ? () => {
+        if (!selectedFile) return;
+        void triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => {
+          console.error('[FilePanel] Download failed:', err);
+          toast({ description: t('filePanel.downloadFailed'), variant: 'destructive' });
+        });
+      }
+    : undefined;
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setMissedRef(null);
+    setExtraMatches([]);
+  };
+
+  const selectedExt = selectedFile ? getFileExtension(selectedFile) : '';
   const canEdit = !!(selectedFile
     && !readOnly
     && !fileError
@@ -456,6 +773,8 @@ function FilePanel({
     if (hasUnsavedChanges) {
       if (!window.confirm(t('filePanel.discardUnsaved'))) return;
     }
+    // A reference search still pending must not reopen the file just left.
+    openSeqRef.current += 1;
     if (fileMime === 'image' && fileContent) {
       URL.revokeObjectURL(fileContent);
     }
@@ -465,14 +784,7 @@ function FilePanel({
     setFileMime(null);
     setFileError(null);
     setExportModalOpen(false);
-    setIsEditing(false);
-    setEditContent(null);
-    setShowDiff(false);
-    setOriginalContent(null);
-    editorRef.current = null;
-    setCanUndo(false);
-    setCanRedo(false);
-    setSaveError(null);
+    resetEdit();
   };
 
   const fileName = selectedFile?.split('/').pop() || '';
@@ -505,6 +817,9 @@ function FilePanel({
           <span className="text-sm font-semibold truncate" style={{ color: 'var(--color-text-primary)' }}>
             {showSettings ? t('chat.workspaceSettings') : selectedFile ? (<>{fileName}{hasUnsavedChanges && <span style={{ color: 'var(--color-text-tertiary)' }}> *</span>}</>) : targetDirectory ? `${targetDirectory}/` : t('chat.workspaceFiles')}
           </span>
+          {!showSettings && fileFocus.chip && (
+            <FocusChip state={fileFocus.chip} onJump={fileFocus.jump} onDismiss={fileFocus.dismiss} />
+          )}
         </div>
         <div className="flex items-center gap-1">
           {!showSettings && !selectedFile && !selectMode && (
@@ -603,6 +918,7 @@ function FilePanel({
             onStartEdit={handleStartEdit}
             onOpenExportModal={() => setExportModalOpen(true)}
             triggerDownloadFn={triggerDownloadFn}
+            canDownload={canDownload}
             readFileFullFn={readFileFullFn}
             htmlServedUrl={selectedFile ? apiAdapter?.buildServedUrl?.(selectedFile) : undefined}
             editorRef={editorRef}
@@ -674,8 +990,48 @@ function FilePanel({
       )}
 
 
+      {/* Search + the note a missed reference lands with */}
+      {!showSettings && !selectedFile && !selectMode && (listedFiles.length > 0 || missedRef) && (
+        <div className="file-panel-search">
+          {/* The pill answers for the field inside it, twice over: `rings-within`
+              draws the keyboard ring on its behalf, and `owns-its-edge` moves
+              the focused-field accent edge onto the pill's own border. Without
+              the second, the borderless input keeps the edge rule's 1px halo
+              and paints a faint rectangle inside a box already lit. Both rules
+              live in tokens.css. */}
+          <div
+            className="rings-within owns-its-edge flex items-center gap-1.5 h-8 px-2 rounded-md border"
+            style={{ backgroundColor: 'var(--color-bg-input)', borderColor: 'var(--color-border-muted)' }}
+          >
+            <Search className="h-3.5 w-3.5 flex-shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); setMissedRef(null); }}
+              onKeyDown={(e) => { if (e.key === 'Escape' && searchQuery) { e.stopPropagation(); clearSearch(); } }}
+              placeholder={t('filePanel.searchFiles')}
+              aria-label={t('filePanel.searchFiles')}
+              className="flex-1 min-w-0 text-base sm:text-xs bg-transparent border-none"
+              style={{ color: 'var(--color-text-primary)' }}
+            />
+            {searchQuery && (
+              <button type="button" onClick={clearSearch} className="file-panel-icon-btn" title={t('filePanel.clearSearch')} aria-label={t('filePanel.clearSearch')} style={{ margin: '-0.25rem' }}>
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          {missedRef && (
+            <p className="mt-1.5 text-xs break-all" style={{ color: 'var(--color-text-secondary)' }}>
+              {extraMatches.length > 1
+                ? t('filePanel.refAmbiguous', { path: missedRef })
+                : t('filePanel.refNotFound', { path: missedRef })}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Filter & Sort toolbar */}
-      {!showSettings && !selectedFile && !filesLoading && !filesError && files.length > 0 && (
+      {!showSettings && !selectedFile && !filesLoading && !filesError && listedFiles.length > 0 && (
         <div className="file-panel-toolbar">
           <div className="file-panel-filter-chips">
             <button className={`file-panel-chip ${filterType === 'All' ? 'active' : ''}`} onClick={() => setFilterType('All')}>
@@ -829,18 +1185,18 @@ function FilePanel({
             ) : fileError ? (
               <FileErrorDisplay
                 error={fileError}
-                onRetry={() => handleFileClick(selectedFile)}
-                onDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))}
+                onRetry={() => retryOpen()}
+                onDownload={handleDownloadSelected}
               />
             ) : fileMime === 'pdf' ? (
               <Suspense fallback={<DocumentLoadingFallback />}>
-                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))} />}>
-                  <PdfViewer data={fileArrayBuffer!} />
+                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={handleDownloadInFallback} />}>
+                  <PdfViewer data={fileArrayBuffer!} focusPage={fileFocus.focusPage} focusSeq={fileFocus.seq} onPageCount={setPdfPageCount} />
                 </DocumentErrorBoundary>
               </Suspense>
             ) : fileMime === 'excel' ? (
               <Suspense fallback={<DocumentLoadingFallback />}>
-                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))} />}>
+                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={handleDownloadInFallback} />}>
                   <ExcelViewer data={fileArrayBuffer!} />
                 </DocumentErrorBoundary>
               </Suspense>
@@ -853,22 +1209,24 @@ function FilePanel({
                 </div>
               ) : (
                 <Suspense fallback={<DocumentLoadingFallback />}>
-                  <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))} />}>
+                  <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={handleDownloadInFallback} />}>
                     <CsvViewer content={fileContent ?? ''} />
                   </DocumentErrorBoundary>
                 </Suspense>
               )
             ) : ['html', 'htm'].includes(getFileExtension(selectedFile)) ? (
               <Suspense fallback={<DocumentLoadingFallback />}>
-                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))} />}>
+                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={handleDownloadInFallback} />}>
                   <HtmlViewer
                     content={fileContent ?? ''}
                     fileName={fileName}
                     workspaceId={workspaceId}
                     filePath={selectedFile}
                     servedUrlOverride={apiAdapter?.buildServedUrl?.(selectedFile, { injectTheme: true })}
+                    anchor={fileFocus.htmlAnchor}
+                    anchorSeq={fileFocus.seq}
                     onCopyShareLink={onCopyShareLink ?? undefined}
-                    onTriggerDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))}
+                    onTriggerDownload={handleDownloadInFallback}
                   />
                 </DocumentErrorBoundary>
               </Suspense>
@@ -891,7 +1249,7 @@ function FilePanel({
                   </div>
                 ) : fileMime?.includes('markdown') || getFileExtension(selectedFile) === 'md' ? (
                   <div className="markdown-print-content">
-                    <Markdown variant="panel" content={fileContent ?? ''} className="text-sm" />
+                    <Markdown variant="panel" content={fileContent ?? ''} className="text-sm" onOpenFile={handleViewerLink} onAnchorLink={handleAnchorLink} />
                   </div>
                 ) : (
                   <SyntaxHighlighter
@@ -902,7 +1260,11 @@ function FilePanel({
                     showLineNumbers
                     lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1em', color: 'var(--color-text-tertiary)', userSelect: 'none', fontSize: '0.6875rem', opacity: 0.5 }}
                     wrapLines
-                    lineProps={(lineNumber: number) => ({ 'data-line': lineNumber } as React.HTMLProps<HTMLElement>)}
+                    lineProps={(lineNumber: number) => {
+                      const range = fileFocus.lineRange;
+                      const focused = !!range && lineNumber >= range[0] && lineNumber <= range[1];
+                      return { 'data-line': lineNumber, ...(focused ? { className: 'file-focus-line' } : {}) } as React.HTMLProps<HTMLElement>;
+                    }}
                     wrapLongLines
                   >
                     {fileContent!}
@@ -924,13 +1286,15 @@ function FilePanel({
                 <div className="px-4 py-8 text-center">
                   <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>{filesError}</p>
                 </div>
-              ) : files.length === 0 ? (
+              ) : listedFiles.length === 0 && !trimmedQuery ? (
                 <div className="px-4 py-8 text-center">
                   <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>No files yet</p>
                 </div>
               ) : filteredSortedFiles.length === 0 ? (
                 <div className="px-4 py-8 text-center">
-                  <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>No {filterType.toLowerCase()} files</p>
+                  <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
+                    {trimmedQuery ? t('filePanel.noSearchMatches') : `No ${filterType.toLowerCase()} files`}
+                  </p>
                 </div>
               ) : (
                 fileTree.map((node) => (
@@ -939,7 +1303,7 @@ function FilePanel({
                     node={node}
                     depth={0}
                     showHeader={node.name !== '/'}
-                    expandedDirs={expandedDirs}
+                    expandedDirs={visibleExpandedDirs}
                     toggleDir={toggleDir}
                     selectMode={selectMode}
                     selectedPaths={selectedPaths}

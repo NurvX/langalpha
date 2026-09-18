@@ -2,6 +2,24 @@
  * Workspace file endpoints (list/read/write/delete/backup/upload).
  */
 import { api } from '@/api/client';
+import type { FileRefResolution } from '../../components/filePanel/types';
+
+/**
+ * Resolve a file reference to one workspace path in a single server lookup.
+ * @param candidates - readings of the reference, most likely first
+ * @param recentWrites - this thread's Write/Edit paths, newest first
+ */
+export async function resolveWorkspaceFile(
+  workspaceId: string,
+  candidates: string[],
+  recentWrites: string[] = [],
+): Promise<FileRefResolution> {
+  const { data } = await api.post(`/api/v1/workspaces/${workspaceId}/files/resolve`, {
+    candidates,
+    recent_writes: recentWrites,
+  });
+  return data as FileRefResolution;
+}
 
 /**
  * Read a text file from workspace sandbox

@@ -98,7 +98,6 @@ function renderTranscript(onToolCallDetailClick: () => void) {
         todoListProcesses={{}}
         subagentTasks={{}}
         isStreaming={false}
-        isAssistant
       />
     </MessageActionsProvider>,
   );

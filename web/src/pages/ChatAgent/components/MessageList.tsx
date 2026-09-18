@@ -4,6 +4,7 @@ import { DispatchStatusProvider } from '../hooks/usePTCDispatchStatus';
 import { NotificationDivider } from './messageList/NotificationDivider';
 import { MessageBubble } from './messageList/MessageBubble';
 import { computeTurnTails, projectTurns, visibleProjection } from './messageList/turnProjection';
+import { turnFilesByTurn } from '../utils/turnFiles';
 import type { FeedbackResult, MessageRecord } from './messageList/types';
 
 // --- MessageList ---
@@ -30,8 +31,13 @@ function MessageList({ messages, isLoading, isLoadingHistory, hideAvatar, compac
   // feedback all address backend turns); orphan filtering and the regenerate
   // tail then run over the VISIBLE list, so a hidden bubble never steals an
   // affordance from a painted one.
-  const visible = React.useMemo(() => visibleProjection(projectTurns(messages)), [messages]);
+  const projected = React.useMemo(() => projectTurns(messages), [messages]);
+  const visible = React.useMemo(() => visibleProjection(projected), [projected]);
   const turnTails = React.useMemo(() => computeTurnTails(visible), [visible]);
+
+  // The deliverables strip reads the RAW projection: a turn's files are named
+  // across its whole span, including a bubble the list never paints.
+  const filesByTurn = React.useMemo(() => turnFilesByTurn(projected), [projected]);
 
   // Empty state - show when no messages exist (hidden in subagent view)
   if (messages.length === 0) {
@@ -91,6 +97,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, hideAvatar, compac
             message={message}
             turnIndex={turnIndex}
             isTurnTail={turnTails[i]}
+            turnFiles={turnTails[i] ? filesByTurn.get(turnIndex) : undefined}
             feedback={feedbackByTurn?.[turnIndex] ?? null}
             isLoading={isLoading}
             hideAvatar={isSubagentView || hideAvatar}

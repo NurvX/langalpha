@@ -86,6 +86,12 @@
     opacity: 1;
   }
 
+  /* ====== Search ====== */
+  .file-panel-search {
+    padding: 8px 12px 6px;
+    flex-shrink: 0;
+  }
+
   /* ====== Filter & Sort Toolbar ====== */
   .file-panel-toolbar {
     display: flex;
@@ -538,3 +544,100 @@
       padding-bottom: var(--bottom-tab-height);
     }
   }
+/* A reference's target inside the open file. The tint is annotation, so it
+   stays flat amber on the target; arrival fades it in once from a stronger mix. */
+.file-focus-line {
+  display: block;
+  background-color: var(--color-accent-soft);
+}
+.file-focus-block {
+  border-radius: 4px;
+  background-color: var(--color-accent-soft);
+  box-shadow: 0 0 0 4px var(--color-accent-soft);
+}
+.file-focus-enter {
+  animation: file-focus-in 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.file-focus-block.file-focus-enter {
+  animation-name: file-focus-in-block;
+}
+@keyframes file-focus-in {
+  from { background-color: color-mix(in srgb, var(--color-accent-primary) 34%, transparent); }
+  to { background-color: var(--color-accent-soft); }
+}
+@keyframes file-focus-in-block {
+  from {
+    background-color: color-mix(in srgb, var(--color-accent-primary) 34%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent-primary) 34%, transparent);
+  }
+  to {
+    background-color: var(--color-accent-soft);
+    box-shadow: 0 0 0 4px var(--color-accent-soft);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .file-focus-enter { animation: none; }
+}
+
+.file-focus-chip {
+  display: inline-flex;
+  align-items: center;
+  /* Location is secondary to the file's name: it gives up width first. */
+  flex: 0 1000 auto;
+  min-width: 4.5rem;
+  max-width: 14rem;
+  height: 1.375rem;
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius);
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+}
+.file-focus-chip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  height: 100%;
+  padding: 0 0.125rem 0 0.5rem;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.file-focus-chip-label:hover {
+  color: var(--color-text-primary);
+}
+.file-focus-chip-label.is-missing {
+  cursor: default;
+}
+.file-focus-chip-dot {
+  flex-shrink: 0;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background-color: var(--color-accent-primary);
+}
+.file-focus-chip-close {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 100%;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+/* A larger hit area than the quiet icon it wraps. */
+.file-focus-chip-close::after {
+  content: '';
+  position: absolute;
+  inset: -0.375rem -0.25rem;
+}
+.file-focus-chip-close:hover {
+  color: var(--color-text-primary);
+}

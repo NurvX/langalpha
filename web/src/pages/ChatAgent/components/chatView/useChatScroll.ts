@@ -16,6 +16,8 @@ const SETTLE_HARD_CAP_MS = 8000;
 const SCROLLEND_FALLBACK_MS = 600;
 // Gap left above a bubble the transcript is pinned to.
 const ANCHOR_OFFSET_PX = 16;
+// Breathing room left under a deliverables deck brought into view.
+const REVEAL_GAP_PX = 12;
 
 /** scrollTop that puts bubble `id` just under the viewport top, or null once it is no longer in the transcript. */
 function anchorTop(c: HTMLElement, id: string, part?: AnchorPart): number | null {
@@ -26,6 +28,23 @@ function anchorTop(c: HTMLElement, id: string, part?: AnchorPart): number | null
   // its own start.
   const el = (part === 'reply' && msg.querySelector<HTMLElement>('[data-reply-start]')) || msg;
   return Math.max(0, c.scrollTop + el.getBoundingClientRect().top - c.getBoundingClientRect().top - ANCHOR_OFFSET_PX);
+}
+
+/** scrollTop that brings the deliverables deck on bubble `id` into view, capped
+ *  so the deck's own top never leaves it: a deck taller than the viewport is
+ *  read from its first card rather than chased past it. Null once the deck is
+ *  gone, which is what retires the pin. */
+function revealTop(c: HTMLElement, id: string): number | null {
+  const msg = findMessageElement(c, id);
+  const deck = msg?.querySelector<HTMLElement>('.turn-files');
+  if (!deck) return null;
+  const view = c.getBoundingClientRect();
+  const rect = deck.getBoundingClientRect();
+  // clientHeight, not the rect's own bottom: a horizontal scrollbar is not
+  // viewport a card can be read in.
+  const needed = Math.max(0, rect.bottom + REVEAL_GAP_PX - (view.top + c.clientHeight));
+  const headroom = Math.max(0, rect.top - view.top);
+  return c.scrollTop + Math.min(needed, headroom);
 }
 
 /** Chat transcript scroll controller + tab scroll memory (carved out of
@@ -40,7 +59,11 @@ function anchorTop(c: HTMLElement, id: string, part?: AnchorPart): number | null
  * finishing layout can't shift the landing.
  */
 export type AnchorPart = 'reply';
-export type PinTarget = { mode: 'bottom' } | { mode: 'offset'; top: number } | { mode: 'anchor'; id: string; part?: AnchorPart };
+export type PinTarget =
+  | { mode: 'bottom' }
+  | { mode: 'offset'; top: number }
+  | { mode: 'anchor'; id: string; part?: AnchorPart }
+  | { mode: 'reveal'; id: string };
 
 export function useChatScroll({
   activeAgentId,
@@ -303,7 +326,10 @@ export function useChatScroll({
     const target = pinTargetRef.current;
     if (!target || !c) return;
     const top =
-      target.mode === 'bottom' ? c.scrollHeight : target.mode === 'offset' ? target.top : anchorTop(c, target.id, target.part);
+      target.mode === 'bottom' ? c.scrollHeight
+        : target.mode === 'offset' ? target.top
+          : target.mode === 'reveal' ? revealTop(c, target.id)
+            : anchorTop(c, target.id, target.part);
     if (top == null) {
       // The anchored bubble left the transcript (edit / regenerate truncation).
       pinTargetRef.current = null;
@@ -339,6 +365,25 @@ export function useChatScroll({
     [getScrollContainer, withProgrammaticScroll, armSettleTimers, setPillState],
   );
 
+  // Bring a turn's deliverables deck into view as it unfolds. The deck cannot
+  // do this for itself: its height animates over 260ms, and the observer below
+  // re-applies this controller's pin on every one of those growth frames, so a
+  // scroll the deck set would be overwritten before it painted. Expressed as a
+  // pin target instead, the unfold is followed by the very machinery that was
+  // overwriting it, and the settle window releases it once growth stops.
+  const revealFiles = useCallback(
+    (id: string) => {
+      const c = getScrollContainer(scrollAreaRef);
+      if (!c) return;
+      const top = revealTop(c, id);
+      if (top == null) return;
+      pinTargetRef.current = { mode: 'reveal', id };
+      withProgrammaticScroll(() => c.scrollTo({ top }), 'auto');
+      armSettleTimers();
+    },
+    [getScrollContainer, withProgrammaticScroll, armSettleTimers],
+  );
+
   // Scroll listener + settle-aware ResizeObserver.
   // Re-attaches when activeAgentId changes (ScrollArea remounts on tab switch).
   useEffect(() => {
@@ -353,15 +398,24 @@ export function useChatScroll({
 
     let lastTop = c.scrollTop;
     const handleScroll = () => {
-      // The band is how a *user* scroll re-joins the stream. An anchor pin's own
-      // scrolls must not get to answer it: pinToMessage already decided whether
+      // The band is how a *user* scroll re-joins the stream. A pin that chose a
+      // position must not get to answer it: pinToMessage already decided whether
       // that landing is the bottom, knowing the one thing a position cannot tell
       // it, which turn is the newest. A request past the maximum clamps, so a
       // landing on an earlier turn near the end sits exactly at the maximum and
       // reads as the bottom by any positional test. Letting it re-arm the follow
       // is what walks the reader off the turn they picked once the settle window
       // lets go.
-      const pinOwnsPosition = programmaticScrollRef.current && pinTargetRef.current?.mode === 'anchor';
+      //
+      // A reveal is the same promise about a smaller move. Opening a deck under
+      // the streaming turn scrolls just far enough to show the cards, which on a
+      // short unfold lands inside the band, and the reader who had paused the
+      // follow was counted as rejoining it. Nothing scrolls again after that, so
+      // the answer went stale on the ref and the hard cap released the pin into
+      // a jump to the bottom, seconds after the click and with no cause on
+      // screen.
+      const pinMode = pinTargetRef.current?.mode;
+      const pinOwnsPosition = programmaticScrollRef.current && (pinMode === 'anchor' || pinMode === 'reveal');
       if (!pinOwnsPosition) {
         const metrics = { scrollTop: c.scrollTop, scrollHeight: c.scrollHeight, clientHeight: c.clientHeight };
         // The band answers a downward scroll. An upward one is a reader
@@ -596,6 +650,7 @@ export function useChatScroll({
     withProgrammaticScroll,
     pinToBottom,
     pinToMessage,
+    revealFiles,
     pinTargetRef,
     saveScrollPosition,
     jumpPill,

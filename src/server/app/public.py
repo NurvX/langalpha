@@ -8,6 +8,7 @@ Endpoints:
 - GET /api/v1/public/shared/{share_token}          — Thread metadata
 - GET /api/v1/public/shared/{share_token}/replay    — SSE conversation replay
 - GET /api/v1/public/shared/{share_token}/files     — File listing (requires allow_files)
+- POST /api/v1/public/shared/{share_token}/files/resolve — Resolve a file reference to one path (requires allow_files)
 - GET /api/v1/public/shared/{share_token}/files/read     — Read file content (requires allow_files)
 - GET /api/v1/public/shared/{share_token}/files/serve/{path} — Serve file inline with sandboxed CSP (requires allow_files)
 - GET /api/v1/public/shared/{share_token}/files/download — Download raw file (requires allow_download)
@@ -46,6 +47,12 @@ from src.server.app.workspace_files._shared import (
     _is_text_content_type,
     _is_utf8,
     _normalize_requested_path,
+)
+from src.server.app.workspace_files.file_refs import (
+    ResolveFileRefRequest,
+    clean_candidates,
+    clean_path,
+    resolve_file_ref,
 )
 from src.server.app.workspace_files.serve import (
     _has_traversal,
@@ -645,6 +652,23 @@ async def list_shared_files(
             )
 
     return {"path": path, "files": files, "source": "database"}
+
+
+@router.post("/shared/{share_token}/files/resolve")
+async def resolve_shared_file(share_token: str, body: ResolveFileRefRequest):
+    """Resolve a file reference inside a shared thread's workspace.
+
+    Matches against the same listing the shared file panel browses, so it never
+    wakes a sandbox and never finds a file that listing would hide.
+    """
+    work_dir = _get_work_dir()
+    candidates = clean_candidates(body.candidates, work_dir)
+    if not candidates:
+        raise HTTPException(status_code=400, detail="A file reference is required")
+    listing = await list_shared_files(share_token, path=".")
+    recent_writes = [p for p in (clean_path(w, work_dir) for w in body.recent_writes) if p]
+    result = resolve_file_ref(candidates, listing.get("files", []), recent_writes)
+    return {**result, "source": listing.get("source")}
 
 
 @router.get("/shared/{share_token}/files/read")

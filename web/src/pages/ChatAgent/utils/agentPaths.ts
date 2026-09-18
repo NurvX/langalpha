@@ -31,25 +31,122 @@ export const USER_PROFILE_README_FILENAME = 'README.md';
  */
 export function isUserProfileReadmePath(rawPath: string): boolean {
   if (!rawPath) return false;
-  let p = rawPath.replace(/^\/+/, '');
-  if (p.startsWith(WSREF_PREFIX)) {
-    const tail = p.slice(WSREF_PREFIX.length);
-    const slashIdx = tail.indexOf('/');
-    if (slashIdx > 0) p = tail.slice(slashIdx + 1);
-  }
-  const norm = normalizePath(p);
-  return norm === `${USER_PROFILE_DIR}/${USER_PROFILE_README_FILENAME}`;
+  return workspaceRelativePath(rawPath) === `${USER_PROFILE_DIR}/${USER_PROFILE_README_FILENAME}`;
 }
 
-// Sandbox roots the agent sometimes emits as either bare absolute or
-// `file:///`-wrapped paths (see normalizeFileRefs.ts). Both `workspace` and
-// `daytona` variants appear in the wild.
-const SANDBOX_ROOT_PREFIXES = [
-  'home/workspace/',
-  'home/daytona/',
-];
-const FILE_PROTO_PREFIX = 'file:///';
+// The sandbox root the agent sometimes emits, bare or `file:///`-wrapped (see
+// normalizeFileRefs.ts). Both `workspace` and `daytona` variants appear in the
+// wild. The trailing slash is optional so a bare root collapses to '' instead
+// of surviving as `home/workspace`.
+const SANDBOX_ROOT_RE = /^\/?home\/(?:workspace|daytona)(?:\/|$)/;
+const FILE_PROTO_RE = /^file:\/\/(?=\/)/;
 const WSREF_PREFIX = '__wsref__/';
+
+/**
+ * A reference the agent emitted, taken apart once.
+ *
+ * Every path helper reads a path through this, so a path means the same thing
+ * whichever route it arrived by. `path` is the canonical form: `file://`
+ * unwrapped, the sandbox root and the `__wsref__/<wsid>/` qualifier stripped,
+ * `?query`/`#fragment` dropped, `//` collapsed, `.` dropped and `..` folded.
+ * A path still rooted once the sandbox root came off is a real absolute path
+ * (`/tmp/x`) and keeps its root; `absolute` covers both, since either way the
+ * reference named a fixed spot rather than one relative to the linking file.
+ */
+export interface AgentPathParts {
+  /** Workspace id from a `__wsref__/<wsid>/…` qualifier, when the path carried one. */
+  workspaceId?: string;
+  path: string;
+  absolute: boolean;
+  /** The reference ended in `/`, so it named a directory. */
+  directory: boolean;
+}
+
+/**
+ * The shared reading of a reference. `url` says the input is a markdown
+ * destination rather than a path, which decides one rule: see `normalizeAgentHref`.
+ */
+function takeApart(raw: string, url = false): AgentPathParts {
+  let p = raw.trim().replace(FILE_PROTO_RE, '');
+  let workspaceId: string | undefined;
+
+  // The qualifier can sit behind a leading slash (`/__wsref__/…`).
+  const marked = p.replace(/^\/+/, '');
+  if (marked.startsWith(WSREF_PREFIX)) {
+    const tail = marked.slice(WSREF_PREFIX.length);
+    const slash = tail.indexOf('/');
+    if (slash > 0) {
+      workspaceId = tail.slice(0, slash);
+      p = tail.slice(slash + 1);
+    }
+  }
+
+  // A link can carry a `?query` or `#fragment`. A path cannot: the `#` in
+  // `issue#1.md` is part of the name, and it is a path by the time this runs
+  // on it, because the href reading below already decoded the `%23` it
+  // travelled as. Stripping on both readings is what truncated it to
+  // `results/issue`, which is why the rule is the caller's to choose.
+  if (url) p = p.replace(/[?#].*$/, '');
+
+  const rooted = p.startsWith('/');
+  const sandbox = SANDBOX_ROOT_RE.test(p);
+  const directory = p.endsWith('/');
+  if (sandbox) p = p.replace(SANDBOX_ROOT_RE, '');
+
+  const segments: string[] = [];
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') {
+      // A relative reference that climbs above its own start keeps the `..`.
+      // Dropping it rewrites `../data.csv` into `data.csv`, which is a
+      // different file and often a real one, so the reference opens the wrong
+      // document instead of missing; and it erases the one thing the link's
+      // reader needs to join it against the directory it was written in.
+      // Rooted and sandbox paths start at a root, so they have nowhere to climb.
+      if (segments.length && segments[segments.length - 1] !== '..') segments.pop();
+      else if (!rooted && !sandbox) segments.push('..');
+      continue;
+    }
+    segments.push(seg);
+  }
+  const joined = segments.join('/');
+  return {
+    workspaceId,
+    path: (rooted && !sandbox ? '/' : '') + joined + (directory && joined ? '/' : ''),
+    absolute: rooted || sandbox,
+    directory,
+  };
+}
+
+/** A path a tool reported, or one already canonical. Idempotent. */
+export function parseAgentPath(raw: string): AgentPathParts {
+  return takeApart(raw);
+}
+
+/** @see parseAgentPath */
+export function normalizeAgentPath(raw: string): string {
+  return takeApart(raw).path;
+}
+
+/**
+ * A markdown destination, which is a URL and not yet a path: the same rules,
+ * plus the one that is not idempotent.
+ *
+ * Percent-decoding happens here and nowhere downstream, so `a%2520b.md` keeps
+ * its literal `%20`. It has to happen somewhere: an LLM-emitted link like
+ * `[name](results/%E9%95%BF….md)` must reach the API as raw Unicode and be
+ * encoded exactly once by the HTTP layer, or Axios re-encodes the leading `%`
+ * to `%25` and the backend's single `unquote` looks for a literal `%XX` name.
+ */
+export function normalizeAgentHref(raw: string): string {
+  const { path } = takeApart(raw, true);
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    // A lone `%` is a literal here, not a broken escape.
+    return path;
+  }
+}
 
 export type AgentPathKind = 'memory' | 'memo' | 'user-profile' | 'skill' | 'file';
 export type MemoryTier = 'user' | 'workspace';
@@ -107,61 +204,12 @@ export type AgentPathInfo =
   | FilePathInfo;
 
 /**
- * Canonicalize the various path shapes the agent emits before classification:
- *   - leading `/`, `./`, double-slashes
- *   - `file:///home/(workspace|daytona)/...` → relative
- *   - `/home/(workspace|daytona)/...` → relative
- *   - trailing `?query` / `#fragment` stripped
- *
- * `__wsref__/<wsid>/...` is handled at the classifier layer (it needs to
- * extract the wsid before recursing on the inner path).
- */
-function normalizePath(rawPath: string): string {
-  let p = rawPath;
-
-  // Strip query string and fragment first — they don't affect classification
-  // but break suffix checks like `.endsWith('.md')`.
-  p = p.split(/[?#]/)[0];
-
-  // Unwrap file:/// prefix (markdown auto-link form).
-  if (p.startsWith(FILE_PROTO_PREFIX)) {
-    p = p.slice(FILE_PROTO_PREFIX.length);
-  }
-
-  // Strip leading slashes (covers absolute `/home/...` and `/.agents/...`),
-  // iteratively strip leading `./`, and collapse double-slashes from path joins.
-  p = p.replace(/^\/+/, '');
-  while (p.startsWith('./')) {
-    p = p.slice(2);
-  }
-  p = p.replace(/\/{2,}/g, '/');
-
-  // Strip the sandbox-root prefix the agent sometimes emits.
-  for (const prefix of SANDBOX_ROOT_PREFIXES) {
-    if (p.startsWith(prefix)) {
-      p = p.slice(prefix.length);
-      break;
-    }
-  }
-
-  return p;
-}
-
-/**
- * Workspace-relative display form of an agent file path — the same normalization
- * the path router applies (unwraps `file:///`, strips the sandbox root
- * `/home/(workspace|daytona)/`, leading `/` and `./`, query/fragment), so a file
+ * Workspace-relative form: the canonical path with any root dropped, so a file
  * shown in the UI reads the same way it routes when clicked. The bare sandbox
  * root collapses to an empty string; the caller picks a label for that case.
  */
 export function workspaceRelativePath(rawPath: string): string {
-  const p = normalizePath(rawPath);
-  // normalizePath strips the root only when it has a trailing slash; a bare root
-  // ("/home/workspace") would otherwise survive as "home/workspace".
-  for (const prefix of SANDBOX_ROOT_PREFIXES) {
-    if (`${p}/` === prefix) return '';
-  }
-  return p;
+  return takeApart(rawPath).path.replace(/^\/+/, '');
 }
 
 /**
@@ -177,33 +225,13 @@ export function workspaceRelativePath(rawPath: string): string {
 export function classifyAgentPath(rawPath: string): AgentPathInfo {
   if (!rawPath) return { kind: 'file', rawPath };
 
-  // Unwrap `__wsref__/<wsid>/<rest>` first. Handles a leading `/` before the
-  // marker too (some agent variants emit `/__wsref__/...`).
-  const wsrefStripped = rawPath.replace(/^\/+/, '');
-  if (wsrefStripped.startsWith(WSREF_PREFIX)) {
-    const tail = wsrefStripped.slice(WSREF_PREFIX.length);
-    const slashIdx = tail.indexOf('/');
-    if (slashIdx > 0) {
-      const wsid = tail.slice(0, slashIdx);
-      const inner = tail.slice(slashIdx + 1);
-      const innerInfo = classifyAgentPath(inner);
-      // Re-attach the original rawPath (so display layers show the full link)
-      // and decorate with the extracted workspace id. `kind: 'file'` doesn't
-      // need the marker — Files tab routing pipes setWorkspaceId through the
-      // routing function's targetWorkspaceId arg.
-      if (
-        innerInfo.kind === 'memory'
-        || innerInfo.kind === 'memo'
-        || innerInfo.kind === 'skill'
-        || innerInfo.kind === 'user-profile'
-      ) {
-        return { ...innerInfo, rawPath, crossWorkspaceId: wsid };
-      }
-      return { ...innerInfo, rawPath };
-    }
-  }
-
-  const norm = normalizePath(rawPath);
+  // `takeApart` peels the `__wsref__/<wsid>/` qualifier, so classification sees
+  // the inner path and the workspace id at once. The original rawPath rides
+  // through untouched, so display layers still show the full link; `kind:
+  // 'file'` carries no id because Files-tab routing pipes it through
+  // `computeAgentArtifactRouting`'s own `targetWorkspaceId` argument instead.
+  const { workspaceId: crossWorkspaceId, path } = takeApart(rawPath, true);
+  const norm = path.replace(/^\/+/, '');
 
   if (norm.startsWith(`${MEMORY_USER_DIR}/`)) {
     const key = norm.slice(MEMORY_USER_DIR.length + 1);
@@ -219,6 +247,7 @@ export function classifyAgentPath(rawPath: string): AgentPathInfo {
       key,
       isIndex: key === MEMORY_INDEX_FILENAME,
       rawPath,
+      crossWorkspaceId,
     };
   }
   if (norm.startsWith(`${MEMORY_WORKSPACE_DIR}/`)) {
@@ -232,6 +261,7 @@ export function classifyAgentPath(rawPath: string): AgentPathInfo {
       key,
       isIndex: key === MEMORY_INDEX_FILENAME,
       rawPath,
+      crossWorkspaceId,
     };
   }
   if (norm.startsWith(`${MEMO_USER_DIR}/`)) {
@@ -243,6 +273,7 @@ export function classifyAgentPath(rawPath: string): AgentPathInfo {
       key,
       isIndex: key === MEMO_INDEX_FILENAME,
       rawPath,
+      crossWorkspaceId,
     };
   }
   if (norm.startsWith(`${USER_PROFILE_DIR}/`)) {
@@ -252,14 +283,14 @@ export function classifyAgentPath(rawPath: string): AgentPathInfo {
     const entity = (Object.entries(USER_PROFILE_FILES) as [UserProfileEntity, string][])
       .find(([, filename]) => filename === tail)?.[0];
     if (entity) {
-      return { kind: 'user-profile', entity, rawPath };
+      return { kind: 'user-profile', entity, rawPath, crossWorkspaceId };
     }
     // Unknown user/profile path → fall through to generic file.
   }
   if (norm.startsWith(`${SKILLS_DIR}/`)) {
     const tail = norm.slice(SKILLS_DIR.length + 1);
     const name = tail.split('/')[0] || '';
-    return { kind: 'skill', name, rawPath };
+    return { kind: 'skill', name, rawPath, crossWorkspaceId };
   }
   return { kind: 'file', rawPath };
 }
@@ -292,6 +323,8 @@ export interface AgentArtifactRouting {
   clearWorkspaceId: boolean;
   /** Workspace id to set on filePanelWorkspaceId (only for cross-workspace file links). */
   setWorkspaceId: string | null;
+  /** A folder to open the Files tab on, for a link ending in `/`; `''` is the workspace root. */
+  targetDirectory: string | null;
 }
 
 /**
@@ -329,6 +362,7 @@ export function computeAgentArtifactRouting(
     targetUserProfile: null,
     clearWorkspaceId: false,
     setWorkspaceId: null,
+    targetDirectory: null,
   };
   if (info.kind === 'memory') {
     if (info.tier === 'user') {
@@ -382,6 +416,14 @@ export function computeAgentArtifactRouting(
     };
   }
   // skill / file → Files tab; pass-through workspace id for cross-workspace links.
+  const parts = takeApart(rawPath, true);
+  if (parts.directory) {
+    return {
+      ...base,
+      targetDirectory: parts.path.replace(/^\/+|\/+$/g, ''),
+      setWorkspaceId: resolvedWsid,
+    };
+  }
   return {
     ...base,
     targetFile: rawPath,

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '@/contexts/ThemeContext';
 import SyntaxHighlighter, { oneDark, oneLight } from '../SyntaxHighlighter';
@@ -18,10 +18,18 @@ interface HtmlViewerProps {
   /** Path within the workspace, e.g. "results/report.html". */
   filePath: string;
   /** Download the server's original bytes for this file. */
-  onTriggerDownload: () => void;
+  /** Omitted where the viewer may not save the bytes, which drops the save
+   *  affordances in the fullscreen toolbar along with it. */
+  onTriggerDownload?: () => void;
   /** Override the served URL (e.g. the public share serve URL). When set, the
    *  preview iframe and HTML actions point here instead of the wsfiles route. */
   servedUrlOverride?: string;
+  /** Element id a reference pointed at; the iframe scrolls to it. */
+  anchor?: string | null;
+  /** Bumped by the panel on every reference open, so the same anchor asked for
+   *  twice is two requests rather than one unchanged prop. Read only alongside
+   *  `anchor`. */
+  anchorSeq?: number | null;
   /** Copy a shareable link to this report (authenticated app only). When set,
    *  a link button appears in the toolbar. */
   onCopyShareLink?: (filePath: string) => void;
@@ -34,15 +42,37 @@ export default function HtmlViewer({
   filePath,
   onTriggerDownload,
   servedUrlOverride,
+  anchor = null,
+  anchorSeq = null,
   onCopyShareLink,
 }: HtmlViewerProps) {
   const { t } = useTranslation();
   const { theme } = useTheme();
   const [mode, setMode] = useState<'preview' | 'source'>('preview');
   const [fullscreen, setFullscreen] = useState(false);
+
+  // An anchored open asks for a place in the rendered document, and Source
+  // cannot show one: the tab survives both the file and the anchor changing, so
+  // a reference clicked while reading markup left the reader on the same markup
+  // with nothing to tell them the click had landed. The request is the seq, not
+  // the anchor's text, so asking for one section twice is two requests, while
+  // switching to Source with a request still in effect is left alone.
+  const request = anchor ? `${anchorSeq ?? ''}\u0000${anchor}` : null;
+  const [handled, setHandled] = useState(request);
+  if (request !== handled) {
+    setHandled(request);
+    if (request) setMode('preview');
+  }
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const { pushTheme } = useHtmlSandbox({ iframeRef, autoHeight: false });
+  const { pushTheme, scrollToAnchor } = useHtmlSandbox({ iframeRef, autoHeight: false });
+
+  // The fragment in `src` lands the first open, and any open naming a different
+  // section. It cannot land the same section twice, because that URL is the one
+  // already loaded, so ask the document itself on every request.
+  useEffect(() => {
+    if (anchor) scrollToAnchor(anchor);
+  }, [request, anchor, scrollToAnchor]);
 
   const servedUrl = useMemo(
     () => servedUrlOverride ?? buildWsfilesUrl(workspaceId, filePath, { injectTheme: true }),
@@ -59,7 +89,7 @@ export default function HtmlViewer({
     mode: 'file',
     workspaceId,
     filePath,
-    triggerDownload: () => Promise.resolve(onTriggerDownload()),
+    triggerDownload: onTriggerDownload && (() => Promise.resolve(onTriggerDownload())),
     servedUrl: servedUrlPlain,
   });
 
@@ -102,7 +132,7 @@ export default function HtmlViewer({
         // link-click rationale (both must carry the popup tokens).
         <iframe
           ref={iframeRef}
-          src={servedUrl}
+          src={anchor ? `${servedUrl}#${encodeURIComponent(anchor)}` : servedUrl}
           sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
           className="html-viewer-frame"
           title={fileName || 'HTML Preview'}
@@ -131,6 +161,7 @@ export default function HtmlViewer({
           filePath={filePath}
           servedUrl={servedUrlOverride}
           actions={actions}
+          canDownload={!!onTriggerDownload}
         />
       )}
       {directLinkDialog}

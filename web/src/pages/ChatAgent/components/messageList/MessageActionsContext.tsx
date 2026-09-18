@@ -16,12 +16,21 @@
 import React from 'react';
 import type { FeedbackResult, SubagentInfo, ToolCallProcessRecord } from './types';
 import type { ToolApprovalPosition } from '@/types/chat';
+import type { OpenFileHandler } from '../../utils/fileLocation';
 
 export interface MessageActions {
   onOpenSubagentTask?: (info: SubagentInfo) => void;
-  onOpenFile?: (filePath: string, workspaceId?: string) => void;
+  onOpenFile?: OpenFileHandler;
+  /** Brings a turn's deliverables deck into view as it unfolds. The deck owns
+   *  no scroll container and must not grab one: the host's scroll controller
+   *  re-asserts its own position on every content growth, which a fanning deck
+   *  produces on every frame. Its absence just means the deck does not scroll. */
+  onRevealFiles?: (messageId: string) => void;
+  /** Saves a workspace file to disk. Separate from `onOpenFile` because a host
+   *  may grant reading without granting download: a copy-link share does. Its
+   *  absence is what hides the deliverable card's Download item. */
+  onDownloadFile?: (path: string, workspaceId?: string) => void;
   onOpenSources?: (messageId: string) => void;
-  onOpenDir?: (dirPath: string) => void;
   onToolCallDetailClick?: (proc: ToolCallProcessRecord) => void;
   onApprovePlan?: () => void;
   onRejectPlan?: () => void;
