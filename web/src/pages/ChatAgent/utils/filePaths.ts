@@ -111,7 +111,13 @@ export function isFilePath(href: string | undefined): boolean {
     // `/home/workspace/data/` as an app route, because a folder has none.
     const parts = parseAgentPath(href);
     if (!parts.path.startsWith('/')) return parts.path !== '' || parts.directory;
-    return /\.[a-z0-9]{1,8}(?:[?#].*)?$/i.test(href);
+    // The extension has to be in the name, not in what follows it. Reading the
+    // whole destination let a query supply one, so `/search?q=notes.md` claimed
+    // to be a file, the click was swallowed, and the panel was handed
+    // `/search`, which is what `normalizeFilePath` leaves once the query is
+    // gone. A literal `#` here is a fragment, the same reading that normalizer
+    // applies, and a name that really holds one arrives as `%23`.
+    return /\.[a-z0-9]{1,8}$/i.test(href.split(/[?#]/, 1)[0]);
   }
   return true;
 }

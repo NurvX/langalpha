@@ -92,6 +92,19 @@ describe('isFilePath', () => {
     expect(isFilePath('/home/workspaces/data/')).toBe(false);
   });
 
+  it('will not let a query supply the extension a rooted destination lacks', () => {
+    // `/search?q=notes.md` is an app route carrying a filename, not a file. The
+    // whole destination ends in `.md`, so reading it whole swallowed the click
+    // and handed the panel `/search`, which is all that survives normalizing.
+    expect(isFilePath('/search?q=notes.md')).toBe(false);
+    expect(isFilePath('/api/export?name=report.pdf')).toBe(false);
+    // The control: a real rooted file keeps working, query or fragment and all.
+    expect(isFilePath('/tmp/output.csv?v=2')).toBe(true);
+    expect(isFilePath('/tmp/output.csv#L4')).toBe(true);
+    // A `#` in a destination is a fragment, so a name that holds one says `%23`.
+    expect(isFilePath('/tmp/issue%231.md')).toBe(true);
+  });
+
   it('reads a line suffix as a file, not a URL scheme', () => {
     expect(isFilePath('model.py:42')).toBe(true);
     expect(isFilePath('work/code/model.py:40-55')).toBe(true);
