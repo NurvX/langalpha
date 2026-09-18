@@ -1708,7 +1708,7 @@
     "openFileHintUpload": "Pick one from the tree on the right, or drop a file here to upload it.",
     "showFileTree": "Show file tree",
     "dropToUploadHint": "Or drop a file here to upload it.",
-    "openFiles": "Open files",
+    "openFiles": "Open tabs",
     "runningApps": "Running apps",
     "reloadApp": "Reload app",
     "previewTab": "Preview",
@@ -1845,7 +1845,7 @@
   },
   "rightPanel": {
     "tabs": {
-      "files": "Files",
+      "files": "Workspace",
       "memory": "Memory",
       "memo": "Memo",
       "sources": "Sources",

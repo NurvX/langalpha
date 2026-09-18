@@ -1703,7 +1703,7 @@
     "openFileHintUpload": "从右侧的文件树中选择一个文件，或将文件拖放到此处上传。",
     "showFileTree": "显示文件树",
     "dropToUploadHint": "或将文件拖放到此处上传。",
-    "openFiles": "已打开的文件",
+    "openFiles": "已打开的标签页",
     "runningApps": "运行中的应用",
     "reloadApp": "重新加载应用",
     "previewTab": "预览",
@@ -1839,7 +1839,7 @@
   },
   "rightPanel": {
     "tabs": {
-      "files": "文件",
+      "files": "工作区",
       "memory": "记忆",
       "memo": "备忘录",
       "sources": "数据来源",
