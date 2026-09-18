@@ -79,6 +79,12 @@ export function deckSlot(i: number, count: number, fanned: boolean, g: DeckGeome
  * The listeners are attached a frame late, so the click that opened the deck
  * cannot immediately shut it again, and `onCollapse` is read through a ref, so
  * a caller passing an inline arrow does not re-register them on every render.
+ *
+ * Escape takes the focus back with it. Shutting the deck unmounts the cards
+ * behind the front one, so a reader who had tabbed onto one of them was left on
+ * `document.body`, with the next Tab starting over from the top of the page.
+ * Only the keyboard path restores: a click elsewhere is the reader putting the
+ * focus somewhere themselves, and the deck has no business taking it back.
  */
 export function useDeckCollapse({
   open,
@@ -112,7 +118,16 @@ export function useDeckCollapse({
       collapse.current();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') collapse.current();
+      if (e.key !== 'Escape') return;
+      const held = !!rootRef.current?.contains(document.activeElement);
+      collapse.current();
+      if (!held) return;
+      // A frame late for the same reason the listeners are: the card holding
+      // the focus is still mounted until the collapse has rendered, and the
+      // front card's own control is the first one left standing.
+      requestAnimationFrame(() => {
+        rootRef.current?.querySelector<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')?.focus();
+      });
     };
     let attached = false;
     const raf = requestAnimationFrame(() => {
