@@ -471,6 +471,29 @@ async def test_inject_theme_splices_for_html(mock_ws, mock_fp, _wd, _vault):
 @patch(_WD_PATCH, return_value="/home/workspace")
 @patch(_FP_PATCH)
 @patch(_DBWS_PATCH, new_callable=AsyncMock)
+async def test_inject_theme_carries_the_anchor_scroller(mock_ws, mock_fp, _wd, _vault):
+    """A reference clicked twice has to land twice.
+
+    The second click asks for the section the URL already names, so nothing
+    navigates. Scrolling has to be driven by the request rather than by the
+    fragment changing, which is why this reads `scrollIntoView` and not
+    `location.hash`.
+    """
+    mock_ws.return_value = _workspace("stopped")
+    html = "<html><head><title>x</title></head><body>hi</body></html>"
+    mock_fp.get_file_content = AsyncMock(return_value=_db_text_record(html))
+    resp = await serve_workspace_file(WS_ID, "results/report.html", inject_theme=True)
+    body = resp.body.decode()
+    assert "widget:scrollTo" in body
+    assert "scrollIntoView" in body
+    assert "location.hash" not in body
+
+
+@pytest.mark.asyncio
+@patch(_VAULT_PATCH, new_callable=AsyncMock, return_value={})
+@patch(_WD_PATCH, return_value="/home/workspace")
+@patch(_FP_PATCH)
+@patch(_DBWS_PATCH, new_callable=AsyncMock)
 async def test_inject_theme_not_applied_to_non_html(mock_ws, mock_fp, _wd, _vault):
     mock_ws.return_value = _workspace("stopped")
     css = "body{color:red}"

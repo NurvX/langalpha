@@ -142,6 +142,28 @@ describe('HtmlViewer', () => {
       expect(screen.getByTestId('syntax-highlighter')).toBeInTheDocument();
     });
 
+    it('asks the document to scroll when the same section is referenced again', () => {
+      const { rerender } = renderViewer(
+        <HtmlViewer {...defaultProps} anchor="risks" anchorSeq={1} />,
+      );
+      const iframe = getPreviewIframe();
+      const postMessage = vi.fn();
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: { postMessage },
+        configurable: true,
+      });
+
+      rerenderWith(rerender, { anchor: 'risks', anchorSeq: 2 });
+
+      // The URL is the one already loaded, so the browser navigates nowhere and
+      // the fragment cannot land this open. Without the request the second
+      // click moves nothing on screen.
+      expect(iframe.getAttribute('src')).toBe(
+        '/api/v1/wsfiles/ws-1/results/report.html?inject=theme#risks',
+      );
+      expect(postMessage).toHaveBeenCalledWith({ type: 'widget:scrollTo', id: 'risks' }, '*');
+    });
+
     it('leaves Source alone when another file opens with no reference', () => {
       const { rerender } = renderViewer(
         <HtmlViewer {...defaultProps} anchor="risks" anchorSeq={1} />,

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '@/contexts/ThemeContext';
 import SyntaxHighlighter, { oneDark, oneLight } from '../SyntaxHighlighter';
@@ -65,7 +65,14 @@ export default function HtmlViewer({
   }
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const { pushTheme } = useHtmlSandbox({ iframeRef, autoHeight: false });
+  const { pushTheme, scrollToAnchor } = useHtmlSandbox({ iframeRef, autoHeight: false });
+
+  // The fragment in `src` lands the first open, and any open naming a different
+  // section. It cannot land the same section twice, because that URL is the one
+  // already loaded, so ask the document itself on every request.
+  useEffect(() => {
+    if (anchor) scrollToAnchor(anchor);
+  }, [request, anchor, scrollToAnchor]);
 
   const servedUrl = useMemo(
     () => servedUrlOverride ?? buildWsfilesUrl(workspaceId, filePath, { injectTheme: true }),
