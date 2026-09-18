@@ -45,13 +45,27 @@ export interface TurnFile {
  * a duplicate card from its Write call. The three title forms are the ones the
  * secretary's `_TITLE` already accepts.
  *
+ * A label may hold the image that is the link's own face:
+ * `[![chart](charts/a.png)](work/report.md)` is one construct naming two files,
+ * the chart on screen and the report a click opens. Reading only as far as the
+ * image left the outer destination with no `[` in front of it, so the report
+ * the reply cited that way earned no card at all.
+ *
  * The label is bounded for the reason the secretary's twin already records
  * (`src/tools/secretary/utils.py`): the pattern is unanchored, so on a run of
  * `[` with no `]` an unbounded label rescans the line from every one of them.
  * That is quadratic, it runs on the main thread as a turn settles, and 512 is
  * past any real link label.
  */
-const LINK_RE = /(!?)\[[^\]\n]{0,512}\]\(\s*(<[^<>\n]+>|(?:[^()\s]|\([^()\s]*\))+)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?\s*\)/g;
+const DEST = String.raw`(?:<[^<>\n]+>|(?:[^()\s]|\([^()\s]*\))+)`;
+const TITLE = String.raw`(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?`;
+const LABEL = String.raw`[^\]\n]{0,512}`;
+// The label may open with one image, which is the clickable chart, and the
+// alternation stays outside any repetition so the scan keeps its cost.
+const LINK_RE = new RegExp(
+  String.raw`(!?)\[(?:!\[${LABEL}\]\(\s*(${DEST})${TITLE}\s*\))?${LABEL}\]\(\s*(${DEST})${TITLE}\s*\)`,
+  'g',
+);
 
 /** Identity of a reference: two workspaces can hold one path, and those are two files. */
 function refKey(file: { path: string; workspaceId?: string }): string {
@@ -122,21 +136,27 @@ function filesInMessage(message: TurnMessage): MessageFiles {
     // earned. The scan is a read, but it is the same prose/code split every
     // rewrite in this pipeline goes through.
     mapOutsideCode(text ? normalizeFileRefs(text) : '', (prose) => {
-      for (const match of prose.matchAll(LINK_RE)) {
-        const dest = match[2].replace(/^<|>$/g, '');
-        if (!isFilePath(dest)) continue;
+      const collect = (raw: string, embeds: boolean) => {
+        const dest = raw.replace(/^<|>$/g, '');
+        if (!isFilePath(dest)) return;
         // `#L12` and `:42` are link syntax, so they come off before the path
         // rules run: those drop a fragment, and would take the location with it.
         const { path: href, location } = splitFileLocation(dest);
         const wsRef = parseWsPath(href);
         const path = normalizeAgentHref(href);
-        if (!openablePath(path)) continue;
+        if (!openablePath(path)) return;
         const file: TurnFile = { path, workspaceId: wsRef?.workspaceId, location: location ?? undefined };
-        if (match[1] === '!' || isImagePath(path)) {
+        if (embeds || isImagePath(path)) {
           embedded.push(refKey(file));
-          continue;
+          return;
         }
         cited.push(file);
+      };
+      for (const match of prose.matchAll(LINK_RE)) {
+        // The chart wearing the link is on screen either way, so it is read as
+        // an embed and the destination behind it as the citation it is.
+        if (match[2]) collect(match[2], true);
+        collect(match[3], match[1] === '!');
       }
       return prose;
     });

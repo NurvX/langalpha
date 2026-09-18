@@ -324,4 +324,19 @@ describe('a title is not part of the destination', () => {
   it('leaves an unterminated title alone, the way the secretary does', () => {
     expect(collectTurnFiles([assistant('[r](results/report.pdf "unterminated)')])).toEqual([]);
   });
+
+  it('cards the report behind a chart that is the link', () => {
+    // A clickable chart names two files at once. Reading as far as the image
+    // left `](work/report.md)` with no `[` in front of it, so the document the
+    // click opens was the one thing the deck never heard about.
+    const linked = assistant('[![chart](charts/c.png)](work/report.md)', { a: write(0, 'charts/c.png') });
+    expect(collectTurnFiles([linked])).toEqual([{ path: 'work/report.md' }]);
+  });
+
+  it('keeps a chart that is the link embedded, label or no label', () => {
+    // The chart is on screen either way, so its Write still earns no card,
+    // which is the half of the reading that already worked.
+    const labelled = assistant('[![chart](charts/c.png) open it](work/report.md)', { a: write(0, 'charts/c.png') });
+    expect(collectTurnFiles([labelled])).toEqual([{ path: 'work/report.md' }]);
+  });
 });
