@@ -1,10 +1,10 @@
 /**
  * The cells a formula reads. Enough of a parser to tint what feeds the selected
- * cell — plain A1 references, ranges, and a sheet qualifier — and nothing more:
+ * cell, plain A1 references, ranges, and a sheet qualifier, and nothing more:
  * a name, a table reference or a computed address is left alone rather than
  * guessed at, because a wrong tint reads as a fact about the model.
  */
-import { boxOf, parseCellRef, type CellBox } from './a1';
+import { boxOf, CELL_SOURCE, parseCellRef, SHEET_SOURCE, unquoteSheet, type CellBox } from '@/pages/ChatAgent/utils/a1';
 
 export interface FormulaRef {
   /** Absent when the reference named no sheet, which reads as the cell's own. */
@@ -14,17 +14,11 @@ export interface FormulaRef {
   text: string;
 }
 
-const SHEET_SOURCE = "'(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*";
-const CELL_SOURCE = '\\$?[A-Za-z]{1,3}\\$?[1-9]\\d{0,6}';
 const REF_RE = new RegExp(`(?:(${SHEET_SOURCE})!)?(${CELL_SOURCE})(?::(${CELL_SOURCE}))?`, 'g');
 
 // A reference never continues an identifier, and never introduces a call:
 // `LOG10(` is a function and `[1]Sheet1!A1` points into another workbook.
 const CONTINUES = /[A-Za-z0-9_$.!\]]/;
-
-function unquote(sheet: string): string {
-  return sheet.startsWith("'") ? sheet.slice(1, -1).replace(/''/g, "'") : sheet;
-}
 
 /** Quoted text is prose, and blanking it keeps every index aligned. */
 function blankStrings(formula: string): string {
@@ -48,13 +42,13 @@ export function extractRefs(formula: string): FormulaRef[] {
     const text = m[0];
     if (seen.has(text)) continue;
     seen.add(text);
-    out.push({ sheet: m[1] ? unquote(m[1]) : undefined, box: boxOf(a, b), text });
+    out.push({ sheet: m[1] ? unquoteSheet(m[1]) : undefined, box: boxOf(a, b), text });
   }
   return out;
 }
 
 export interface Precedents {
-  /** Boxes on the sheet holding the formula — these are the ones to tint. */
+  /** Boxes on the sheet holding the formula, the ones to tint. */
   local: CellBox[];
   /** References into another sheet, as written. Named in the bar, never tinted:
    *  the cells are not on screen to tint. */

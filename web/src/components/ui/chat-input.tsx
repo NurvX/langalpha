@@ -40,7 +40,7 @@ import { speechSupported, useVoiceInput } from './chat-input.useVoiceInput';
 import { useFileAttachments } from './chat-input.useFileAttachments';
 import { modelPrefs, modelProfile } from '@/lib/modelPreferences';
 import { queryKeys } from '@/lib/queryKeys';
-import { describeLocatorSize } from '@/pages/ChatAgent/components/viewers/excel/a1';
+import { formatContextBlock } from './chat-input.contextBlocks';
 
 /** Autosize cap for the composer textarea; past this the box scrolls. */
 const MAX_TEXTAREA_HEIGHT = 200;
@@ -570,26 +570,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     let finalMessage = message;
     const snippetMentions = mentionedFiles.filter((f) => f.snippet);
     if (snippetMentions.length > 0) {
-      const blocks = snippetMentions.map((f) => {
-        if (f.source === 'chat') {
-          return `\n<details>\n<summary>[${t('context.fromAgentResponse')}]</summary>\n\n\`\`\`\n${f.snippet}\n\`\`\`\n</details>`;
-        }
-        if (f.source === 'paste') {
-          return `\n<details>\n<summary>[${t('context.pastedText')}]</summary>\n\n\`\`\`\n${f.snippet}\n\`\`\`\n</details>`;
-        }
-        // A locator names the spot in the file's own vocabulary (`Model!B4:D9`),
-        // so the summary is the link that reopens it. The block below it may be
-        // capped, and says so in its own first line.
-        if (f.locator) {
-          const described = describeLocatorSize(f.locator);
-          const size = described ? ` (${described})` : '';
-          return `\n<details>\n<summary>@${f.path}#${f.locator}${size}</summary>\n\n\`\`\`\n${f.snippet}\n\`\`\`\n</details>`;
-        }
-        const lineInfo = f.lineStart != null
-          ? ` (lines ${f.lineStart}-${f.lineEnd}, ${f.lineCount} line${f.lineCount !== 1 ? 's' : ''})`
-          : '';
-        return `\n<details>\n<summary>@${f.path}${lineInfo}</summary>\n\n\`\`\`\n${f.snippet}\n\`\`\`\n</details>`;
-      });
+      const blocks = snippetMentions.map((f) => formatContextBlock(f, t));
       finalMessage = finalMessage.trimEnd() + '\n' + blocks.join('\n');
     }
     onSend(finalMessage, planMode, readyAttachments, slashCommands, {
@@ -778,6 +759,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
               {mentionedFiles.map((f, idx) => {
                 const isSnippet = !!f.snippet;
                 const isPaste = f.source === 'paste';
+                const isChart = f.source === 'chart';
                 const name = isSnippet ? f.label : f.path.split('/').pop();
                 const pillKey = (f.path || '') + '::' + (f.label || '') + '::' + idx;
                 // Snippet tooltips preview, not mirror — a condensed paste can
@@ -793,6 +775,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                   >
                     {isPaste
                       ? <ClipboardList className="h-3 w-3 flex-shrink-0" style={{ color: 'var(--color-accent-primary)' }} />
+                      : isChart
+                        ? <ChartCandlestick className="h-3 w-3 flex-shrink-0" style={{ color: 'var(--color-accent-primary)' }} />
                       : isSnippet
                         ? <TextSelect className="h-3 w-3 flex-shrink-0" style={{ color: 'var(--color-accent-primary)' }} />
                         : <FileText className="h-3 w-3 flex-shrink-0" style={{ color: 'var(--color-accent-primary)' }} />

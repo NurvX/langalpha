@@ -1,12 +1,12 @@
 /**
- * The workbook, flattened into what the grid draws. Everything expensive —
- * number formatting, merge geometry, style translation — happens once here,
+ * The workbook, flattened into what the grid draws. Everything expensive,
+ * number formatting, merge geometry, style translation, happens once here,
  * off the render path, so selection and arrow keys stay cheap.
  */
 import ExcelJS from 'exceljs';
 import type { CSSProperties } from 'react';
-import { inBox, parseRange, type CellBox } from './a1';
-import { formatCellValue } from './numFmt';
+import { inBox, parseRange, type CellBox } from '@/pages/ChatAgent/utils/a1';
+import { formatCellValue, type DateSystem } from './numFmt';
 
 /** The window the viewer draws. A workbook past it is still reported in full. */
 export const MAX_PREVIEW_ROWS = 500;
@@ -31,7 +31,7 @@ export interface GridCell {
   /** The cell's own formula, shared formulas already resolved to this address. */
   formula?: string;
   /**
-   * False on a formula the writer never calculated — which is how openpyxl
+   * False on a formula the writer never calculated, which is how openpyxl
    * leaves every formula it writes. Those cells show their formula instead of
    * a value, because there is no value to show and none can be computed here.
    */
@@ -63,6 +63,11 @@ export interface SheetData {
 }
 
 const EMPTY_CELL: GridCell = { text: '', calculated: true, kind: 'empty', isText: false, style: {} };
+
+/** A formula as the bar and the grid print it; ExcelJS stores it without the `=`. */
+export function withEquals(formula: string): string {
+  return `=${formula.replace(/^=/, '')}`;
+}
 
 function applyTint(hex: string, tint: number): string {
   if (!tint) return hex;
@@ -119,7 +124,7 @@ function getCellStyle(cell: ExcelJS.Cell): CSSProperties {
 
 type FormulaValue = ExcelJS.CellFormulaValue | ExcelJS.CellSharedFormulaValue;
 
-/** The boxed half of `CellValue` — every member that is an object but not a Date. */
+/** The boxed half of `CellValue`: every member that is an object but not a Date. */
 type CellObject = Exclude<ExcelJS.CellValue, string | number | boolean | Date | null | undefined>;
 
 function asObject(v: ExcelJS.CellValue): CellObject | null {
@@ -158,7 +163,7 @@ function scalarOf(v: ExcelJS.CellValue): Scalar {
   return undefined;
 }
 
-function readCell(cell: ExcelJS.Cell): GridCell {
+function readCell(cell: ExcelJS.Cell, system: DateSystem): GridCell {
   const value = cell.value;
   if (value === null || value === undefined || value === '') {
     const style = getCellStyle(cell);
@@ -175,7 +180,7 @@ function readCell(cell: ExcelJS.Cell): GridCell {
     const result = value.result;
     const calculated = result !== undefined;
     const error = isError(result) ? result.error : undefined;
-    const text = error ?? (calculated ? formatCellValue(scalarOf(result), numFmt) : `=${formula.replace(/^=/, '')}`);
+    const text = error ?? (calculated ? formatCellValue(scalarOf(result), numFmt, system) : withEquals(formula));
     return {
       text,
       formula,
@@ -194,7 +199,7 @@ function readCell(cell: ExcelJS.Cell): GridCell {
 
   const scalar = scalarOf(value);
   return {
-    text: formatCellValue(scalar, numFmt),
+    text: formatCellValue(scalar, numFmt, system),
     calculated: true,
     numFmt,
     kind: 'value',
@@ -204,25 +209,16 @@ function readCell(cell: ExcelJS.Cell): GridCell {
   };
 }
 
-/**
- * `ws.model` rebuilds the entire sheet to answer this one question, which on a
- * large workbook costs as much as the parse did. The map it reads from is a
- * plain field, so take it when it is there and keep the typed path as the
- * fallback.
- */
+// ExcelJS 4.4 exposes merges only privately; the public `ws.model` getter
+// rebuilds the whole sheet to answer, which on a large workbook costs as much
+// as the parse did.
 function mergeRanges(ws: ExcelJS.Worksheet): string[] {
   const own = (ws as unknown as { _merges?: Record<string, { range?: string } | undefined> })._merges;
-  if (own && typeof own === 'object') {
-    return Object.values(own).map((m) => m?.range).filter((r): r is string => !!r);
-  }
-  try {
-    return ws.model?.merges ?? [];
-  } catch {
-    return [];
-  }
+  if (!own || typeof own !== 'object') return [];
+  return Object.values(own).map((m) => m?.range).filter((r): r is string => !!r);
 }
 
-function readSheet(ws: ExcelJS.Worksheet): SheetData {
+function readSheet(ws: ExcelJS.Worksheet, system: DateSystem): SheetData {
   const totalCols = ws.columnCount;
   const totalRows = ws.rowCount;
   const colCount = Math.min(totalCols, MAX_PREVIEW_COLS);
@@ -246,7 +242,7 @@ function readSheet(ws: ExcelJS.Worksheet): SheetData {
         cells.push({ ...EMPTY_CELL, master: { row: box.top, col: box.left } });
         continue;
       }
-      const cell = readCell(row.getCell(c));
+      const cell = readCell(row.getCell(c), system);
       if (cell.kind === 'formula' && !cell.calculated) uncalculated++;
       if (box) {
         // A merge reaching past the preview window is drawn only as far as the
@@ -271,5 +267,6 @@ function readSheet(ws: ExcelJS.Worksheet): SheetData {
 export async function parseWorkbook(buffer: ArrayBuffer): Promise<SheetData[]> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
-  return wb.worksheets.map(readSheet);
+  const system: DateSystem = { date1904: wb.properties?.date1904 === true };
+  return wb.worksheets.map((ws) => readSheet(ws, system));
 }

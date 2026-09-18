@@ -1,42 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import { buildRangeSnippet, buildWholeSnippet, clampBox, MAX_SNIPPET_CELLS } from '../snippet';
-import { columnName, MAX_COL, MAX_ROW, type CellBox } from '../a1';
+import { buildRangeSnippet, buildWholeSnippet } from '../snippet';
+import { columnName, MAX_COL, MAX_ROW, type CellBox } from '@/pages/ChatAgent/utils/a1';
+import type { GridCell, SheetData } from '../parse';
 
 const box = (top: number, left: number, bottom: number, right: number): CellBox => ({ top, left, bottom, right });
 
-describe('clampBox', () => {
-  it('leaves a range that already fits', () => {
-    expect(clampBox(box(4, 2, 9, 4))).toEqual(box(4, 2, 9, 4));
-  });
+const BLANK: GridCell = { text: '', calculated: true, kind: 'empty', isText: false, style: {} };
 
-  it('keeps whole rows, cutting from the bottom', () => {
-    // 4 columns × 100 rows = 400 cells; 50 whole rows is what 200 allows.
-    expect(clampBox(box(1, 1, 100, 4), 200)).toEqual(box(1, 1, 50, 4));
-  });
-
-  it('cuts columns too when one row alone is wider than the cap', () => {
-    expect(clampBox(box(1, 1, 9, 500), 200)).toEqual(box(1, 1, 1, 200));
-  });
-
-  it('defaults to the composer cap', () => {
-    expect(clampBox(box(1, 1, 1000, 1))).toEqual(box(1, 1, MAX_SNIPPET_CELLS, 1));
-  });
-});
+/** A sheet from a sparse map of `A1` addresses, dense over `rows` x `cols`. */
+function sheetOf(name: string, grid: Record<string, { text: string; formula?: string }>, rows: number, cols: number): SheetData {
+  const data: GridCell[][] = [];
+  for (let r = 1; r <= rows; r++) {
+    const line: GridCell[] = [];
+    for (let c = 1; c <= cols; c++) {
+      const cell = grid[`${columnName(c)}${r}`];
+      line.push(cell ? { ...BLANK, ...cell, kind: cell.formula ? 'formula' : 'value' } : BLANK);
+    }
+    data.push(line);
+  }
+  return { name, rows: data, colCount: cols, totalRows: rows, totalCols: cols, uncalculated: 0 };
+}
 
 describe('buildRangeSnippet', () => {
-  const grid: Record<string, { text: string; formula?: string }> = {
+  const sheet = sheetOf('Model', {
     B4: { text: '12.4' },
     C4: { text: '13.1' },
     B5: { text: '1,624', formula: 'B4*Inputs!C3' },
     C5: { text: '1,755', formula: 'C4*Inputs!C3' },
-  };
-  const cellAt = (row: number, col: number) => grid[`${columnName(col)}${row}`] ?? { text: '' };
+  }, 5, 3);
 
   it('writes the displayed values as TSV, then the formulas behind them', () => {
-    const out = buildRangeSnippet({ sheet: 'Model', box: box(4, 2, 5, 3), cellAt });
-    expect(out.truncated).toBe(false);
-    expect(out.cellCount).toBe(4);
-    expect(out.snippet).toBe(
+    expect(buildRangeSnippet(sheet, box(4, 2, 5, 3))).toBe(
       [
         'Model!B4:C5 · values (TSV)',
         '12.4\t13.1',
@@ -50,62 +44,90 @@ describe('buildRangeSnippet', () => {
   });
 
   it('leaves the formula block out when nothing in the range is computed', () => {
-    const out = buildRangeSnippet({ sheet: 'Model', box: box(4, 2, 4, 3), cellAt });
-    expect(out.snippet).toBe('Model!B4:C4 · values (TSV)\n12.4\t13.1');
+    expect(buildRangeSnippet(sheet, box(4, 2, 4, 3))).toBe('Model!B4:C4 · values (TSV)\n12.4\t13.1');
   });
 
   it('quotes a sheet name that needs it', () => {
-    const out = buildRangeSnippet({ sheet: 'My Sheet', box: box(4, 2, 4, 2), cellAt });
-    expect(out.snippet.startsWith("'My Sheet'!B4 · values (TSV)")).toBe(true);
+    const out = buildRangeSnippet({ ...sheet, name: 'My Sheet' }, box(4, 2, 4, 2));
+    expect(out.startsWith("'My Sheet'!B4 · values (TSV)")).toBe(true);
   });
 
-  it('says in its first line when the selection was bigger than the block', () => {
-    const out = buildRangeSnippet({ sheet: 'Model', box: box(1, 1, 100, 4), cellAt, maxCells: 8 });
-    expect(out.truncated).toBe(true);
-    expect(out.cellCount).toBe(8);
-    expect(out.snippet.split('\n')[0]).toBe(
-      'Model!A1:D100 · values (TSV), first 8 of 400 cells (A1:D2)',
-    );
+  it('caps the block at whole rows and says so in its first line', () => {
+    // 4 columns x 100 rows = 400 cells; 50 whole rows is what the cap allows.
+    const tall = sheetOf('Model', {}, 100, 4);
+    const out = buildRangeSnippet(tall, box(1, 1, 100, 4));
+    expect(out.split('\n')[0]).toBe('Model!A1:D100 · values (TSV), first 200 of 400 cells (A1:D50)');
+    expect(out.split('\n')).toHaveLength(51);
+  });
+
+  it('cuts columns too when one row alone is wider than the cap', () => {
+    const wide = sheetOf('Model', {}, 9, 500);
+    const out = buildRangeSnippet(wide, box(1, 1, 9, 500));
+    expect(out.split('\n')[0]).toBe('Model!A1:SF9 · values (TSV), first 200 of 4500 cells (A1:GR1)');
   });
 
   it('keeps a TSV row on one line whatever the cell held', () => {
-    const out = buildRangeSnippet({
-      sheet: 'Model',
-      box: box(1, 1, 1, 2),
-      cellAt: (_r, c) => ({ text: c === 1 ? 'line one\nline two' : 'a\tb' }),
-    });
-    expect(out.snippet.split('\n')[1]).toBe('line one line two\ta b');
+    const messy = sheetOf('Model', { A1: { text: 'line one\nline two' }, B1: { text: 'a\tb' } }, 1, 2);
+    expect(buildRangeSnippet(messy, box(1, 1, 1, 2)).split('\n')[1]).toBe('line one line two\ta b');
+  });
+
+  it('clips a range that reaches past the sheet to the cells it parsed, and says so', () => {
+    expect(buildRangeSnippet(sheet, box(5, 3, 6, 4))).toBe(
+      'Model!C5:D6 · values (TSV), C5 is inside the parsed sheet (rows 1-5, columns A-C)\n1,755\n\nModel!C5 · formulas\nC5\tC4*Inputs!C3',
+    );
+  });
+
+  it('has nothing to show for a range wholly past the sheet', () => {
+    expect(buildRangeSnippet(sheet, box(900, 2, 902, 3))).toBe('Model!B900:C902 · no cells inside the parsed sheet (rows 1-5, columns A-C)');
+  });
+
+  it('cuts a long cell and a long formula to a field, not a document', () => {
+    const long = 'x'.repeat(1000);
+    const wordy = sheetOf('Model', { A1: { text: long, formula: `CONCAT(${long})` } }, 1, 1);
+    const lines = buildRangeSnippet(wordy, box(1, 1, 1, 1)).split('\n');
+    expect(lines[1]).toBe(`${'x'.repeat(300)}…`);
+    expect(lines[4]).toBe(`A1\t${`CONCAT(${long})`.slice(0, 300)}…`);
+  });
+
+  it('drops rows until the block fits its size cap, and reports what is shown', () => {
+    // 200 rows of one 300-char cell is ~60 KB; the cell cap alone would keep it all.
+    const grid: Record<string, { text: string }> = {};
+    for (let r = 1; r <= 200; r++) grid[`A${r}`] = { text: 'y'.repeat(300) };
+    const heavy = sheetOf('Model', grid, 200, 1);
+    const out = buildRangeSnippet(heavy, box(1, 1, 200, 1));
+    expect(out.length).toBeLessThanOrEqual(32 * 1024);
+    const shown = out.split('\n').length - 1;
+    expect(shown).toBeLessThan(200);
+    expect(out.split('\n')[0]).toBe(`Model!A1:A200 · values (TSV), first ${shown} of 200 cells (A1:A${shown})`);
   });
 });
 
 describe('buildWholeSnippet', () => {
-  const grid: Record<string, { text: string; formula?: string }> = {
+  const sheet = sheetOf('Model', {
     A1: { text: 'Line item' }, B1: { text: 'FY2025E' }, C1: { text: 'FY2026E' },
     A4: { text: 'Revenue' }, B4: { text: '12.4' }, C4: { text: '13.1' },
     A5: { text: 'Cost' }, B5: { text: '1,624', formula: 'B4*Inputs!C3' }, C5: { text: '1,755', formula: 'C4*Inputs!C3' },
-  };
-  const cellAt = (row: number, col: number) => grid[`${columnName(col)}${row}`] ?? { text: '' };
-  const extent = { rows: 5, cols: 3 };
+  }, 5, 3);
 
   it('names a column by its header and says how full it is, never what fills it', () => {
-    const out = buildWholeSnippet({ sheet: 'Model', box: box(1, 2, MAX_ROW, 2), axis: 'cols', extent, cellAt });
+    const out = buildWholeSnippet(sheet, box(1, 2, MAX_ROW, 2));
     expect(out).toBe('Model!B:B · column B · header "FY2025E" · 2 values, 1 formula in rows 1-5');
     expect(out).not.toContain('12.4');
     expect(out.split('\n')).toHaveLength(1);
   });
 
   it('names a row by its first cell', () => {
-    const out = buildWholeSnippet({ sheet: 'Model', box: box(5, 1, 5, MAX_COL), axis: 'rows', extent, cellAt });
-    expect(out).toBe('Model!5:5 · row 5 · header "Cost" · 1 value, 2 formulas in columns A-C');
+    expect(buildWholeSnippet(sheet, box(5, 1, 5, MAX_COL))).toBe(
+      'Model!5:5 · row 5 · header "Cost" · 1 value, 2 formulas in columns A-C',
+    );
   });
 
   it('lists every header of a multi-column selection', () => {
-    const out = buildWholeSnippet({ sheet: 'Model', box: box(1, 2, MAX_ROW, 3), axis: 'cols', extent, cellAt });
-    expect(out).toContain('columns B:C · header "FY2025E", "FY2026E"');
+    expect(buildWholeSnippet(sheet, box(1, 2, MAX_ROW, 3))).toContain('columns B:C · header "FY2025E", "FY2026E"');
   });
 
   it('leaves the header out of a column that has none', () => {
-    const out = buildWholeSnippet({ sheet: 'Model', box: box(1, 4, MAX_ROW, 4), axis: 'cols', extent: { rows: 5, cols: 4 }, cellAt });
-    expect(out).toBe('Model!D:D · column D · 0 values, 0 formulas in rows 1-5');
+    const wider = sheetOf('Model', {}, 5, 4);
+    expect(buildWholeSnippet(wider, box(1, 4, MAX_ROW, 4))).toBe('Model!D:D · column D · 0 values, 0 formulas in rows 1-5');
   });
 });

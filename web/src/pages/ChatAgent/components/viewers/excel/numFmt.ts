@@ -5,19 +5,42 @@
  *
  * Deliberately partial. A code this reader cannot follow falls back to the raw
  * value rather than to a guess, because a wrong number in a financial model is
- * worse than an unformatted one.
+ * worse than an unformatted one. Fraction codes (`# ?/?`) fall back the same
+ * way. Date codes are rendered token by token: `y`, `m`, `d`, `h`, `s` runs,
+ * weekday names, `AM/PM`, and quoted or escaped literals are honored; month
+ * and weekday names follow the UI locale. Elapsed time (`[h]`), fractional
+ * seconds (`ss.000`) and era or calendar variants (`e`, `g`, `b`) are not
+ * rendered as such: bracket contents are dropped and the rest prints as
+ * written.
  */
 import { createDateFormatter, createFormatter } from '@/lib/format';
 
 export type ExcelScalar = string | number | boolean | Date | null | undefined;
 
-/** Excel's day zero. A serial is a UTC instant, and stays one all the way to
- *  the formatter, so the calendar date shown is the one the file stores. */
+/** Which day a serial counts from. A workbook picks one for all its sheets. */
+export interface DateSystem {
+  /** Serial 0 is 1904-01-01, the Mac Excel convention, rather than 1899-12-30. */
+  date1904?: boolean;
+}
+
+/** 1970-01-01 as a 1900-system serial. A serial is a UTC instant, and stays one
+ *  all the way to the formatter, so the calendar date shown is the one the file
+ *  stores. */
 const EPOCH_OFFSET_DAYS = 25569;
+/** Days from the 1900 system's day zero to the 1904 system's. */
+const DATE_1904_OFFSET_DAYS = 1462;
 const MS_PER_DAY = 86400000;
 
-export function excelSerialToDate(serial: number): Date {
-  return new Date(Math.round((serial - EPOCH_OFFSET_DAYS) * MS_PER_DAY));
+/**
+ * The 1900 system counts 1900-02-29, a day that never happened, as serial 60,
+ * so every serial before it lands one day early under the plain subtraction.
+ * Serial 60 itself has no date to be; it prints as 1900-03-01, the same as 61.
+ */
+export function excelSerialToDate(serial: number, system?: DateSystem): Date {
+  const days = system?.date1904
+    ? serial + DATE_1904_OFFSET_DAYS
+    : serial < 61 ? serial + 1 : serial;
+  return new Date(Math.round((days - EPOCH_OFFSET_DAYS) * MS_PER_DAY));
 }
 
 /** Literals, colour/locale brackets and width placeholders, none of which say
@@ -45,43 +68,128 @@ export function isDateFormat(fmt: string | undefined | null): boolean {
   return /[ymdhs]/i.test(bare);
 }
 
-interface DateShape {
-  year?: 'numeric';
-  month?: '2-digit' | 'short';
-  day?: '2-digit';
-  hour?: '2-digit';
-  minute?: '2-digit';
-  second?: '2-digit';
-  timeZone: 'UTC';
-}
+// Names come from the UI locale, but the code's own token order decides the
+// layout: `d-mmm` prints `5-Jan` whatever the locale would have put first.
+const monthName = {
+  short: createDateFormatter({ month: 'short', timeZone: 'UTC' }),
+  long: createDateFormatter({ month: 'long', timeZone: 'UTC' }),
+};
+const weekdayName = {
+  short: createDateFormatter({ weekday: 'short', timeZone: 'UTC' }),
+  long: createDateFormatter({ weekday: 'long', timeZone: 'UTC' }),
+};
 
-function dateShape(fmt: string): DateShape {
-  const bare = stripLiterals(fmt);
-  const time = /[hs]/i.test(bare);
-  // `m` alone beside an hour is minutes, not a month.
-  const date = /[yd]/i.test(bare) || (!time && /m/i.test(bare));
-  const shape: DateShape = { timeZone: 'UTC' };
-  if (date) {
-    shape.year = 'numeric';
-    if (/d/i.test(bare)) {
-      shape.month = '2-digit';
-      shape.day = '2-digit';
+type DateToken =
+  | { kind: 'literal'; text: string }
+  | { kind: 'y' | 'm' | 'd' | 'h' | 's'; len: number }
+  | { kind: 'ampm'; short: boolean };
+
+/** The first section of a date code, split into tokens with literals kept. */
+function tokenizeDate(fmt: string): DateToken[] {
+  const src = splitSections(fmt)[0];
+  const out: DateToken[] = [];
+  for (let i = 0; i < src.length; ) {
+    const ch = src[i];
+    if (ch === '"') {
+      const end = src.indexOf('"', i + 1);
+      out.push({ kind: 'literal', text: src.slice(i + 1, end < 0 ? src.length : end) });
+      i = end < 0 ? src.length : end + 1;
+    } else if (ch === '\\') {
+      out.push({ kind: 'literal', text: src[i + 1] ?? '' });
+      i += 2;
+    } else if (ch === '_' || ch === '*') {
+      i += 2;
+    } else if (ch === '[') {
+      const end = src.indexOf(']', i);
+      i = end < 0 ? src.length : end + 1;
+    } else if (/^AM\/PM/i.test(src.slice(i))) {
+      out.push({ kind: 'ampm', short: false });
+      i += 5;
+    } else if (/^A\/P/i.test(src.slice(i))) {
+      out.push({ kind: 'ampm', short: true });
+      i += 3;
+    } else if (/[ymdhs]/i.test(ch)) {
+      let j = i;
+      while (j < src.length && src[j].toLowerCase() === ch.toLowerCase()) j++;
+      out.push({ kind: ch.toLowerCase() as 'y' | 'm' | 'd' | 'h' | 's', len: j - i });
+      i = j;
+    } else if (ch === 'e' || ch === 'E') {
+      // Excel's `e` is the year in the current calendar; the Gregorian one here.
+      let j = i;
+      while (j < src.length && /e/i.test(src[j])) j++;
+      out.push({ kind: 'y', len: 4 });
+      i = j;
+    } else if (/[gG]/.test(ch)) {
+      i++;
     } else {
-      shape.month = 'short';
+      out.push({ kind: 'literal', text: ch });
+      i++;
     }
   }
-  if (time) {
-    shape.hour = '2-digit';
-    shape.minute = '2-digit';
-    if (/s/i.test(bare)) shape.second = '2-digit';
-  }
-  return shape;
+  return out;
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+function renderDate(date: Date, tokens: DateToken[]): string {
+  const twelveHour = tokens.some((tk) => tk.kind === 'ampm');
+  const hours = date.getUTCHours();
+  let out = '';
+  tokens.forEach((tk, idx) => {
+    switch (tk.kind) {
+      case 'literal':
+        out += tk.text;
+        break;
+      case 'y':
+        out += tk.len <= 2 ? pad2(date.getUTCFullYear() % 100) : String(date.getUTCFullYear());
+        break;
+      case 'm': {
+        // `m` beside an hour or a second is minutes, not a month.
+        const prev = tokens[idx - 1];
+        const next = tokens[idx + 1];
+        const beforeS = next?.kind === 'literal' && tokens[idx + 2]?.kind === 's';
+        const afterH = prev?.kind === 'literal' && tokens[idx - 2]?.kind === 'h';
+        if (tk.len <= 2 && (afterH || beforeS || prev?.kind === 'h' || next?.kind === 's')) {
+          out += tk.len === 1 ? String(date.getUTCMinutes()) : pad2(date.getUTCMinutes());
+          break;
+        }
+        const month = date.getUTCMonth() + 1;
+        if (tk.len === 1) out += String(month);
+        else if (tk.len === 2) out += pad2(month);
+        else if (tk.len === 3) out += monthName.short(date);
+        else if (tk.len === 4) out += monthName.long(date);
+        else out += monthName.long(date).charAt(0);
+        break;
+      }
+      case 'd': {
+        const day = date.getUTCDate();
+        if (tk.len === 1) out += String(day);
+        else if (tk.len === 2) out += pad2(day);
+        else if (tk.len === 3) out += weekdayName.short(date);
+        else out += weekdayName.long(date);
+        break;
+      }
+      case 'h': {
+        const h = twelveHour ? (hours % 12 || 12) : hours;
+        out += tk.len === 1 ? String(h) : pad2(h);
+        break;
+      }
+      case 's':
+        out += tk.len === 1 ? String(date.getUTCSeconds()) : pad2(date.getUTCSeconds());
+        break;
+      case 'ampm': {
+        const pm = hours >= 12;
+        out += tk.short ? (pm ? 'P' : 'A') : (pm ? 'PM' : 'AM');
+        break;
+      }
+    }
+  });
+  return out;
 }
 
 // One memoised formatter per distinct shape. `createFormatter` already tracks
 // the locale inside each closure, so the cache never needs clearing.
 const numberCache = new Map<string, (n: number) => string>();
-const dateCache = new Map<string, (d: Date | number) => string>();
 
 function numberFormatter(opts: Intl.NumberFormatOptions): (n: number) => string {
   const key = JSON.stringify(opts);
@@ -93,25 +201,28 @@ function numberFormatter(opts: Intl.NumberFormatOptions): (n: number) => string 
   return fmt;
 }
 
-function dateFormatter(opts: Intl.DateTimeFormatOptions): (d: Date | number) => string {
-  const key = JSON.stringify(opts);
-  let fmt = dateCache.get(key);
-  if (!fmt) {
-    fmt = createDateFormatter(opts);
-    dateCache.set(key, fmt);
-  }
-  return fmt;
-}
+const generalPlain = createFormatter({ maximumSignificantDigits: 11, useGrouping: false });
+const generalInt = createFormatter({ maximumFractionDigits: 0, useGrouping: false });
 
-/** Excel's `General`: no grouping, no forced decimals, real precision kept. */
-const general = createFormatter({ maximumFractionDigits: 10, useGrouping: false });
+/**
+ * Excel's `General`: eleven significant digits, an exponent below 1e-4 as
+ * Excel does, or once an integer would run past its precision. An integer in
+ * range keeps every digit: a market cap rounded to eleven reads as a different
+ * number. This text reaches the agent in a snippet, where `0` for 1e-12 is a
+ * wrong number, not a short one.
+ */
+function general(value: number): string {
+  const abs = Math.abs(value);
+  if (abs !== 0 && (abs < 1e-4 || abs >= 1e15)) return Number(value.toExponential(10)).toExponential();
+  return Number.isInteger(value) ? generalInt(value) : generalPlain(value);
+}
 
 interface NumberSection {
   prefix: string;
   suffix: string;
   percent: boolean;
   scientific: boolean;
-  /** A trailing comma divides by a thousand — `#,##0,,` reads in millions. */
+  /** A trailing comma divides by a thousand: `#,##0,,` reads in millions. */
   scale: number;
   grouping: boolean;
   minFrac: number;
@@ -219,6 +330,15 @@ function parseSection(src: string): NumberSection {
   };
 }
 
+/** A section chosen by a condition rather than by sign. Not implemented, and
+ *  picking by sign anyway prints the wrong section as if it were right. Excel
+ *  lets a colour lead the condition, as in `[Red][<0]0.0`, so the leading
+ *  bracket directives are stepped over before the condition is looked for. */
+const CONDITIONAL = /^(?:\[[^\]]*\])*\[[<>=]/;
+/** Elapsed time (`[h]`, `[mm]`, `[ss]`) and fractional seconds (`ss.0`), which
+ *  the date renderer has no tokens for and would print as zeros. */
+const UNSUPPORTED_TIME = /\[[hms]+\]|ss\.0/i;
+
 function renderSection(value: number, section: NumberSection): string {
   const opts: Intl.NumberFormatOptions = {
     style: section.percent ? 'percent' : 'decimal',
@@ -233,7 +353,7 @@ function renderSection(value: number, section: NumberSection): string {
 
 /**
  * A number under its format code. Excel picks the section by sign and, having
- * picked the negative one, formats the magnitude — which is why `#,##0;(#,##0)`
+ * picked the negative one, formats the magnitude, which is why `#,##0;(#,##0)`
  * shows `(1,240)` and not `(-1,240)`.
  */
 export function formatNumber(value: number, fmt: string | undefined | null): string {
@@ -241,6 +361,7 @@ export function formatNumber(value: number, fmt: string | undefined | null): str
   if (!fmt || fmt === 'General' || fmt === '@') return general(value);
   try {
     const sections = splitSections(fmt);
+    if (sections.some((s) => CONDITIONAL.test(s))) return general(value);
     let src = sections[0];
     let picked = 0;
     let n = value;
@@ -259,7 +380,7 @@ export function formatNumber(value: number, fmt: string | undefined | null): str
     const section = parseSection(src);
     if (section.hasDigits) return renderSection(n, section);
     // A negative or zero section written as a bare literal is Excel's idiom for
-    // "print this instead" — `#,##0;(#,##0);"-"` puts a dash on zero, and an
+    // "print this instead": `#,##0;(#,##0);"-"` puts a dash on zero, and an
     // empty one prints nothing. A *first* section with no digits is far more
     // likely to be a code this reader misread, so that one falls back to raw.
     return picked > 0 ? section.prefix + section.suffix : general(value);
@@ -268,18 +389,29 @@ export function formatNumber(value: number, fmt: string | undefined | null): str
   }
 }
 
+const tokenCache = new Map<string, DateToken[]>();
+
 export function formatDate(date: Date, fmt: string | undefined | null): string {
   if (Number.isNaN(date.getTime())) return '';
-  return dateFormatter(dateShape(fmt ?? 'yyyy-mm-dd'))(date);
+  const code = fmt && !UNSUPPORTED_TIME.test(fmt) ? fmt : 'yyyy-mm-dd';
+  let tokens = tokenCache.get(code);
+  if (!tokens) {
+    tokens = tokenizeDate(code);
+    tokenCache.set(code, tokens);
+  }
+  return renderDate(date, tokens);
 }
 
 /** What a cell shows, given its value and its number format. */
-export function formatCellValue(value: ExcelScalar, fmt?: string | null): string {
+export function formatCellValue(value: ExcelScalar, fmt?: string | null, system?: DateSystem): string {
   if (value === null || value === undefined) return '';
   if (value instanceof Date) return formatDate(value, fmt);
   if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
   if (typeof value === 'number') {
-    return isDateFormat(fmt) ? formatDate(excelSerialToDate(value), fmt) : formatNumber(value, fmt);
+    // A serial under an elapsed-time code is a duration; a date for it is a
+    // fabrication, so the raw serial stands.
+    if (isDateFormat(fmt) && UNSUPPORTED_TIME.test(fmt!)) return general(value);
+    return isDateFormat(fmt) ? formatDate(excelSerialToDate(value, system), fmt) : formatNumber(value, fmt);
   }
   return String(value);
 }

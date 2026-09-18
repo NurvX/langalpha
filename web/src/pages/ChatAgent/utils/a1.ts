@@ -1,11 +1,8 @@
 /**
- * A1 addressing — the vocabulary the grid, the formula bar and the
- * `#Model!B4:D9` locator all speak, so a range the user selects and a link the
- * agent writes back are the same string read twice.
- *
- * Pure string/number math with no imports on purpose: the composer pulls
- * `countLocatorCells` out of here for the summary line it writes on send, and
- * that path must not drag a viewer into the eager bundle.
+ * A1 addressing, the vocabulary the grid, the formula bar, the composer and
+ * the `#Model!B4:D9` locator all speak, so a range the user selects and a link
+ * the agent writes back are the same string read twice. The grammar is written
+ * here once: precedent scanning and fragment reading build on these sources.
  */
 
 /** 1-based on both axes, the way Excel addresses its own cells. */
@@ -28,7 +25,7 @@ export interface Locator {
   box: CellBox;
 }
 
-/** XFD — the last column a workbook can hold. */
+/** XFD, the last column a workbook can hold. */
 export const MAX_COL = 16384;
 export const MAX_ROW = 1048576;
 
@@ -53,12 +50,21 @@ export function columnIndex(name: string): number {
   return n <= MAX_COL ? n : 0;
 }
 
-const CELL_SOURCE = '\\$?([A-Za-z]{1,3})\\$?([1-9]\\d{0,6})';
+/** One cell address, absolute markers allowed, as a regex source with no groups. */
+export const CELL_SOURCE = '\\$?[A-Za-z]{1,3}\\$?[1-9]\\d{0,6}';
+/** A sheet qualifier as Excel writes it: bare identifier, or quoted with doubled apostrophes. */
+export const SHEET_SOURCE = "'(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*";
+
 const CELL_RE = new RegExp(`^${CELL_SOURCE}$`);
-const RANGE_RE = new RegExp(`^${CELL_SOURCE}(?::${CELL_SOURCE})?$`);
+const RANGE_RE = new RegExp(`^(${CELL_SOURCE})(?::(${CELL_SOURCE}))?$`);
 // Excel's own spelling for whole columns and whole rows: `B:D`, `4:9`.
 const COLS_RE = /^\$?([A-Za-z]{1,3}):\$?([A-Za-z]{1,3})$/;
 const ROWS_RE = /^\$?([1-9]\d{0,6}):\$?([1-9]\d{0,6})$/;
+
+/** `'Bob''s'` back to `Bob's`; a bare name comes back as it was. */
+export function unquoteSheet(sheet: string): string {
+  return sheet.startsWith("'") ? sheet.slice(1, -1).replace(/''/g, "'") : sheet;
+}
 
 /** A box that runs the full height of the sheet is a column selection. */
 export function isWholeColumns(box: CellBox): boolean {
@@ -70,13 +76,19 @@ export function isWholeRows(box: CellBox): boolean {
   return box.left === 1 && box.right === MAX_COL;
 }
 
-/** `B7`, `$B$7` — absolute markers are dropped, a viewer has nothing to fill down. */
-export function parseCellRef(text: string): CellRef | null {
-  const m = CELL_RE.exec(text.trim());
-  if (!m) return null;
-  const col = columnIndex(m[1]);
-  const row = Number(m[2]);
+/** A cell the grammar already accepted, split into its coordinates. */
+function cellOf(text: string): CellRef | null {
+  const split = /^([A-Za-z]+)(\d+)$/.exec(text.replace(/\$/g, ''));
+  if (!split) return null;
+  const col = columnIndex(split[1]);
+  const row = Number(split[2]);
   return col && row <= MAX_ROW ? { row, col } : null;
+}
+
+/** `B7`, `$B$7`; absolute markers are dropped, a viewer has nothing to fill down. */
+export function parseCellRef(text: string): CellRef | null {
+  const trimmed = text.trim();
+  return CELL_RE.test(trimmed) ? cellOf(trimmed) : null;
 }
 
 export function formatCellRef(ref: CellRef): string {
@@ -119,10 +131,9 @@ export function parseRange(text: string): CellBox | null {
   }
   const m = RANGE_RE.exec(trimmed);
   if (!m) return null;
-  const a = { row: Number(m[2]), col: columnIndex(m[1]) };
-  const b = m[3] ? { row: Number(m[4]), col: columnIndex(m[3]) } : a;
-  if (!a.col || !b.col || a.row > MAX_ROW || b.row > MAX_ROW) return null;
-  return boxOf(a, b);
+  const a = cellOf(m[1]);
+  const b = m[2] ? cellOf(m[2]) : a;
+  return a && b ? boxOf(a, b) : null;
 }
 
 /** A single cell collapses to one address, the way the name box writes it;
@@ -135,7 +146,9 @@ export function formatRange(box: CellBox): string {
   return `${tl}:${formatCellRef({ row: box.bottom, col: box.right })}`;
 }
 
-// A quoted sheet name doubles its own apostrophes, so `Bob's` is `'Bob''s'`.
+// The qualifier is read loosely here (any run without `!`, `[` or `]`), since
+// a link may name a sheet Excel itself would have quoted; `parseRange` is the
+// strict half.
 const LOCATOR_RE = /^(?:('(?:[^']|'')+'|[^'![\]]+)!)?([^!]+)$/;
 
 /** `Model!B4:D9`, `'My Sheet'!B7`, `B7`. */
@@ -144,13 +157,12 @@ export function parseLocator(text: string): Locator | null {
   if (!m) return null;
   const box = parseRange(m[2]);
   if (!box) return null;
-  const raw = m[1];
-  if (!raw) return { box };
-  const sheet = raw.startsWith("'") ? raw.slice(1, -1).replace(/''/g, "'") : raw;
+  if (!m[1]) return { box };
+  const sheet = unquoteSheet(m[1]);
   return sheet ? { sheet, box } : { box };
 }
 
-/** Bare only when Excel itself would leave it bare — a name that could be read
+/** Bare only when Excel itself would leave it bare: a name that could be read
  *  as a cell address (a sheet called `A1`) has to be quoted or it is one. */
 function needsQuotes(sheet: string): boolean {
   return !/^[A-Za-z_][A-Za-z0-9_.]*$/.test(sheet) || CELL_RE.test(sheet);
@@ -159,12 +171,6 @@ function needsQuotes(sheet: string): boolean {
 export function formatLocator(sheet: string, box: CellBox): string {
   const name = needsQuotes(sheet) ? `'${sheet.replace(/'/g, "''")}'` : sheet;
   return `${name}!${formatRange(box)}`;
-}
-
-/** How many cells a locator names; 0 when it names nothing readable. */
-export function countLocatorCells(locator: string): number {
-  const parsed = parseLocator(locator);
-  return parsed ? boxCells(parsed.box) : 0;
 }
 
 /**

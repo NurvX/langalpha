@@ -4,7 +4,6 @@ import {
   boxOf,
   columnIndex,
   columnName,
-  countLocatorCells,
   describeLocatorSize,
   formatLocator,
   formatRange,
@@ -113,13 +112,6 @@ describe('locators', () => {
   it('round-trips a quoted name', () => {
     const box = { top: 7, left: 2, bottom: 7, right: 2 };
     expect(parseLocator(formatLocator("Bob's Model", box))).toEqual({ sheet: "Bob's Model", box });
-  });
-
-  it('counts the cells a locator names, and nothing for one it cannot read', () => {
-    expect(countLocatorCells('Model!B4:D9')).toBe(18);
-    expect(countLocatorCells('B7')).toBe(1);
-    expect(countLocatorCells('valuation')).toBe(0);
-    expect(countLocatorCells('')).toBe(0);
   });
 
   it('describes a whole axis by name, since its cell count is the sheet capacity', () => {

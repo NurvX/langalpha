@@ -1,36 +1,32 @@
 /**
  * The block a selected range hands to the composer: displayed values as TSV,
  * then the formulas behind them, so the agent reads both what the model says
- * and how it got there.
+ * and how it got there. Agent-facing text, so it stays English.
  */
-import { boxCells, columnName, formatLocator, formatRange, type CellBox } from './a1';
-
-export type WholeAxis = 'rows' | 'cols';
-
-export interface SnippetCell {
-  /** What the grid shows, already formatted. */
-  text: string;
-  /** Present only on a formula cell. */
-  formula?: string;
-}
-
-export interface RangeSnippet {
-  snippet: string;
-  /** Cells actually written out. */
-  cellCount: number;
-  /** The box that was written, cut down from the selection when it was too big. */
-  box: CellBox;
-  truncated: boolean;
-}
+import {
+  boxCells,
+  columnName,
+  formatLocator,
+  formatRange,
+  isWholeColumns,
+  type CellBox,
+} from '@/pages/ChatAgent/utils/a1';
+import type { GridCell, SheetData } from './parse';
 
 /** A composer pill is context, not a payload: past this the range is a file. */
-export const MAX_SNIPPET_CELLS = 200;
+const MAX_SNIPPET_CELLS = 200;
 
-/** Whole rows are kept whole — a half row of TSV has no readable shape. */
-export function clampBox(box: CellBox, maxCells = MAX_SNIPPET_CELLS): CellBox {
-  if (boxCells(box) <= maxCells) return box;
-  const width = Math.min(box.right - box.left + 1, maxCells);
-  const rows = Math.max(1, Math.floor(maxCells / width));
+const NO_CELL: Pick<GridCell, 'text' | 'formula'> = { text: '' };
+
+function cellAt(sheet: SheetData, row: number, col: number): Pick<GridCell, 'text' | 'formula'> {
+  return sheet.rows[row - 1]?.[col - 1] ?? NO_CELL;
+}
+
+/** Whole rows are kept whole; a half row of TSV has no readable shape. */
+function clampBox(box: CellBox): CellBox {
+  if (boxCells(box) <= MAX_SNIPPET_CELLS) return box;
+  const width = Math.min(box.right - box.left + 1, MAX_SNIPPET_CELLS);
+  const rows = Math.max(1, Math.floor(MAX_SNIPPET_CELLS / width));
   return {
     top: box.top,
     left: box.left,
@@ -39,42 +35,73 @@ export function clampBox(box: CellBox, maxCells = MAX_SNIPPET_CELLS): CellBox {
   };
 }
 
-/** A TSV field holds no tab and no newline, or the grid it describes collapses. */
-function flatten(text: string): string {
-  return text.replace(/[\t\r\n]+/g, ' ').trim();
+/**
+ * The part of a box the preview parsed, or null when none of it was. Past the
+ * parsed extent every cell reads blank, so a snippet there would be empty rows
+ * under real addresses.
+ */
+export function withinSheet(box: CellBox, sheet: SheetData): CellBox | null {
+  const rows = sheet.rows.length;
+  const cols = sheet.colCount;
+  if (box.top > rows || box.left > cols) return null;
+  return { top: box.top, left: box.left, bottom: Math.min(box.bottom, rows), right: Math.min(box.right, cols) };
 }
 
-export function buildRangeSnippet(opts: {
-  sheet: string;
-  box: CellBox;
-  cellAt: (row: number, col: number) => SnippetCell;
-  maxCells?: number;
-}): RangeSnippet {
-  const { sheet, box, cellAt } = opts;
-  const max = opts.maxCells ?? MAX_SNIPPET_CELLS;
-  const kept = clampBox(box, max);
-  const truncated = boxCells(kept) < boxCells(box);
+/** A field is one cell's worth of text, not a document pasted into one. */
+const MAX_FIELD_CHARS = 300;
+/** The whole block, in characters. Cells are small on average and huge in the
+ *  tail, so the cell cap alone does not bound what reaches the message. */
+const MAX_SNIPPET_CHARS = 32 * 1024;
 
-  const values: string[] = [];
-  const formulas: string[] = [];
-  for (let row = kept.top; row <= kept.bottom; row++) {
-    const line: string[] = [];
-    for (let col = kept.left; col <= kept.right; col++) {
-      const cell = cellAt(row, col);
-      line.push(flatten(cell.text));
-      if (cell.formula) formulas.push(`${columnName(col)}${row}\t${flatten(cell.formula)}`);
+/** A TSV field holds no tab and no newline, or the grid it describes collapses. */
+function field(text: string): string {
+  const flat = text.replace(/[\t\r\n]+/g, ' ').trim();
+  return flat.length > MAX_FIELD_CHARS ? `${flat.slice(0, MAX_FIELD_CHARS)}…` : flat;
+}
+
+function extentNote(sheet: SheetData): string {
+  return `rows 1-${sheet.rows.length}, columns A-${columnName(sheet.colCount)}`;
+}
+
+export function buildRangeSnippet(sheet: SheetData, box: CellBox): string {
+  const full = formatLocator(sheet.name, box);
+  const inside = withinSheet(box, sheet);
+  if (!inside) return `${full} · no cells inside the parsed sheet (${extentNote(sheet)})`;
+  const clipped = boxCells(inside) < boxCells(box);
+  const kept = clampBox(inside);
+
+  // Rows and columns come off the bottom and the right until the block fits;
+  // the head names what is shown either way.
+  const assemble = (rows: number, cols: number): string => {
+    const shown: CellBox = { top: kept.top, left: kept.left, bottom: kept.top + rows - 1, right: kept.left + cols - 1 };
+    const values: string[] = [];
+    const formulas: string[] = [];
+    for (let row = shown.top; row <= shown.bottom; row++) {
+      const line: string[] = [];
+      for (let col = shown.left; col <= shown.right; col++) {
+        const cell = cellAt(sheet, row, col);
+        line.push(field(cell.text));
+        if (cell.formula) formulas.push(`${columnName(col)}${row}\t${field(cell.formula)}`);
+      }
+      values.push(line.join('\t'));
     }
-    values.push(line.join('\t'));
+    let head = `${full} · values (TSV)`;
+    if (clipped) head += `, ${formatRange(inside)} is inside the parsed sheet (${extentNote(sheet)})`;
+    if (boxCells(shown) < boxCells(inside)) head += `, first ${boxCells(shown)} of ${boxCells(inside)} cells (${formatRange(shown)})`;
+    const blocks = [head, values.join('\n')];
+    if (formulas.length) blocks.push('', `${formatLocator(sheet.name, shown)} · formulas`, formulas.join('\n'));
+    return blocks.join('\n');
+  };
+
+  let rows = kept.bottom - kept.top + 1;
+  let cols = kept.right - kept.left + 1;
+  let out = assemble(rows, cols);
+  while (out.length > MAX_SNIPPET_CHARS && (rows > 1 || cols > 1)) {
+    if (rows > 1) rows--;
+    else cols--;
+    out = assemble(rows, cols);
   }
-
-  const full = formatLocator(sheet, box);
-  const head = truncated
-    ? `${full} · values (TSV), first ${boxCells(kept)} of ${boxCells(box)} cells (${formatRange(kept)})`
-    : `${full} · values (TSV)`;
-  const blocks = [head, values.join('\n')];
-  if (formulas.length) blocks.push('', `${formatLocator(sheet, kept)} · formulas`, formulas.join('\n'));
-
-  return { snippet: blocks.join('\n'), cellCount: boxCells(kept), box: kept, truncated };
+  return out;
 }
 
 /** Headers are quoted in the hint, and the hint is one line, so this is the cap. */
@@ -84,28 +111,23 @@ const MAX_HEADERS = 6;
  * The line a whole row or column hands to the composer. A column is a
  * thousand cells the agent can read itself; what it cannot know is which one
  * the user meant, so the hint names the axis, its header label, and how much
- * of it is filled — and nothing of what fills it.
+ * of it is filled, and nothing of what fills it. `box` is the locator's box:
+ * full-height for columns, full-width for rows.
  */
-export function buildWholeSnippet(opts: {
-  sheet: string;
-  /** The locator's box: full-height for columns, full-width for rows. */
-  box: CellBox;
-  axis: WholeAxis;
-  /** How far the sheet actually extends, which bounds the walk. */
-  extent: { rows: number; cols: number };
-  cellAt: (row: number, col: number) => SnippetCell;
-}): string {
-  const { sheet, box, axis, extent, cellAt } = opts;
-  const lines = axis === 'cols'
-    ? range(box.left, Math.min(box.right, extent.cols))
-    : range(box.top, Math.min(box.bottom, extent.rows));
-  const across = axis === 'cols' ? range(1, extent.rows) : range(1, extent.cols);
+export function buildWholeSnippet(sheet: SheetData, box: CellBox): string {
+  const cols = isWholeColumns(box);
+  const extentRows = sheet.rows.length;
+  const extentCols = sheet.colCount;
+  const lines = cols
+    ? range(box.left, Math.min(box.right, extentCols))
+    : range(box.top, Math.min(box.bottom, extentRows));
+  const across = cols ? range(1, extentRows) : range(1, extentCols);
 
   let values = 0;
   let formulas = 0;
   for (const line of lines) {
     for (const k of across) {
-      const cell = axis === 'cols' ? cellAt(k, line) : cellAt(line, k);
+      const cell = cols ? cellAt(sheet, k, line) : cellAt(sheet, line, k);
       if (cell.formula) formulas++;
       else if (cell.text) values++;
     }
@@ -113,19 +135,19 @@ export function buildWholeSnippet(opts: {
 
   // The label a reader would use: row 1 of a column, column A of a row.
   const headers = lines
-    .map((line) => flatten(axis === 'cols' ? cellAt(1, line).text : cellAt(line, 1).text))
+    .map((line) => field(cols ? cellAt(sheet, 1, line).text : cellAt(sheet, line, 1).text))
     .filter(Boolean);
   const shown = headers.slice(0, MAX_HEADERS).map((h) => `"${h}"`);
   if (headers.length > MAX_HEADERS) shown.push('…');
 
-  const noun = axis === 'cols' ? 'column' : 'row';
+  const noun = cols ? 'column' : 'row';
   const name = lines.length === 1
-    ? `${noun} ${axis === 'cols' ? columnName(lines[0]) : lines[0]}`
+    ? `${noun} ${cols ? columnName(lines[0]) : lines[0]}`
     : `${noun}s ${formatRange(box)}`;
-  const span = axis === 'cols'
-    ? `rows 1-${extent.rows}`
-    : `columns A-${columnName(extent.cols)}`;
-  const parts = [`${formatLocator(sheet, box)} · ${name}`];
+  const span = cols
+    ? `rows 1-${extentRows}`
+    : `columns A-${columnName(extentCols)}`;
+  const parts = [`${formatLocator(sheet.name, box)} · ${name}`];
   if (shown.length) parts.push(`header ${shown.join(', ')}`);
   parts.push(`${values} value${values !== 1 ? 's' : ''}, ${formulas} formula${formulas !== 1 ? 's' : ''} in ${span}`);
   return parts.join(' · ');
