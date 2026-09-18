@@ -321,8 +321,6 @@ export async function loadConversationHistory(
         if (event.metadata?.llm_model) {
           const llmModel = event.metadata.llm_model as string;
           rt.setThreadModels(prev => prev.includes(llmModel) ? prev : [...prev, llmModel]);
-          // History replays chronologically, so the last write wins = most recent query's model.
-          rt.setLastThreadModel(llmModel);
         }
         // The resolvers below settle the cards already on screen; this keeps
         // the same evidence for the interrupts still ahead of us.

@@ -190,6 +190,7 @@ export function ChatInputModelMenu({
   reasoningEfforts,
   dropdownDirection,
   containerRef,
+  disabled = false,
 }: {
   selectedModel: string | null;
   /** Supplies authored display names; a model without one gets a derived name. */
@@ -216,6 +217,10 @@ export function ChatInputModelMenu({
   dropdownDirection: 'up' | 'down';
   /** Mobile portals into the composer so the menu can't escape the sheet. */
   containerRef: RefObject<HTMLElement | null>;
+  /** Until the model list arrives every thread model reads as reachable, and a
+   *  pick is saved to the account, so an unreachable one would become every
+   *  composer's default. */
+  disabled?: boolean;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -236,9 +241,9 @@ export function ChatInputModelMenu({
 
   return (
     <DropdownMenu modal={false} open={menuOpen} onOpenChange={(open) => { setMenuOpen(open); if (!open) { setShowMoreModels(false); setExpanded(null); } }}>
-      <DropdownMenuTrigger asChild>
+      <DropdownMenuTrigger asChild disabled={disabled}>
         <button
-          className={`model-selector-trigger ${TRIGGER_CLASS} cursor-pointer transition-colors`}
+          className={`model-selector-trigger ${TRIGGER_CLASS} cursor-pointer transition-colors disabled:cursor-progress`}
           onClick={(e) => e.stopPropagation()}
           type="button"
           title="Select model"

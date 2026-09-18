@@ -286,7 +286,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     tokenUsage,
     threadId: currentThreadId,
     threadModels,
-    lastThreadModel,
     marketWatch,
     isShared: threadIsShared,
     insertNotification,
@@ -1706,7 +1705,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       fallbackSuggestion={fallbackSuggestion}
                       isLoading={isLoading}
                       inputModel={inputModel}
-                      lastThreadModel={lastThreadModel}
                       activePreferredModel={activePreferredModel}
                       onSwitchModel={handleSwitchModel}
                       onDismiss={clearFallbackSuggestion}
@@ -1790,7 +1788,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       files={workspaceFiles}
                       tokenUsage={tokenUsage}
                       onAction={handleAction}
-                      initialModel={lastThreadModel}
                       onModelChange={setInputModel}
                       threadModels={threadModels}
                       mode={isFlashMode ? 'fast' : 'ptc'}
