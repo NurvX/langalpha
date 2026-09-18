@@ -1,5 +1,6 @@
 import { Bot, HardDriveDownload, Shrink, Terminal } from 'lucide-react';
 import type { SlashCommand } from './chat-input.types';
+import type { ModelMetadataEntry } from '@/hooks/useFilteredModels';
 
 /** Return the appropriate icon for a slash command. */
 export function getSlashCommandIcon(cmd: SlashCommand, className: string) {
@@ -65,9 +66,12 @@ export function slashRank(item: SlashCommand, query: string): number {
   return (isPrefix ? 0 : 2) + (isSkill ? 1 : 0);
 }
 
-/** Derive a short display name from a model key string. */
-export function getModelDisplayName(key: string | null): string {
+/** Short display name for a model key: the manifest's authored name when the
+ *  metadata carries one, else one derived from the key. */
+export function getModelDisplayName(key: string | null, metadata?: Record<string, ModelMetadataEntry>): string {
   if (!key) return '';
+  const authored = metadata?.[key]?.display_name;
+  if (authored) return authored;
   let name = key;
   // Strip common provider prefixes
   for (const prefix of ['claude-', 'gpt-', 'chatgpt-', 'o1-', 'o3-', 'o4-']) {
