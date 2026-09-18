@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { renderWithProviders } from '@/test/utils';
 
 const wsStatus = { value: 'running' };
@@ -325,5 +325,67 @@ describe('FilePanel reference opens', () => {
     expect(toastSpy).toHaveBeenCalledWith(
       expect.objectContaining({ description: "Couldn't save notes.md", variant: 'destructive' }),
     );
+  });
+
+  // A folder accepted from chat arrives as a prop change, not a click, so the
+  // panel has to leave the open file itself. `targetDirectory` is stored with
+  // its trailing slash stripped (`computeAgentArtifactRouting`), and the header
+  // adds the slash back.
+  const openDocThenFolder = async ({ edit = false }: { edit?: boolean } = {}) => {
+    const onTargetDirHandled = vi.fn();
+    const panel = (extra: Record<string, unknown>) => (
+      <FilePanel
+        workspaceId="ws"
+        onClose={() => {}}
+        files={NAMESAKES}
+        onTargetDirHandled={onTargetDirHandled}
+        {...extra}
+      />
+    );
+    const { rerender } = renderWithProviders(panel({ targetFile: 'docs/index.md' }));
+    await screen.findByText('Index');
+    if (edit) {
+      fireEvent.click(screen.getByTitle('Edit file'));
+      fireEvent.change(await screen.findByTestId('editor'), { target: { value: '# Index\n\nEdited.' } });
+    }
+    onTargetDirHandled.mockClear();
+
+    rerender(panel({ targetFile: undefined, targetDirectory: 'docs' }));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    return { onTargetDirHandled };
+  };
+
+  const folderHeading = () => within(document.querySelector('.file-panel-header') as HTMLElement).queryByText('docs/');
+
+  it('a folder target opened while a file is on screen shows the folder', async () => {
+    // The render prefers `selectedFile` over `targetDirectory`, so a folder
+    // accepted while a file was open stayed hidden behind that file and the
+    // chat link read as dead until the reader pressed Back.
+    await openDocThenFolder();
+
+    expect(screen.queryByText('Index')).toBeNull();
+    expect(folderHeading()).toBeTruthy();
+  });
+
+  it('a folder target keeps the file when the reader declines to discard edits', async () => {
+    // Declining cannot simply return the way a click handler does: the prop
+    // has already changed, so a bare return stranded the target on the parent
+    // and that folder could never be opened again.
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const { onTargetDirHandled } = await openDocThenFolder({ edit: true });
+
+    expect(screen.getByTestId('editor').getAttribute('data-file')).toBe('docs/index.md');
+    expect(folderHeading()).toBeNull();
+    expect(onTargetDirHandled).toHaveBeenCalled();
+  });
+
+  it('a folder target discards edits when the reader accepts', async () => {
+    // Accepting has to actually leave the file, or the panel asked the reader
+    // to give up an edit and then handed back the same editor holding it.
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await openDocThenFolder({ edit: true });
+
+    expect(screen.queryByTestId('editor')).toBeNull();
+    expect(folderHeading()).toBeTruthy();
   });
 });

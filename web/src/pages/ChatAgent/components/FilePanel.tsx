@@ -415,8 +415,18 @@ function FilePanel({
   // A folder opened from chat supersedes a reference still being searched for.
   useEffect(() => {
     if (!targetDirectory) return;
+    // The body below prefers `selectedFile` over `targetDirectory`, so a folder
+    // accepted while a file is open stayed behind it and the click read as dead
+    // until the reader pressed Back. Leaving the file is what puts the folder on
+    // screen. Declining cannot simply return the way the click handlers do: the
+    // prop has already changed, so the target has to go back to its owner.
+    if (hasUnsavedChanges && !window.confirm(t('filePanel.discardUnsaved'))) {
+      onTargetDirHandled?.();
+      return;
+    }
     openSeqRef.current += 1;
     dropLanding();
+    leaveOpenFile();
   }, [targetDirectory]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Leave edit mode without saving, so the next file never opens in the last one's editor. */
@@ -528,8 +538,10 @@ function FilePanel({
     }, 'file', () => { setFileContent(null); setFileMime(null); });
   };
 
-  /** Leave any open file and show the tree filtered to a reference's name. */
-  const landOnSearch = (ref: string, matches: string[]) => {
+  /** Close the viewer, so whatever comes next is not rendered behind the last
+   *  file. The revoke is load-bearing: an image body is a blob URL this panel
+   *  minted, and dropping the reference without it leaks the bytes. */
+  const leaveOpenFile = () => {
     if (fileMime === 'image' && fileContent) URL.revokeObjectURL(fileContent);
     setSelectedFile(null);
     setFileContent(null);
@@ -539,6 +551,11 @@ function FilePanel({
     setFileLoading(false);
     resetEdit();
     setShowSettings(false);
+  };
+
+  /** Leave any open file and show the tree filtered to a reference's name. */
+  const landOnSearch = (ref: string, matches: string[]) => {
+    leaveOpenFile();
     setFilterType('All');
     setSearchQuery(basename(ref));
     setExtraMatches(matches);
