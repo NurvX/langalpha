@@ -21,9 +21,14 @@ export type RightPanelTab = 'files' | 'memory' | 'memo' | 'sources' | 'status';
  * former parallel `targetFile`/`…Dir`/`…MemoryKey`/`…MemoKey`/`…Sources`/`…Status`
  * props. The active tab, tab visibility, and snap-back all derive from `.kind`,
  * so exactly one target can be set at a time (no sibling-nulling dance).
+ *
+ * `dir` outlives the click that set it: it is the tree's active filter, shown
+ * in the header and cleared by the back button. So it cannot also say that a
+ * request happened, and `seq` does, counting the clicks. The same folder asked
+ * for twice is two requests carrying one directory.
  */
 export type PanelTarget =
-  | { kind: 'file'; path?: string | null; dir?: string | null; location?: FileLocation | null }
+  | { kind: 'file'; path?: string | null; dir?: string | null; location?: FileLocation | null; seq?: number }
   | { kind: 'memory'; key: string; tier: MemoryTier }
   | { kind: 'memo'; key: string }
   | { kind: 'sources'; messageId: string }
@@ -101,6 +106,7 @@ export default function RightPanel({
   const kind = panelTarget?.kind;
   const targetFile = panelTarget?.kind === 'file' ? panelTarget.path ?? null : null;
   const targetDirectory = panelTarget?.kind === 'file' ? panelTarget.dir ?? null : null;
+  const targetDirSeq = panelTarget?.kind === 'file' ? panelTarget.seq ?? null : null;
   const targetLocation = panelTarget?.kind === 'file' ? panelTarget.location ?? null : null;
   const targetMemoryKey = panelTarget?.kind === 'memory' ? panelTarget.key : null;
   const targetMemoryTier = panelTarget?.kind === 'memory' ? panelTarget.tier : null;
@@ -190,6 +196,7 @@ export default function RightPanel({
               targetLocation={targetLocation}
               onTargetFileHandled={onTargetFileHandled}
               targetDirectory={targetDirectory}
+              targetDirSeq={targetDirSeq}
               onTargetDirHandled={onTargetDirHandled}
               onOpenFile={onOpenFile}
               getRecentWritePaths={getRecentWritePaths}

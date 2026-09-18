@@ -388,4 +388,58 @@ describe('FilePanel reference opens', () => {
     expect(screen.queryByTestId('editor')).toBeNull();
     expect(folderHeading()).toBeTruthy();
   });
+
+  // The folder is the tree's filter for as long as it is on screen, so it is
+  // still the prop's value when the next click arrives. Only the count says a
+  // click happened.
+  const folderPanel = (extra: Record<string, unknown>) => (
+    <FilePanel workspaceId="ws" onClose={() => {}} files={NAMESAKES} {...extra} />
+  );
+
+  const openFileInsideFolder = async () => {
+    const { rerender } = renderWithProviders(folderPanel({ targetDirectory: 'docs', targetDirSeq: 1 }));
+    rerender(folderPanel({ targetDirectory: 'docs', targetDirSeq: 1, targetFile: 'docs/index.md' }));
+    await screen.findByText('Index');
+    return rerender;
+  };
+
+  it('shows the folder again when the same one is asked for twice', async () => {
+    // The reader opened a file from `docs/` and then clicked `docs/` again.
+    // Keyed on the folder, the prop was byte-identical and nothing ran, so the
+    // file stayed on screen and the second click read as dead.
+    const rerender = await openFileInsideFolder();
+
+    rerender(folderPanel({ targetDirectory: 'docs', targetDirSeq: 2 }));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+
+    expect(screen.queryByText('Index')).toBeNull();
+    expect(folderHeading()).toBeTruthy();
+  });
+
+  it('leaves the open file alone while the same request is still in effect', async () => {
+    // The control for the count: a re-render carrying the request already
+    // handled must not pull the reader out of the file they just opened.
+    const rerender = await openFileInsideFolder();
+
+    rerender(folderPanel({ targetDirectory: 'docs', targetDirSeq: 1 }));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+
+    expect(screen.getByText('Index')).toBeTruthy();
+  });
+
+  it('opens the tree at the workspace root a `/home/workspace/` link names', async () => {
+    // The router returns `''` for the root, which is a folder like any other.
+    // Read as "no folder was asked for", it left the open file on screen and
+    // the link did nothing at all.
+    const { rerender } = renderWithProviders(folderPanel({ targetFile: 'docs/index.md' }));
+    await screen.findByText('Index');
+
+    rerender(folderPanel({ targetFile: undefined, targetDirectory: '', targetDirSeq: 1 }));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+
+    expect(screen.queryByText('Index')).toBeNull();
+    // The root filters nothing, so the header is the whole workspace, not a folder.
+    expect(within(document.querySelector('.file-panel-header') as HTMLElement)
+      .getByText('Workspace Files')).toBeTruthy();
+  });
 });

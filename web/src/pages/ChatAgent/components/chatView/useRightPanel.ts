@@ -56,6 +56,9 @@ export function useRightPanel({
   // panel close by the effect below; file/memory/memo self-clear once the child
   // panel consumes the pre-select (the handled callbacks).
   const [panelTarget, setPanelTarget] = useState<PanelTarget | null>(null);
+  // Counts folder requests, so a second click on the folder already filtering
+  // the tree is still a request. See `PanelTarget`.
+  const artifactSeqRef = useRef(0);
   // Stable handlers — these land in useEffect deps in MemoryPanel/MemoPanel/
   // FilePanel. Inline arrows would create a new identity on every ChatView
   // render, re-triggering those effects on every streaming chunk (the
@@ -252,7 +255,11 @@ export function useRightPanel({
     } else if (r.targetMemoKey != null) {
       target = { kind: 'memo', key: r.targetMemoKey };
     } else if (r.targetDirectory != null) {
-      target = { kind: 'file', dir: r.targetDirectory || null };
+      // `''` is the workspace root, which the router returns for `/home/workspace/`
+      // and `./`. Folding it to null said "no directory was asked for", and with a
+      // file open neither panel effect ran, so the link read as dead. The counter
+      // is what makes the same folder asked for twice arrive twice.
+      target = { kind: 'file', dir: r.targetDirectory, seq: ++artifactSeqRef.current };
     } else {
       target = { kind: 'file', path: r.targetFile, location: location ?? null };
     }

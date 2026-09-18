@@ -60,6 +60,10 @@ interface FilePanelProps {
   targetLocation?: FileLocation | null;
   onTargetFileHandled?: () => void;
   targetDirectory?: string | null;
+  /** Which folder request `targetDirectory` carries. It stays on screen as the
+   *  tree's filter after the click that set it, so the string alone cannot say
+   *  a new request arrived; the same folder asked for twice bumps this. */
+  targetDirSeq?: number | null;
   onTargetDirHandled?: () => void;
   /** Opens a reference to another workspace (a `__wsref__` link inside a viewed file). */
   onOpenFile?: OpenFileHandler | null;
@@ -97,6 +101,7 @@ function FilePanel({
   targetLocation = null,
   onTargetFileHandled,
   targetDirectory,
+  targetDirSeq = null,
   onTargetDirHandled,
   onOpenFile = null,
   getRecentWritePaths = null,
@@ -415,7 +420,9 @@ function FilePanel({
 
   // A folder opened from chat supersedes a reference still being searched for.
   useEffect(() => {
-    if (!targetDirectory) return;
+    // `''` is the workspace root, a folder like any other here, so the test is
+    // for absence rather than emptiness.
+    if (targetDirectory == null) return;
     // The body below prefers `selectedFile` over `targetDirectory`, so a folder
     // accepted while a file is open stayed behind it and the click read as dead
     // until the reader pressed Back. Leaving the file is what puts the folder on
@@ -428,7 +435,12 @@ function FilePanel({
     openSeqRef.current += 1;
     dropLanding();
     leaveOpenFile();
-  }, [targetDirectory]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Keyed on the request, not on the folder: `targetDirectory` outlives the
+    // click as the tree's filter, so a reader who opened a file from `data/` and
+    // then clicked `data/` again changed nothing here, and the file stayed on
+    // screen. `targetDirectory` stays in the deps for a caller that sets no
+    // sequence, which is then the one-shot behaviour this had before.
+  }, [targetDirSeq, targetDirectory]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Leave edit mode without saving, so the next file never opens in the last one's editor. */
   const resetEdit = () => {
