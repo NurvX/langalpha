@@ -190,7 +190,14 @@ export function useFileFocus({
       const beyond = loc.line > lineCount && truncated;
       const missing = loc.line > lineCount;
       const unplaced = !missing && viewer === 'markdown' && !!result && !result.found;
-      chip = { kind: 'line', line: loc.line, lineEnd: loc.lineEnd, missing: missing || unplaced, beyond, unplaced, near: !missing && !!result?.near };
+      // The chip names the range the highlight covers, so the end it advertises
+      // is the last line there is. `#L19990-L20020` against a preview that stops
+      // at 20000, or against a file that simply ends first, claimed twenty lines
+      // nobody was shown while the highlight quietly stopped short. A range that
+      // clamps back to its own start is one line, and says so.
+      const end = loc.lineEnd != null && lineCount > 0 ? Math.min(loc.lineEnd, lineCount) : loc.lineEnd;
+      const lineEnd = end != null && end > loc.line ? end : undefined;
+      chip = { kind: 'line', line: loc.line, lineEnd, missing: missing || unplaced, beyond, unplaced, near: !missing && !!result?.near };
       if (!missing && viewer === 'code') lineRange = [loc.line, Math.min(loc.lineEnd ?? loc.line, lineCount)];
     } else if (loc.page && viewer === 'pdf') {
       chip = { kind: 'page', page: loc.page, missing: pageCount != null && loc.page > pageCount };

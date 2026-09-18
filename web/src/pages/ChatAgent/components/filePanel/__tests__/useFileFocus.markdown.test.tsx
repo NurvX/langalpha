@@ -87,4 +87,20 @@ describe('useFileFocus on a markdown file', () => {
     await waitFor(() => expect(highlighted(container)).toEqual(['H1']));
     await waitFor(() => expect(chip).toMatchObject({ kind: 'line', line: 6, near: true }));
   });
+
+  it('ends the range it advertises at the last line there is', () => {
+    // `#L2-L999` against a six-line file: the highlight was always going to stop
+    // at line 6, and the chip used to say 999 anyway.
+    let chip: unknown = null;
+    render(<Viewer location={{ line: 2, lineEnd: 999 }} onChip={(c) => { chip = c; }} />);
+    expect(chip).toMatchObject({ kind: 'line', line: 2, lineEnd: 6, missing: false });
+  });
+
+  it('drops a range whose end clamps back to its own start', () => {
+    // One line is not a range, so the chip names the line rather than `6-6`.
+    let chip: unknown = null;
+    render(<Viewer location={{ line: 6, lineEnd: 999 }} onChip={(c) => { chip = c; }} />);
+    expect(chip).toMatchObject({ kind: 'line', line: 6 });
+    expect((chip as { lineEnd?: number }).lineEnd).toBeUndefined();
+  });
 });
