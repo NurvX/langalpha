@@ -398,15 +398,24 @@ export function useChatScroll({
 
     let lastTop = c.scrollTop;
     const handleScroll = () => {
-      // The band is how a *user* scroll re-joins the stream. An anchor pin's own
-      // scrolls must not get to answer it: pinToMessage already decided whether
+      // The band is how a *user* scroll re-joins the stream. A pin that chose a
+      // position must not get to answer it: pinToMessage already decided whether
       // that landing is the bottom, knowing the one thing a position cannot tell
       // it, which turn is the newest. A request past the maximum clamps, so a
       // landing on an earlier turn near the end sits exactly at the maximum and
       // reads as the bottom by any positional test. Letting it re-arm the follow
       // is what walks the reader off the turn they picked once the settle window
       // lets go.
-      const pinOwnsPosition = programmaticScrollRef.current && pinTargetRef.current?.mode === 'anchor';
+      //
+      // A reveal is the same promise about a smaller move. Opening a deck under
+      // the streaming turn scrolls just far enough to show the cards, which on a
+      // short unfold lands inside the band, and the reader who had paused the
+      // follow was counted as rejoining it. Nothing scrolls again after that, so
+      // the answer went stale on the ref and the hard cap released the pin into
+      // a jump to the bottom, seconds after the click and with no cause on
+      // screen.
+      const pinMode = pinTargetRef.current?.mode;
+      const pinOwnsPosition = programmaticScrollRef.current && (pinMode === 'anchor' || pinMode === 'reveal');
       if (!pinOwnsPosition) {
         const metrics = { scrollTop: c.scrollTop, scrollHeight: c.scrollHeight, clientHeight: c.clientHeight };
         // The band answers a downward scroll. An upward one is a reader
