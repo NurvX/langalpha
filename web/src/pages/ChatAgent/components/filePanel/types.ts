@@ -25,6 +25,13 @@ export interface ContextPayload {
   path?: string;
   snippet?: string;
   label?: string;
+  /**
+   * Where inside the file the snippet came from, when lines are the wrong unit
+   * — a spreadsheet range writes `Model!B4:D9`. Fragment syntax without the
+   * leading `#`, so the composer can write `@path#locator` and the link it
+   * makes reopens exactly what was referenced.
+   */
+  locator?: string;
   lineStart?: number | null;
   lineEnd?: number | null;
   lineCount?: number;

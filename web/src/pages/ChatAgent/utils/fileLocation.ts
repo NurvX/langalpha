@@ -1,12 +1,19 @@
 /**
  * Where inside a file a reference points: `report.md#valuation`,
- * `model.py#L40-L55`, `model.py:42`, `filing.pdf#page=12`.
+ * `model.py#L40-L55`, `model.py:42`, `filing.pdf#page=12`,
+ * `model.xlsx#Model!B4:D9`.
  */
 export interface FileLocation {
   line?: number;
   lineEnd?: number;
   page?: number;
   anchor?: string;
+  /**
+   * A spreadsheet cell or range, sheet-qualified when the reference named a
+   * sheet. Additive: a fragment that reads as a cell keeps its `anchor` too, so
+   * a heading called `B7` in a markdown file resolves exactly as it always did.
+   */
+  cell?: string;
 }
 
 /**
@@ -26,6 +33,13 @@ export type OpenFileHandler = (
 // Uppercase only, as GitHub writes it: `#l2` is a heading slug ("L2"), not line 2.
 const LINE_FRAGMENT_RE = /^L(\d+)(?:-L?(\d+))?$/;
 const PAGE_FRAGMENT_RE = /(?:^|&)page=(\d+)(?:&|$)/i;
+// A1 with an optional sheet qualifier: `B7`, `B4:D9`, `Model!B7`, `'My Sheet'!B4:D9`.
+// Uppercase columns only, for the same reason `#l2` stays a heading slug: a
+// lowercase run is prose far more often than it is a column. `L42` never reaches
+// this test anyway -- the line fragment above claims it first.
+const CELL = "\\$?[A-Z]{1,3}\\$?[1-9]\\d{0,6}";
+const CELL_FRAGMENT_RE = new RegExp(`^(?:('(?:[^']|'')+'|[^'!\\[\\]]+)!)?(${CELL}(?::${CELL})?)$`);
+
 // `name.ext:42`, `name.ext:40-55`, `name.ext:42:7` (the column is ignored).
 // The extension must hold a letter, so `localhost:8000` and `127.0.0.1:8000`
 // stay ports. A host with a lettered TLD (`example.com:8080`) still matches,
@@ -55,7 +69,7 @@ export function parseFragment(fragment: string): FileLocation | null {
   if (line) return lineRange(line[1], line[2]);
   const page = frag.match(PAGE_FRAGMENT_RE);
   if (page) return Number(page[1]) >= 1 ? { page: Number(page[1]) } : null;
-  return { anchor: frag };
+  return CELL_FRAGMENT_RE.test(frag) ? { cell: frag, anchor: frag } : { anchor: frag };
 }
 
 /** Split a link destination into the file part and the location it points at. */

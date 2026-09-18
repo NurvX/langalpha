@@ -40,6 +40,7 @@ import { speechSupported, useVoiceInput } from './chat-input.useVoiceInput';
 import { useFileAttachments } from './chat-input.useFileAttachments';
 import { modelPrefs, modelProfile } from '@/lib/modelPreferences';
 import { queryKeys } from '@/lib/queryKeys';
+import { describeLocatorSize } from '@/pages/ChatAgent/components/viewers/excel/a1';
 
 /** Autosize cap for the composer textarea; past this the box scrolls. */
 const MAX_TEXTAREA_HEIGHT = 200;
@@ -50,7 +51,7 @@ const MODEL_SWITCH_TOAST_MS = 8000;
 
 export interface ChatInputHandle {
   getModelOptions: () => ModelOptions;
-  addContext: (ctx: { path?: string; snippet?: string; label?: string; lineStart?: number; lineEnd?: number; lineCount?: number; source?: string }) => void;
+  addContext: (ctx: { path?: string; snippet?: string; label?: string; locator?: string; lineStart?: number; lineEnd?: number; lineCount?: number; source?: string }) => void;
   /**
    * Imperatively add a widget context snapshot to the deck. Local-only —
    * this does NOT publish to ContextBus. Use this when re-seeding the deck
@@ -336,13 +337,13 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         marketWatch: effectiveMarketWatch,
       };
     },
-    addContext({ path, snippet, label, lineStart, lineEnd, lineCount, source }) {
+    addContext({ path, snippet, label, locator, lineStart, lineEnd, lineCount, source }) {
       if (snippet) {
         // Snippet context — add pill with snippet data, don't modify textarea
         setMentionedFiles((prev) => {
           // Deduplicate by exact snippet content (handles multiple selections)
-          if (prev.some((f) => f.snippet === snippet && f.path === (path || '') && f.source === (source || undefined))) return prev;
-          return [...prev, { path: path || '', snippet, label, lineStart, lineEnd, lineCount, source }];
+          if (prev.some((f) => f.snippet === snippet && f.path === (path || '') && f.locator === locator && f.source === (source || undefined))) return prev;
+          return [...prev, { path: path || '', snippet, label, locator, lineStart, lineEnd, lineCount, source }];
         });
       } else if (path) {
         // Whole file context — same behavior as selectFile via @mention
@@ -575,6 +576,14 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         }
         if (f.source === 'paste') {
           return `\n<details>\n<summary>[${t('context.pastedText')}]</summary>\n\n\`\`\`\n${f.snippet}\n\`\`\`\n</details>`;
+        }
+        // A locator names the spot in the file's own vocabulary (`Model!B4:D9`),
+        // so the summary is the link that reopens it. The block below it may be
+        // capped, and says so in its own first line.
+        if (f.locator) {
+          const described = describeLocatorSize(f.locator);
+          const size = described ? ` (${described})` : '';
+          return `\n<details>\n<summary>@${f.path}#${f.locator}${size}</summary>\n\n\`\`\`\n${f.snippet}\n\`\`\`\n</details>`;
         }
         const lineInfo = f.lineStart != null
           ? ` (lines ${f.lineStart}-${f.lineEnd}, ${f.lineCount} line${f.lineCount !== 1 ? 's' : ''})`
