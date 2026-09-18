@@ -6,9 +6,9 @@ import { computeAgentArtifactRouting } from '../../utils/agentPaths';
 import { collectRecentWritePaths, type TurnMessage } from '../../utils/fileRefResolver';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { isValidUuid } from '../../utils/uuid';
-import { clampPanelWidth as clampPanelWidthUtil } from '@/lib/panelUtils';
+import { clampPanelWidth as clampPanelWidthUtil, MAX_PANEL_RATIO } from '@/lib/panelUtils';
 import type { PanelTarget } from '../RightPanel';
-import type { FileLocation } from '../../utils/fileLocation';
+import type { FileLocation, OpenFileHandler } from '../../utils/fileLocation';
 import type { PreviewData } from '../../hooks/utils/types';
 import type { ProvenanceRecord } from '@/types/chat';
 import type { PlanData, ToolCallProcessRecord } from './types';
@@ -69,6 +69,7 @@ export function useRightPanel({
   const handleTargetDirHandled = useCallback(() => setPanelTarget((pt) => (pt?.kind === 'file' ? null : pt)), []);
   const handleTargetMemoryHandled = useCallback(() => setPanelTarget((pt) => (pt?.kind === 'memory' ? null : pt)), []);
   const handleTargetMemoHandled = useCallback(() => setPanelTarget((pt) => (pt?.kind === 'memo' ? null : pt)), []);
+  const handleTargetPreviewHandled = useCallback(() => setPanelTarget((pt) => (pt?.kind === 'preview' ? null : pt)), []);
 
   const isDraggingRef = useRef(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -84,8 +85,10 @@ export function useRightPanel({
   // Right panel management - can show 'file', 'detail', 'preview', or null (closed)
   const [rightPanelType, setRightPanelType] = useState<'file' | 'detail' | 'preview' | null>(null);
   const [rightPanelWidth, setRightPanelWidth] = useState(750);
-  // Multi-port preview state: Map keyed by port lives in a ref (non-active updates don't re-render).
-  // activePreviewPort + derived previewData drive the panel render.
+  // Mobile preview state: the bottom sheet shows one app at a time, so the Map
+  // keyed by port lives in a ref (non-active updates don't re-render) and the
+  // derived previewData drives the sheet. On desktop a running app is a tab in
+  // the file panel, which owns its own short-lived URL — see handleOpenPreview.
   const previewMapRef = useRef<Map<number, PreviewData>>(new Map());
   const activePreviewPortRef = useRef<number | null>(null);
   const reloadCounterRef = useRef(0);
@@ -123,7 +126,12 @@ export function useRightPanel({
     const startX = e.clientX;
     const startWidth = rightPanelWidth;
     const containerW = containerRef.current?.offsetWidth || window.innerWidth;
-    const maxRatio = rightPanelType === 'preview' ? PREVIEW_MAX_RATIO : undefined;
+    // A panel already past the default cap was widened on purpose — a running
+    // app opens wide — so the drag has to be able to hold that width instead of
+    // snapping it back on the first pixel.
+    const maxRatio = rightPanelType === 'preview' || startWidth > containerW * MAX_PANEL_RATIO
+      ? PREVIEW_MAX_RATIO
+      : undefined;
 
     // Immediately disable pointer events on iframes to prevent them from
     // capturing mouse events during resize (can't wait for React re-render).
@@ -239,7 +247,7 @@ export function useRightPanel({
    * its domain. The pure decision is computed by computeAgentArtifactRouting;
    * we apply the result atomically (clear everything, then set).
    */
-  const handleOpenAgentArtifactFromChat = useCallback((rawPath: string, targetWorkspaceId?: string, location?: FileLocation) => {
+  const openAgentArtifactFromChat = useCallback((rawPath: string, targetWorkspaceId: string | undefined, location: FileLocation | undefined, pin: boolean) => {
     const r = computeAgentArtifactRouting(rawPath, targetWorkspaceId);
     if (r.setWorkspaceId && !isValidUuid(r.setWorkspaceId)) {
       console.warn('[ChatView] ignoring artifact ref with invalid workspace id', r.setWorkspaceId);
@@ -261,7 +269,7 @@ export function useRightPanel({
       // is what makes the same folder asked for twice arrive twice.
       target = { kind: 'file', dir: r.targetDirectory, seq: ++artifactSeqRef.current };
     } else {
-      target = { kind: 'file', path: r.targetFile, location: location ?? null };
+      target = { kind: 'file', path: r.targetFile, location: location ?? null, pin };
     }
     setPanelTarget(target);
     if (r.clearWorkspaceId) {
@@ -275,10 +283,21 @@ export function useRightPanel({
     pushPanelHistory();
   }, [clampPanelWidth, pushPanelHistory, setFilePanelWorkspaceId]);
 
+  const handleOpenAgentArtifactFromChat = useCallback<OpenFileHandler>(
+    (rawPath, targetWorkspaceId, location) => openAgentArtifactFromChat(rawPath, targetWorkspaceId, location, false),
+    [openAgentArtifactFromChat],
+  );
+
   // Alias kept for the existing callers (tool-call rows, ws:// flash links,
   // file-panel handoffs) that still use the older name. Pure identity — the
   // unified router does the path-aware classification on every call.
   const handleOpenFileFromChat = handleOpenAgentArtifactFromChat;
+
+  /** The same routing, landing in a tab of its own: the deck's "Open in new tab". */
+  const handleOpenFileInNewTabFromChat = useCallback<OpenFileHandler>(
+    (rawPath, targetWorkspaceId, location) => openAgentArtifactFromChat(rawPath, targetWorkspaceId, location, true),
+    [openAgentArtifactFromChat],
+  );
 
   // Opens the Sources tab for a turn by pinning the message id — the single
   // target replaces any prior file/memory/memo/status one, so the panel snaps
@@ -432,8 +451,31 @@ export function useRightPanel({
       });
   }, [resolvePreviewUrl]);
 
-  // Open preview URL in right panel
+  // Counts preview opens, so the same port asked for twice is two requests and
+  // the panel re-mints rather than reading the second ask as the first.
+  const previewSeqRef = useRef(0);
+
+  /**
+   * Show a running app. On desktop it lands as a tab in the file panel beside
+   * the files it serves; the panel mints and refreshes its URL from there.
+   * Mobile keeps the bottom sheet, which has no tab strip to land in.
+   */
   const handleOpenPreview = useCallback((data: PreviewData) => {
+    if (!isMobile) {
+      setPanelTarget({
+        kind: 'preview',
+        port: data.port,
+        title: data.title,
+        path: data.path,
+        command: data.command,
+        seq: ++previewSeqRef.current,
+      });
+      const width = containerRef.current?.offsetWidth || window.innerWidth;
+      setRightPanelWidth(clampPanelWidthUtil(850, width, PREVIEW_MAX_RATIO));
+      setRightPanelType('file');
+      pushPanelHistory();
+      return;
+    }
     previewMapRef.current.set(data.port, data);
     activePreviewPortRef.current = data.port;
     setPreviewData(data);
@@ -445,7 +487,7 @@ export function useRightPanel({
     if (data.loading && !data.url && workspaceId) {
       resolveAndSetPreview(workspaceId, data.port, data.command, data.path);
     }
-  }, [pushPanelHistory, workspaceId, resolveAndSetPreview, containerRef]);
+  }, [isMobile, pushPanelHistory, workspaceId, resolveAndSetPreview, containerRef]);
 
   // Open tool call detail in right panel (or preview panel for preview_url artifacts)
   const handleToolCallDetailClick = useCallback((toolCallProcess: ToolCallProcessRecord) => {
@@ -455,6 +497,12 @@ export function useRightPanel({
       const title = artifact.title as string | undefined;
       const command = artifact.command as string | undefined;
       const path = artifact.path as string | undefined;
+      if (!isMobile) {
+        // The file panel holds the cache for this port and decides whether the
+        // URL it has is still worth showing, so nothing is resolved here.
+        handleOpenPreview({ url: '', port, title, command, path, loading: true });
+        return;
+      }
       const token = ++reloadCounterRef.current;
       // Check Map cache (not single state) — show cached URL instantly, then verify in background
       const cached = previewMapRef.current.get(port);
@@ -473,7 +521,7 @@ export function useRightPanel({
     setRightPanelWidth(getDetailPanelWidth(toolCallProcess));
     setRightPanelType('detail');
     pushPanelHistory();
-  }, [getDetailPanelWidth, pushPanelHistory, workspaceId, handleOpenPreview, resolveAndSetPreview]);
+  }, [getDetailPanelWidth, pushPanelHistory, workspaceId, isMobile, handleOpenPreview, resolveAndSetPreview]);
 
   // Open plan detail in right panel
   const handlePlanDetailClick = useCallback((planData: PlanData) => {
@@ -542,6 +590,7 @@ export function useRightPanel({
     handleTargetDirHandled,
     handleTargetMemoryHandled,
     handleTargetMemoHandled,
+    handleTargetPreviewHandled,
     rightPanelType,
     setRightPanelType,
     rightPanelWidth,
@@ -552,6 +601,7 @@ export function useRightPanel({
     handleDividerMouseDown,
     popPanelHistory,
     handleOpenFileFromChat,
+    handleOpenFileInNewTabFromChat,
     handleOpenSourcesFromChat,
     handleOpenStatusFromChat,
     handleToolCallDetailClick,

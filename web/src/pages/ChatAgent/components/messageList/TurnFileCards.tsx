@@ -34,6 +34,7 @@ const GEOMETRY: DeckGeometry = {
 interface TurnFileCardsProps {
   files: TurnFile[];
   onOpenFile: OpenFileHandler;
+  onOpenFileInNewTab?: OpenFileHandler;
   onDownloadFile?: (path: string, workspaceId?: string) => void;
   /** Asks the host to bring the unfolded deck into view. Walking up to a scroll
    *  container and moving it does not work here: the nearest ancestor reporting
@@ -44,7 +45,7 @@ interface TurnFileCardsProps {
   onReveal?: () => void;
 }
 
-export function TurnFileCards({ files, onOpenFile, onDownloadFile, onReveal }: TurnFileCardsProps): React.ReactElement | null {
+export function TurnFileCards({ files, onOpenFile, onOpenFileInNewTab, onDownloadFile, onReveal }: TurnFileCardsProps): React.ReactElement | null {
   const { t } = useTranslation();
   const [fanned, setFanned] = useState(false);
   // A card's menu portals outside the deck, so an open menu suspends the
@@ -144,6 +145,12 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile, onReveal }: T
                           <PanelRight className="h-3.5 w-3.5" />
                           {t('chat.turnFiles.open')}
                         </DropdownMenuItem>
+                        {onOpenFileInNewTab && (
+                          <DropdownMenuItem onSelect={() => onOpenFileInNewTab(file.path, file.workspaceId, file.location)}>
+                            <PanelRight className="h-3.5 w-3.5" />
+                            {t('filePanel.openInNewTab')}
+                          </DropdownMenuItem>
+                        )}
                         {onDownloadFile && (
                           <DropdownMenuItem onSelect={() => onDownloadFile(file.path, file.workspaceId)}>
                             <Download className="h-3.5 w-3.5" />

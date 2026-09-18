@@ -121,21 +121,45 @@ export interface TurnMessage {
  * has to reach the deliverables deck and the link resolver together or they
  * disagree about what the turn wrote.
  */
-export function writeCalls(message: TurnMessage): { path: string; call: ToolCallLike }[] {
-  const out: { path: string; call: ToolCallLike }[] = [];
-  const calls = Object.values(message.toolCallProcesses ?? {})
+export function writeCalls(message: TurnMessage): { id: string; path: string; call: ToolCallLike }[] {
+  const out: { id: string; path: string; call: ToolCallLike }[] = [];
+  const calls = Object.entries(message.toolCallProcesses ?? {})
     // A call still in flight when the turn stopped names a file nothing said
     // it wrote. `isComplete` is not that evidence: a stop and a steering
     // rollback both fold every open call to complete with no result, so the
     // returned result itself is what a card is allowed to claim.
-    .filter((p) => p && WRITE_TOOLS.has(p.toolName ?? '') && p.toolCallResult != null && !p.isFailed)
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  for (const call of calls) {
+    .filter(([, p]) => p && WRITE_TOOLS.has(p.toolName ?? '') && p.toolCallResult != null && !p.isFailed)
+    .sort(([, a], [, b]) => (a.order ?? 0) - (b.order ?? 0));
+  for (const [id, call] of calls) {
     const args = call.toolCall?.args;
     const named = args?.file_path ?? args?.filePath ?? args?.path ?? args?.filename;
     if (typeof named !== 'string' || !named) continue;
     const path = normalizeAgentPath(named);
-    if (path) out.push({ path, call });
+    if (path) out.push({ id, path, call });
+  }
+  return out;
+}
+
+/** One Write or Edit the agent made, as the changed-file dot sees it. */
+export interface WriteEvent {
+  /** The tool call's id, which is what tells two writes of one file apart. */
+  id: string;
+  path: string;
+}
+
+/**
+ * Every write in the thread, newest first, repeats kept. `collectRecentWritePaths`
+ * names each file once, which is what a lookup wants; a tab asking whether its
+ * file changed needs the write itself, since a rewrite of the newest file
+ * leaves that list byte-identical.
+ */
+export function collectWriteLog(messages: readonly TurnMessage[]): WriteEvent[] {
+  const out: WriteEvent[] = [];
+  for (let i = messages.length - 1; i >= 0 && out.length < RECENT_WRITE_LIMIT; i--) {
+    const calls = writeCalls(messages[i] ?? {});
+    for (let j = calls.length - 1; j >= 0 && out.length < RECENT_WRITE_LIMIT; j--) {
+      out.push({ id: calls[j].id, path: calls[j].path });
+    }
   }
   return out;
 }

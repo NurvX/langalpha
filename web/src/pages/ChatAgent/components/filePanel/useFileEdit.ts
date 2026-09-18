@@ -5,10 +5,24 @@ import type { editor } from 'monaco-editor';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/components/ui/use-toast';
 
+/** One tab's editor, parked while another tab is on screen. */
+interface EditDraft {
+  isEditing: boolean;
+  editContent: string | null;
+  originalContent: string | null;
+}
+
 /** Edit-mode state for FilePanel: full-content load, Monaco editor wiring,
  * diff view, save/cancel, and the unsaved-changes guards. The read/write fns
- * are the component's adapter-resolved versions — never direct api imports. */
-export function useFileEdit({ workspaceId, selectedFile, fileContent, setFileContent, readFileFullFn, writeFileFn }: {
+ * are the component's adapter-resolved versions — never direct api imports.
+ *
+ * The draft belongs to the tab, not to the panel: switching tabs parks the
+ * editor and switching back hands it straight back. Without that a tab strip
+ * would silently throw away an edit for the price of looking at another file,
+ * which is worse than the single-file panel it replaced. */
+export function useFileEdit({ tabId, workspaceId, selectedFile, fileContent, setFileContent, readFileFullFn, writeFileFn }: {
+  /** Which tab the editor currently belongs to. */
+  tabId: string;
   workspaceId: string;
   selectedFile: string | null;
   fileContent: string | null;
@@ -38,8 +52,59 @@ export function useFileEdit({ workspaceId, selectedFile, fileContent, setFileCon
     setCanRedo(r);
   }, []);
 
+  // Parked drafts, keyed by tab. Swapped during render rather than in an
+  // effect so the incoming tab never paints one frame holding the outgoing
+  // tab's editor.
+  const drafts = useRef(new Map<string, EditDraft>());
+  // The active tab whose close was confirmed: the swap below must not park its
+  // draft under an id nothing will ever ask for again.
+  const dropped = useRef<string | null>(null);
+  const [ownerTab, setOwnerTab] = useState(tabId);
+  if (ownerTab !== tabId) {
+    if (dropped.current === ownerTab) dropped.current = null;
+    else drafts.current.set(ownerTab, { isEditing, editContent, originalContent });
+    const parked = drafts.current.get(tabId);
+    setOwnerTab(tabId);
+    setIsEditing(parked?.isEditing ?? false);
+    setEditContent(parked?.editContent ?? null);
+    setOriginalContent(parked?.originalContent ?? null);
+    setShowDiff(false);
+    setSaveError(null);
+  }
+
+  useEffect(() => {
+    // The draft is the editor's again; a copy left parked would keep reading
+    // as unsaved after the editor saved or cancelled it. Dropped once the
+    // swap has committed: a render React throws away and retries would
+    // otherwise find nothing parked the second time.
+    drafts.current.delete(tabId);
+    // The Monaco instance belongs to the mount that is going away with the tab.
+    editorRef.current = null;
+    setCanUndo(false);
+    setCanRedo(false);
+  }, [tabId]);
+
   const isSaving = savingFile !== null && savingFile === selectedFile;
   const hasUnsavedChanges = isEditing && editContent !== null && editContent !== fileContent;
+
+  const draftIsDirty = (d: EditDraft) => d.isEditing && d.editContent !== null && d.editContent !== d.originalContent;
+
+  /** Whether a tab, this one or a parked one, would lose an edit if closed. */
+  const tabHasUnsavedChanges = useCallback((id: string) => {
+    if (id === tabId) return hasUnsavedChanges;
+    const parked = drafts.current.get(id);
+    return !!parked && draftIsDirty(parked);
+  }, [tabId, hasUnsavedChanges]);
+
+  // What leaving the page would lose: the active tab's edit or any parked one.
+  // `hasUnsavedChanges` stays the active tab's, which is what the header shows.
+  const hasAnyUnsavedChanges = hasUnsavedChanges || [...drafts.current.values()].some(draftIsDirty);
+
+  const forgetTab = useCallback((id: string) => {
+    drafts.current.delete(id);
+    if (id === tabId) dropped.current = id;
+  }, [tabId]);
+
   const selectedFileRef = useRef(selectedFile);
   selectedFileRef.current = selectedFile;
 
@@ -141,14 +206,14 @@ export function useFileEdit({ workspaceId, selectedFile, fileContent, setFileCon
   }, [isEditing, editContent, fileContent, handleSave]);
 
   useEffect(() => {
-    if (!hasUnsavedChanges) return;
+    if (!hasAnyUnsavedChanges) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = '';
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [hasUnsavedChanges]);
+  }, [hasAnyUnsavedChanges]);
 
   return {
     isEditing,
@@ -169,6 +234,9 @@ export function useFileEdit({ workspaceId, selectedFile, fileContent, setFileCon
     setCanRedo,
     handleUndoRedoChange,
     hasUnsavedChanges,
+    hasAnyUnsavedChanges,
+    tabHasUnsavedChanges,
+    forgetTab,
     handleStartEdit,
     handleEditorChange,
     handleSave,

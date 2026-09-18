@@ -820,6 +820,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     handleTargetDirHandled,
     handleTargetMemoryHandled,
     handleTargetMemoHandled,
+    handleTargetPreviewHandled,
     rightPanelType,
     setRightPanelType,
     rightPanelWidth,
@@ -830,6 +831,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     handleDividerMouseDown,
     popPanelHistory,
     handleOpenFileFromChat,
+    handleOpenFileInNewTabFromChat,
     handleOpenSourcesFromChat,
     handleOpenStatusFromChat,
     handleToolCallDetailClick,
@@ -895,6 +897,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   }, [workspaceId, getRecentWritePaths, handleOpenFileFromChat, t]);
 
   const stableOpenFile = useStableHandler(handleOpenFileFromChat);
+  const stableOpenFileInNewTab = useStableHandler(handleOpenFileInNewTabFromChat);
   const stableDownloadFile = useStableHandler(handleDownloadFileFromChat);
   const stableRevealFiles = useStableHandler(revealFiles);
   const stableOpenSources = useStableHandler(handleOpenSourcesFromChat);
@@ -934,6 +937,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // this object is built once and never re-renders the memoized message tree.
   const messageActions = useMemo<MessageActions>(() => ({
     onOpenFile: stableOpenFile,
+    onOpenFileInNewTab: stableOpenFileInNewTab,
     onDownloadFile: stableDownloadFile,
     onRevealFiles: stableRevealFiles,
     onOpenSources: stableOpenSources,
@@ -963,7 +967,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     onReportWithAgent: stableReportWithAgent,
     onWidgetSendPrompt: stableSendMessage,
   }), [
-    stableOpenFile, stableDownloadFile, stableRevealFiles, stableOpenSources, stableToolCallDetail,
+    stableOpenFile, stableOpenFileInNewTab, stableDownloadFile, stableRevealFiles, stableOpenSources, stableToolCallDetail,
     stableOpenSubagentTask, stableApprovePlan, stableRejectPlan, stablePlanDetail,
     stableAnswerQuestion, stableSkipQuestion, stableApproveCreateWorkspace,
     stableRejectCreateWorkspace, stableApproveStartQuestion, stableRejectStartQuestion,
@@ -980,9 +984,10 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // observer that follows an unfolding deck is only attached there.
   const subagentMessageActions = useMemo<MessageActions>(() => ({
     onOpenFile: stableOpenFile,
+    onOpenFileInNewTab: stableOpenFileInNewTab,
     onDownloadFile: stableDownloadFile,
     onToolCallDetailClick: stableToolCallDetail,
-  }), [stableOpenFile, stableDownloadFile, stableToolCallDetail]);
+  }), [stableOpenFile, stableOpenFileInNewTab, stableDownloadFile, stableToolCallDetail]);
 
   // Flash-mode deep-link context for PTC-agent proposal cards. Memoized: a
   // fresh object per render would defeat the bubble memo in flash mode.
@@ -1843,7 +1848,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
         </MobileBottomSheet>
       )}
 
-      {/* Mobile preview bottom sheet */}
+      {/* Mobile preview bottom sheet. Desktop shows a running app as a tab in
+          the file panel instead; the sheet has no tab strip to land in. */}
       {isMobile && (
         <MobileBottomSheet
           open={rightPanelType === 'preview' && !!previewData}
@@ -1896,6 +1902,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                 <WorkspaceProvider workspaceId={effectiveFileWorkspaceId || workspaceId} downloadFile={null}>
                 <RightPanel
                   workspaceId={effectiveFileWorkspaceId || workspaceId}
+                  threadId={currentThreadId || threadId}
                   onClose={() => { setRightPanelType(null); popPanelHistory(); }}
                   panelTarget={panelTarget}
                   onTargetFileHandled={handleTargetFileHandled}
@@ -1956,12 +1963,14 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                     <WorkspaceProvider workspaceId={effectiveFileWorkspaceId || workspaceId} downloadFile={null}>
                     <RightPanel
                       workspaceId={effectiveFileWorkspaceId || workspaceId}
+                      threadId={currentThreadId || threadId}
                       onClose={() => { setRightPanelType(null); popPanelHistory(); }}
                       panelTarget={panelTarget}
                       onTargetFileHandled={handleTargetFileHandled}
                       onTargetDirHandled={handleTargetDirHandled}
                       onTargetMemoryHandled={handleTargetMemoryHandled}
                       onTargetMemoHandled={handleTargetMemoHandled}
+                      onTargetPreviewHandled={handleTargetPreviewHandled}
                       sourcesRecords={sourcesRecords}
                       allSourcesRecords={allSourcesRecords}
                       marketWatch={marketWatch}
@@ -1991,18 +2000,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       onClose={handleCloseDetailPanel}
                       onOpenFile={handleOpenFileFromChat}
                       onOpenSubagentTask={handleOpenSubagentTask}
-                    />
-                  ) : rightPanelType === 'preview' && previewData ? (
-                    <PreviewViewer
-                      url={previewData.url}
-                      port={previewData.port}
-                      title={previewData.title}
-                      loading={previewData.loading}
-                      error={previewData.error}
-                      onClose={handleClosePreview}
-                      onRefresh={handleRefreshPreview}
-                      isDragging={isDragging}
-                      reloadToken={previewData.reloadToken}
                     />
                   ) : null}
                 </Suspense>

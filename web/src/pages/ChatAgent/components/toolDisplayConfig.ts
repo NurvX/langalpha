@@ -8,6 +8,7 @@ import {
 import { classifyAgentPath, topicFromMemoryKey, type AgentPathInfo } from '../utils/agentPaths';
 import { directToolDisplayName, parseDirectToolName, summarizeDirectToolArgs } from '../utils/directTools';
 import { INTERVAL_LABEL } from '@/lib/bars';
+import { LARGE_TOOL_RESULTS_PREFIX } from './filePanel/fileMeta';
 
 /** Translation function signature compatible with i18next's t() */
 type TFn = (key: string, opts?: Record<string, unknown>) => string;
@@ -596,7 +597,7 @@ export function parseTruncatedResult(content: string | null | undefined): ParseT
   if (!content.startsWith('Tool result too large')) return { isTruncated: false };
 
   // Extract the filesystem path
-  const pathMatch = content.match(/saved in the filesystem at this path:\s*(\/large_tool_results\/\S+)/);
+  const pathMatch = content.match(new RegExp(`saved in the filesystem at this path:\\s*(${LARGE_TOOL_RESULTS_PREFIX}\\S+)`));
   const filePath = pathMatch?.[1] || null;
 
   // Extract the preview (everything after the "head and tail" intro line)

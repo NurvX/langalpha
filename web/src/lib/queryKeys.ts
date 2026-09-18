@@ -63,6 +63,15 @@ export const queryKeys = {
   workspaceFiles: {
     all:  ['workspaceFiles'],
     byWs: (wsId: string, opts?: Record<string, unknown>) => [...queryKeys.workspaceFiles.all, wsId, opts],
+    // One file's bytes. `mode` rides in the key because the same path answers
+    // in a different shape per reader — paginated text, full source, an
+    // ArrayBuffer — and a viewer handed the wrong one renders nothing.
+    // `scope` is the workspace id, or, for a share that has no workspace of
+    // its own, the panel's mount id, so two shares never read each other's
+    // bytes out of one cache. Deliberately under `all` but past the list's
+    // options slot: dropping a workspace drops its bodies with it.
+    bodies: (scope: string) => [...queryKeys.workspaceFiles.all, scope, 'body'],
+    body: (scope: string, path: string, mode: string) => [...queryKeys.workspaceFiles.bodies(scope), path, mode],
   },
   memory: {
     all:       ['memory'],

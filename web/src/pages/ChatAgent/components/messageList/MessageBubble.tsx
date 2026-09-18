@@ -66,7 +66,7 @@ interface MessageBubbleProps {
  * chunk never re-renders settled bubbles through a handler identity.
  */
 export const MessageBubble = memo(function MessageBubble({ message, turnIndex, isTurnTail, turnFiles, feedback, isLoading, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, isMobile, flashContext }: MessageBubbleProps): React.ReactElement {
-  const { onOpenFile, onDownloadFile, onRevealFiles, onOpenSources, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, onReportWithAgent } = useMessageActions();
+  const { onOpenFile, onOpenFileInNewTab, onDownloadFile, onRevealFiles, onOpenSources, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, onReportWithAgent } = useMessageActions();
   const { t } = useTranslation();
   const { user } = useUser();
   const { theme } = useTheme();
@@ -500,6 +500,7 @@ export const MessageBubble = memo(function MessageBubble({ message, turnIndex, i
           <TurnFileCards
             files={turnFiles}
             onOpenFile={onOpenFile}
+            onOpenFileInNewTab={onOpenFileInNewTab}
             onDownloadFile={onDownloadFile}
             onReveal={() => onRevealFiles?.(message.id as string)}
           />

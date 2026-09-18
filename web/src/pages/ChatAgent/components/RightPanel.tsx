@@ -28,7 +28,10 @@ export type RightPanelTab = 'files' | 'memory' | 'memo' | 'sources' | 'status';
  * for twice is two requests carrying one directory.
  */
 export type PanelTarget =
-  | { kind: 'file'; path?: string | null; dir?: string | null; location?: FileLocation | null; seq?: number }
+  | { kind: 'file'; path?: string | null; dir?: string | null; location?: FileLocation | null; seq?: number; /** Open in a tab of its own rather than the preview slot. */ pin?: boolean }
+  /** A dev server the agent started in the sandbox; it opens as a tab in the
+   *  Files panel. `seq` counts the asks, so the same port twice is two. */
+  | { kind: 'preview'; port: number; title?: string; path?: string; command?: string; seq: number }
   | { kind: 'memory'; key: string; tier: MemoryTier }
   | { kind: 'memo'; key: string }
   | { kind: 'sources'; messageId: string }
@@ -36,6 +39,8 @@ export type PanelTarget =
 
 interface RightPanelProps {
   workspaceId: string;
+  /** The open conversation, which owns the file panel's tab strip. */
+  threadId?: string | null;
   onClose: () => void;
   /** The panel's current target (file/memory/memo/sources/status), or null. */
   panelTarget?: PanelTarget | null;
@@ -43,6 +48,7 @@ interface RightPanelProps {
   onTargetDirHandled?: () => void;
   onTargetMemoryHandled?: () => void;
   onTargetMemoHandled?: () => void;
+  onTargetPreviewHandled?: () => void;
   /** Live provenance records for the targeted message (keyed by record id). */
   sourcesRecords?: Record<string, ProvenanceRecord>;
   /** Provenance records merged across every turn in the thread (keyed by record
@@ -74,12 +80,14 @@ interface RightPanelProps {
 
 export default function RightPanel({
   workspaceId,
+  threadId = null,
   onClose,
   panelTarget = null,
   onTargetFileHandled,
   onTargetDirHandled,
   onTargetMemoryHandled,
   onTargetMemoHandled,
+  onTargetPreviewHandled,
   sourcesRecords,
   allSourcesRecords,
   marketWatch,
@@ -108,9 +116,11 @@ export default function RightPanel({
   const targetDirectory = panelTarget?.kind === 'file' ? panelTarget.dir ?? null : null;
   const targetDirSeq = panelTarget?.kind === 'file' ? panelTarget.seq ?? null : null;
   const targetLocation = panelTarget?.kind === 'file' ? panelTarget.location ?? null : null;
+  const targetPin = panelTarget?.kind === 'file' ? !!panelTarget.pin : false;
   const targetMemoryKey = panelTarget?.kind === 'memory' ? panelTarget.key : null;
   const targetMemoryTier = panelTarget?.kind === 'memory' ? panelTarget.tier : null;
   const targetMemoKey = panelTarget?.kind === 'memo' ? panelTarget.key : null;
+  const targetPreview = panelTarget?.kind === 'preview' ? panelTarget : null;
 
   const tabs = useMemo<{ id: RightPanelTab; label: string }[]>(
     () => {
@@ -146,6 +156,7 @@ export default function RightPanel({
       case 'memory': setTab('memory'); break;
       case 'memo': setTab('memo'); break;
       case 'file': setTab('files'); break;
+      case 'preview': setTab('files'); break;
     }
   }, [panelTarget, kind]);
 
@@ -191,13 +202,17 @@ export default function RightPanel({
           {tab === 'files' && (
             <FilePanel
               workspaceId={workspaceId}
+              threadId={threadId}
               onClose={onClose}
               targetFile={targetFile}
               targetLocation={targetLocation}
+              targetPin={targetPin}
               onTargetFileHandled={onTargetFileHandled}
               targetDirectory={targetDirectory}
               targetDirSeq={targetDirSeq}
               onTargetDirHandled={onTargetDirHandled}
+              targetPreview={targetPreview}
+              onTargetPreviewHandled={onTargetPreviewHandled}
               onOpenFile={onOpenFile}
               getRecentWritePaths={getRecentWritePaths}
               files={files}

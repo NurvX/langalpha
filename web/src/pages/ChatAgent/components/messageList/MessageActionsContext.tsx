@@ -21,6 +21,8 @@ import type { OpenFileHandler } from '../../utils/fileLocation';
 export interface MessageActions {
   onOpenSubagentTask?: (info: SubagentInfo) => void;
   onOpenFile?: OpenFileHandler;
+  /** Opens in a tab of its own; absent where the panel has no tab strip. */
+  onOpenFileInNewTab?: OpenFileHandler;
   /** Brings a turn's deliverables deck into view as it unfolds. The deck owns
    *  no scroll container and must not grab one: the host's scroll controller
    *  re-asserts its own position on every content growth, which a fanning deck

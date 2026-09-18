@@ -11,7 +11,7 @@ import {
 } from '../../utils/fileLocation';
 
 /** Which viewer is showing the selected file, as far as a location can reach into it. */
-export type FocusViewer = 'code' | 'markdown' | 'pdf' | 'html' | 'other';
+export type FocusViewer = 'code' | 'markdown' | 'pdf' | 'html' | 'excel' | 'other';
 
 interface FileFocus {
   path: string;
@@ -270,6 +270,15 @@ export function useFileFocus({
     lineRange,
     focusPage: loc?.page && viewer === 'pdf' ? loc.page : null,
     htmlAnchor: loc?.anchor && viewer === 'html' ? loc.anchor : null,
+    // No chip beside it: whether `Model!B4:D9` names a sheet that exists is a
+    // question only the spreadsheet can answer, and a chip that cannot say
+    // `missing` would claim every reference landed.
+    // `#L42` parses as a line, and to a spreadsheet that is cell L42: only a
+    // single line reads that way, since `L4-L9` names rows, not a range.
+    focusCell: viewer !== 'excel' ? null
+      : loc?.cell ? loc.cell
+      : loc?.line && !loc.lineEnd ? `L${loc.line}`
+      : null,
     seq: activeSeq,
   };
 }

@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor, fireEvent, act, within } from '@testing-library/react';
+import { screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { renderWithProviders } from '@/test/utils';
 
 const wsStatus = { value: 'running' };
@@ -79,6 +79,9 @@ const NAMESAKES = ['docs/index.md', 'docs/results/report.md', 'results/report.md
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Tabs persist per workspace and every test here mounts `ws`, so without
+  // this each test would inherit the strip the previous one left behind.
+  localStorage.clear();
   wsStatus.value = 'running';
   (api.readWorkspaceFile as ReturnType<typeof vi.fn>).mockImplementation(async (_ws: string, p: string) => {
     if (p in CONTENT) return { content: CONTENT[p], mime: p.endsWith('.md') ? 'text/markdown' : 'text/x-python', truncated: false };
@@ -335,10 +338,14 @@ describe('FilePanel reference opens', () => {
     );
   });
 
-  // A folder accepted from chat arrives as a prop change, not a click, so the
-  // panel has to leave the open file itself. `targetDirectory` is stored with
-  // its trailing slash stripped (`computeAgentArtifactRouting`), and the header
-  // adds the slash back.
+  // A folder accepted from chat points the tree, which is now a column beside
+  // the viewer rather than the thing the viewer was replaced by — so honouring
+  // one never costs the reader the file they were reading. `targetDirectory`
+  // is stored with its trailing slash stripped (`computeAgentArtifactRouting`)
+  // and the scope chip adds the slash back.
+  const scopeChip = () => document.querySelector('.file-panel-tree-scope');
+  const treeList = () => document.querySelector('.file-panel-tree-list');
+
   const openDocThenFolder = async ({ edit = false }: { edit?: boolean } = {}) => {
     const onTargetDirHandled = vi.fn();
     const panel = (extra: Record<string, unknown>) => (
@@ -363,43 +370,28 @@ describe('FilePanel reference opens', () => {
     return { onTargetDirHandled };
   };
 
-  const folderHeading = () => within(document.querySelector('.file-panel-header') as HTMLElement).queryByText('docs/');
-
-  it('a folder target opened while a file is on screen shows the folder', async () => {
-    // The render prefers `selectedFile` over `targetDirectory`, so a folder
-    // accepted while a file was open stayed hidden behind that file and the
-    // chat link read as dead until the reader pressed Back.
+  it('a folder target scopes the tree without closing the open file', async () => {
     await openDocThenFolder();
 
-    expect(screen.queryByText('Index')).toBeNull();
-    expect(folderHeading()).toBeTruthy();
+    expect(scopeChip()?.textContent).toContain('docs/');
+    expect(screen.getByText('Index')).toBeTruthy();
   });
 
-  it('a folder target keeps the file when the reader declines to discard edits', async () => {
-    // Declining cannot simply return the way a click handler does: the prop
-    // has already changed, so a bare return stranded the target on the parent
-    // and that folder could never be opened again.
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
+  it('a folder target leaves an editor and its unsaved edits alone', async () => {
+    // The folder is answered by the column beside the editor, so there is
+    // nothing to discard and nothing to ask about.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const { onTargetDirHandled } = await openDocThenFolder({ edit: true });
 
     expect(screen.getByTestId('editor').getAttribute('data-file')).toBe('docs/index.md');
-    expect(folderHeading()).toBeNull();
-    expect(onTargetDirHandled).toHaveBeenCalled();
+    expect((screen.getByTestId('editor') as HTMLTextAreaElement).value).toContain('Edited.');
+    expect(scopeChip()?.textContent).toContain('docs/');
+    expect(confirmSpy).not.toHaveBeenCalled();
+    // The scope is the prop's value for as long as it filters, so it is not
+    // handed back until the reader clears it.
+    expect(onTargetDirHandled).not.toHaveBeenCalled();
   });
 
-  it('a folder target discards edits when the reader accepts', async () => {
-    // Accepting has to actually leave the file, or the panel asked the reader
-    // to give up an edit and then handed back the same editor holding it.
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    await openDocThenFolder({ edit: true });
-
-    expect(screen.queryByTestId('editor')).toBeNull();
-    expect(folderHeading()).toBeTruthy();
-  });
-
-  // The folder is the tree's filter for as long as it is on screen, so it is
-  // still the prop's value when the next click arrives. Only the count says a
-  // click happened.
   const folderPanel = (extra: Record<string, unknown>) => (
     <FilePanel workspaceId="ws" onClose={() => {}} files={NAMESAKES} {...extra} />
   );
@@ -411,44 +403,47 @@ describe('FilePanel reference opens', () => {
     return rerender;
   };
 
-  it('shows the folder again when the same one is asked for twice', async () => {
-    // The reader opened a file from `docs/` and then clicked `docs/` again.
-    // Keyed on the folder, the prop was byte-identical and nothing ran, so the
-    // file stayed on screen and the second click read as dead.
+  it('shows the tree again when the same folder is asked for twice', async () => {
+    // The reader opened a file from `docs/`, then hid the tree, then clicked
+    // `docs/` again. Keyed on the folder, the prop was byte-identical and
+    // nothing ran, so the second click read as dead.
     const rerender = await openFileInsideFolder();
+    fireEvent.click(screen.getByTitle('Toggle file tree'));
+    await waitFor(() => expect(treeList()).toBeNull());
 
     rerender(folderPanel({ targetDirectory: 'docs', targetDirSeq: 2 }));
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 
-    expect(screen.queryByText('Index')).toBeNull();
-    expect(folderHeading()).toBeTruthy();
+    expect(treeList()).toBeTruthy();
+    expect(scopeChip()?.textContent).toContain('docs/');
   });
 
-  it('leaves the open file alone while the same request is still in effect', async () => {
+  it('leaves a hidden tree hidden while the same request is still in effect', async () => {
     // The control for the count: a re-render carrying the request already
-    // handled must not pull the reader out of the file they just opened.
+    // handled must not push the tree back over the file the reader opened.
     const rerender = await openFileInsideFolder();
+    fireEvent.click(screen.getByTitle('Toggle file tree'));
 
     rerender(folderPanel({ targetDirectory: 'docs', targetDirSeq: 1 }));
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 
+    await waitFor(() => expect(treeList()).toBeNull());
     expect(screen.getByText('Index')).toBeTruthy();
   });
 
-  it('opens the tree at the workspace root a `/home/workspace/` link names', async () => {
+  it('scopes the tree to the workspace root a `/home/workspace/` link names', async () => {
     // The router returns `''` for the root, which is a folder like any other.
-    // Read as "no folder was asked for", it left the open file on screen and
-    // the link did nothing at all.
+    // Read as "no folder was asked for", it left the tree scoped to wherever
+    // it already was and the link did nothing at all.
     const { rerender } = renderWithProviders(folderPanel({ targetFile: 'docs/index.md' }));
     await screen.findByText('Index');
 
     rerender(folderPanel({ targetFile: undefined, targetDirectory: '', targetDirSeq: 1 }));
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 
-    expect(screen.queryByText('Index')).toBeNull();
-    // The root filters nothing, so the header is the whole workspace, not a folder.
-    expect(within(document.querySelector('.file-panel-header') as HTMLElement)
-      .getByText('Workspace Files')).toBeTruthy();
+    // The root filters nothing, so the chip names the whole workspace.
+    expect(scopeChip()?.textContent).toContain('/');
+    expect(screen.getByText('Index')).toBeTruthy();
   });
 
   it('asks the lookup again when a retry follows a lookup that could not answer', async () => {
