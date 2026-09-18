@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 
+import { toast } from '@/components/ui/use-toast';
 import FileHeaderActions, {
   getFileExtension,
   isMarkdownFile,
@@ -189,6 +190,29 @@ describe('FileHeaderActions', () => {
     );
     fireEvent.click(screen.getByText('filePanel.downloadAsMarkdown'));
     expect(triggerDownloadFn).toHaveBeenCalledWith('ws-123', 'report.md');
+  });
+
+  // A save that fails shows nothing by itself: no file arrives, nothing opens
+  // and nothing navigates, so silence here reads as a dead menu item.
+  it('reports a failed download instead of only logging it', async () => {
+    const triggerDownloadFn = vi.fn().mockRejectedValue(new Error('sandbox stopped'));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(toast).mockClear();
+    render(
+      <FileHeaderActions
+        {...defaultProps}
+        triggerDownloadFn={triggerDownloadFn}
+      />,
+    );
+    fireEvent.click(screen.getByText('filePanel.downloadAsMarkdown'));
+
+    await waitFor(() => {
+      expect(toast).toHaveBeenCalledWith({
+        description: 'filePanel.downloadFailed',
+        variant: 'destructive',
+      });
+    });
+    logged.mockRestore();
   });
 
   it('renders edit button when canEdit is true', () => {

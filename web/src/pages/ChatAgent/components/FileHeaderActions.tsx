@@ -201,9 +201,14 @@ function FileHeaderActions({
 
   // One handler for every save in this menu. Four sites carried this same body
   // before, which is four places a new one could copy without the guard above.
-  const download = () => triggerDownloadFn(workspaceId, selectedFile).catch(
-    (err: unknown) => console.error('[FileHeaderActions] Download failed:', err),
-  );
+  const download = () => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => {
+    console.error('[FileHeaderActions] Download failed:', err);
+    // A save is the whole interaction: nothing opens, nothing navigates, and the
+    // browser shows no file. Without this the menu item is indistinguishable
+    // from a dead one. A toast rather than an inline error, because the document
+    // the reader is looking at is still fine and should stay on screen.
+    toast({ description: t('filePanel.downloadFailed'), variant: 'destructive' });
+  });
 
   const isMd = isMarkdownFile(selectedFile, fileMime);
   const isHtml = isHtmlFile(selectedFile);

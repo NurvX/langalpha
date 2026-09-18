@@ -9,6 +9,7 @@ import {
   MemoDiffModal,
 } from './FilePanelMemo';
 import { Loader } from '@/components/ui/loader';
+import { toast } from '@/components/ui/use-toast';
 import { useWorkspace } from '@/hooks/useWorkspace';
 import { SandboxSettingsContent } from './SandboxSettingsPanel';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -693,14 +694,19 @@ function FilePanel({
       }
     : undefined;
 
-  // The same save from inside a viewer's error boundary. That fallback is
-  // already reporting a failure, so this one only logs: raising `fileError`
-  // would replace the thing the reader is looking at with a second error.
+  // The same save from inside a viewer's error boundary, and the one the HTML
+  // viewer's own toolbar offers. Raising `fileError` here would replace the
+  // thing the reader is looking at with a second error, so the failure is
+  // reported additively: an error fallback keeps the message it is already
+  // showing, and a save started from a healthy report still says it went
+  // nowhere rather than reading as a dead button.
   const handleDownloadInFallback = canDownload
     ? () => {
         if (!selectedFile) return;
-        void triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) =>
-          console.error('[FilePanel] Download failed:', err));
+        void triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => {
+          console.error('[FilePanel] Download failed:', err);
+          toast({ description: t('filePanel.downloadFailed'), variant: 'destructive' });
+        });
       }
     : undefined;
 
