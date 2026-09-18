@@ -442,4 +442,26 @@ describe('FilePanel reference opens', () => {
     expect(within(document.querySelector('.file-panel-header') as HTMLElement)
       .getByText('Workspace Files')).toBeTruthy();
   });
+
+  it('asks the lookup again when a retry follows a lookup that could not answer', async () => {
+    // The lookup is the only thing that knows `report.md` is `results/report.md`,
+    // and the lookup is what was unavailable. Retrying the fallback path instead
+    // re-asked the question that had already failed, so a file that existed the
+    // whole time stayed a not-found once the sandbox was up.
+    resolveMock().mockResolvedValueOnce({ status: 'unavailable', reason: 'sandbox_starting', matches: [] });
+    // The sandbox still coming up is what left the lookup unable to answer, so
+    // the fallback read of the path as written cannot land either.
+    (api.readWorkspaceFile as ReturnType<typeof vi.fn>).mockImplementation(async (_ws: string, p: string) => {
+      if (!(p in CONTENT)) throw { response: { status: 503, data: { detail: 'Sandbox is starting' } } };
+      return { content: CONTENT[p], mime: 'text/markdown', truncated: false };
+    });
+    renderWithProviders(<FilePanel workspaceId="ws" onClose={() => {}} files={[]} targetFile="report.md" />);
+    await screen.findByText('Try again');
+
+    resolveMock().mockResolvedValueOnce({ status: 'resolved', path: 'results/report.md', matches: ['results/report.md'] });
+    fireEvent.click(screen.getByText('Try again'));
+
+    await screen.findByText('The rooted one');
+    expect(resolveMock()).toHaveBeenCalledTimes(2);
+  });
 });

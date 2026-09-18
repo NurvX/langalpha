@@ -173,6 +173,9 @@ function FilePanel({
   // Bumped by every reference open, so a slow name search cannot land after
   // the user has already clicked something else.
   const openSeqRef = useRef(0);
+  // The reference behind a file the lookup could not place, kept so its Retry
+  // asks the lookup again rather than re-reading the path it fell back to.
+  const unresolvedRef = useRef<{ rawRef: string; fromFile: string | null; location: FileLocation | null } | null>(null);
 
   // Upload + drag-and-drop (filePanel/useFileUpload).
   const {
@@ -469,6 +472,9 @@ function FilePanel({
    */
   const handleFileClick = async (filePath: string): Promise<FileError | null> => {
     const seq = ++openSeqRef.current;
+    // Every open lands here, so this is where a reference stops being the one a
+    // retry should re-run. `openFileRef` re-arms it after its own fallback open.
+    unresolvedRef.current = null;
     const current = () => seq === openSeqRef.current;
     const ext = getFileExtension(filePath);
     setFileError(null);
@@ -639,10 +645,29 @@ function FilePanel({
 
     // With no answer (sandbox starting, request failed), reading the path as
     // written shows why, with a retry.
-    if (!result || result.status === 'unavailable') return void openAt(primary);
+    if (!result || result.status === 'unavailable') {
+      // The seq the fallback open is about to take, claimed before the await so
+      // an open that overtakes it leaves the reference alone.
+      const fallbackSeq = openSeqRef.current + 1;
+      await openAt(primary);
+      // Retrying the path alone asks the same unanswerable question: `report.md`
+      // is not where the file is, the lookup is the only thing that knows
+      // `work/report.md`, and the lookup is the part that was unavailable.
+      // Keeping the reference is what lets a retry once the sandbox is up
+      // resolve, instead of failing again on the guess.
+      if (openSeqRef.current === fallbackSeq) unresolvedRef.current = { rawRef, fromFile, location };
+      return;
+    }
     if (result.status === 'resolved' && result.path) return void openAt(result.path);
     // Name the reference as written; the joined reading is only our guess.
     landOnSearch(candidates[candidates.length - 1], result.matches);
+  };
+
+  /** Try the failed open again, as the same question that was asked the first time. */
+  const retryOpen = () => {
+    const ref = unresolvedRef.current;
+    if (ref) return void openFileRef(ref.rawRef, { fromFile: ref.fromFile, location: ref.location });
+    if (selectedFile) void handleFileClick(selectedFile);
   };
 
   // Links inside a viewed file resolve against that file's directory first.
@@ -1160,7 +1185,7 @@ function FilePanel({
             ) : fileError ? (
               <FileErrorDisplay
                 error={fileError}
-                onRetry={() => handleFileClick(selectedFile)}
+                onRetry={() => retryOpen()}
                 onDownload={handleDownloadSelected}
               />
             ) : fileMime === 'pdf' ? (
