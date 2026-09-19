@@ -209,6 +209,7 @@ async def test_relayed_bytes_stage_inside_the_folder_the_scan_walks():
     [
         ({"computer_id": "c-1", "dir_name": DIR_A}, f"{ROOT}/{DIR_A}"),
         ({"computer_id": "c-1", "dir_name": DIR_B}, f"{ROOT}/{DIR_B}"),
+        ({"computer_id": "c-1", "dir_name": DIR_A, "computer_root_dir": "/persisted/root"}, f"/persisted/root/{DIR_A}"),
     ],
 )
 def test_the_serve_root_is_the_workspaces_own_folder(row, expected):
