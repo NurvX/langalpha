@@ -42,6 +42,9 @@ from src.server.database.workspace import (
 )
 from src.server.models.computer import CLAIMABLE_FOR_START, ComputerStatus
 from src.server.services.user_skills import sandbox_skill_sync_params
+from src.server.services.workspace_status_pubsub import (
+    publish_workspace_binding_change,
+)
 
 from src.server.services.computer_manager._types import (
     _MACHINE_DECISION_LOCK_TIMEOUT_MS,
@@ -236,6 +239,9 @@ class MachineLifecycleMixin:
         logger.info(
             f"Adopted workspace {workspace_id} onto computer {computer_id} "
             "(migration 046 left it unbound)"
+        )
+        await publish_workspace_binding_change(
+            workspace_id, str(bound.get("status") or status), computer_id
         )
         # The bind is what assigns the folder, and it returns the project row it
         # wrote, so the machine row can carry the folder out of here without a

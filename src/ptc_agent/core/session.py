@@ -476,6 +476,13 @@ class SessionManager:
         logger.info("All sessions stopped")
 
     @classmethod
+    def detach_all(cls) -> None:
+        """Forget this process's handles without changing shared sandboxes."""
+        count = len(cls._sessions)
+        cls._sessions.clear()
+        logger.info("All sessions detached", count=count)
+
+    @classmethod
     def get_session(
         cls,
         session_key: str,

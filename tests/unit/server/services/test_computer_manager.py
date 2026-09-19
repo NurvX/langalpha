@@ -540,9 +540,12 @@ class TestResolveBinding(_Base):
         assert binding.computer_id == "comp-1"
 
     @pytest.mark.asyncio
+    @patch(f"{_MACHINES}.publish_workspace_binding_change")
     @patch(f"{_MACHINES}.bind_workspace_to_computer")
     @patch(f"{_MACHINES}.get_computer_by_provider_ref")
-    async def test_adoption_speaks_the_insert_contract(self, mock_by_ref, mock_bind):
+    async def test_adoption_speaks_the_insert_contract(
+        self, mock_by_ref, mock_bind, mock_binding_change
+    ):
         """The one caller that hands create_computer a sandbox to adopt. A mock
         with the real signature is what turns a stray keyword into a failure
         here rather than on the first legacy project's first request."""
@@ -580,6 +583,7 @@ class TestResolveBinding(_Base):
         assert kwargs["platform_secret_version"] == 3
         assert kwargs["is_primary"] is True
         assert adopted["dir_name"] == "research-ab12"
+        mock_binding_change.assert_awaited_once_with("ws-a", "running", "comp-1")
 
     @pytest.mark.asyncio
     @patch(f"{_MACHINES}.bind_workspace_to_computer")

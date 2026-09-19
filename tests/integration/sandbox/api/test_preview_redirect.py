@@ -22,12 +22,19 @@ from tests.conftest import create_test_app
 from tests.integration.sandbox.conftest import _make_core_config
 from tests.integration.sandbox.memory_provider import MemoryProvider
 
-from .conftest import TEST_USER_ID, TEST_WS_ID, _make_workspace
+from .conftest import TEST_PROJECT, TEST_USER_ID, TEST_WS_ID, _make_workspace
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 PREVIEW_BASE = f"/api/v1/preview/{TEST_WS_ID}"
 FAKE_SIGNED_URL = "https://test-preview.example.com/proxy/8080"
+
+
+def _workspace_for(sandbox, *, status="running"):
+    return _make_workspace(
+        status=status,
+        computer_root_dir=sandbox.config.filesystem.working_directory,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +61,7 @@ async def sandbox(sandbox_base_dir):
         return_value=provider,
     ):
         sb = PTCSandbox(config)
-        await sb.setup_sandbox_workspace()
+        await sb.setup_sandbox_workspace(dir_name=TEST_PROJECT.dir_name)
         actual_work_dir = await sb.runtime.fetch_working_dir()
         sb.config.filesystem.working_directory = actual_work_dir
         sb.config.filesystem.allowed_directories = [actual_work_dir, "/tmp"]
@@ -97,7 +104,7 @@ async def preview_client(mock_session, sandbox):
     with (
         patch(
             "src.server.app.workspace_sandbox.db_get_workspace",
-            AsyncMock(return_value=_make_workspace()),
+            AsyncMock(return_value=_workspace_for(sandbox)),
         ),
         patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
         patch(
@@ -162,7 +169,7 @@ class TestPreviewRedirectStoppedWorkspace:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace(status="stopped")),
+                AsyncMock(return_value=_workspace_for(sandbox, status="stopped")),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
         ):
@@ -216,7 +223,7 @@ class TestPreviewRedirectWithPath:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
             patch(
@@ -249,7 +256,7 @@ class TestPreviewRedirectWithPath:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
             patch(
@@ -291,7 +298,7 @@ class TestPreviewRedirectPathTraversal:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
             patch(
@@ -322,7 +329,7 @@ class TestPreviewRedirectPathTraversal:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
             patch(
@@ -376,7 +383,7 @@ class TestPreviewRedirectTimeout:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
             patch(
@@ -413,7 +420,7 @@ class TestPreviewRedirectNotImplemented:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
             patch(
@@ -472,7 +479,7 @@ class TestPreviewRedirectSessionNotReady:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
         ):
@@ -503,7 +510,7 @@ class TestPreviewRedirectSessionNotReady:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
         ):
