@@ -1,12 +1,17 @@
 import { File, FileImage, FileText } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { fileExtension } from '../../utils/filePaths';
+import { fileExtension, fileKind, fileKindIcon } from '../../utils/filePaths';
 import type { SortOption } from './types';
+import type { FocusViewer } from './useFileFocus';
 
 /** The one extension reader; re-exported here for the panel's own callers. */
 export { fileExtension as getFileExtension };
 
 // --- Constants ---
+
+/** Where the sandbox parks a tool result too large to inline; such a file is
+ *  line-numbered text, read-only, and rendered as markdown whatever its name. */
+export const LARGE_TOOL_RESULTS_PREFIX = '/large_tool_results/';
 
 export const EXT_TO_LANG: Record<string, string> = {
   py: 'python', js: 'javascript', jsx: 'jsx', ts: 'typescript', tsx: 'tsx',
@@ -33,6 +38,18 @@ export function getFileIcon(fileName: string): LucideIcon {
   if (['md', 'txt', 'csv', 'json', 'py', 'js', 'html'].includes(ext)) return FileText;
   if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp'].includes(ext)) return FileImage;
   return File;
+}
+
+/**
+ * The glyph beside a file's name in the tree and on its tab.
+ *
+ * A deliverable gets the icon its kind already has everywhere else in the app,
+ * so a report opened from a chat card and the same file in the tree read as one
+ * thing; working material falls back to the coarse text/image/other reading.
+ */
+export function fileGlyph(path: string): LucideIcon {
+  const kind = fileKind(path);
+  return kind ? fileKindIcon(kind) : getFileIcon(path);
 }
 
 // Map extensions to human-readable type categories
@@ -108,4 +125,21 @@ export function dirSortKey(dir: string): number {
   if (DIR_PRIORITY[dir] != null) return DIR_PRIORITY[dir];
   if (SYSTEM_DIR_PREFIXES.includes(dir)) return 99;
   return 3;
+}
+
+/**
+ * Which viewer a path lands in, as far as a location can reach into it — the
+ * same ladder `FileViewer` renders, named once so the focus machinery and the
+ * viewer cannot disagree about what is on screen.
+ */
+export function viewerFor(path: string, mime: string | null, editing: boolean): FocusViewer {
+  if (editing) return 'other';
+  const ext = fileExtension(path);
+  if (mime === 'pdf') return 'pdf';
+  if (mime === 'excel') return 'excel';
+  if (mime === 'image' || ext === 'csv') return 'other';
+  if (ext === 'html' || ext === 'htm') return 'html';
+  if (path.startsWith(LARGE_TOOL_RESULTS_PREFIX)) return 'other';
+  if (mime?.includes('markdown') || ext === 'md') return 'markdown';
+  return 'code';
 }

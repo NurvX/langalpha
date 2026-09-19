@@ -841,7 +841,8 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
                 workspaceId={workspaceId}
                 onClose={() => setShowFilePanel(false)}
                 panelTarget={filePanelTargetFile ? { kind: 'file', path: filePanelTargetFile } : null}
-                onTargetFileHandled={() => setFilePanelTargetFile(null)}
+                onTargetHandled={() => setFilePanelTargetFile(null)}
+                persistTabs={false}
                 files={panelFiles}
                 filesLoading={panelFilesLoading}
                 filesError={panelFilesError}

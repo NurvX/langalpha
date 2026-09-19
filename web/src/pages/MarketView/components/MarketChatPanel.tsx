@@ -17,7 +17,7 @@ import { ChartSurfaceContext, type ChartSurface } from '../../ChatAgent/contexts
 import { WorkspaceProvider } from '../../ChatAgent/contexts/WorkspaceContext';
 import { useChatMessages } from '../../ChatAgent/hooks/useChatMessages';
 import { useActiveThreadPublisher } from '@/lib/threadLifecycle/useActiveThreadPublisher';
-import { getFlashWorkspace, getPreviewUrl, summarizeThread, offloadThread } from '../../ChatAgent/utils/api';
+import { appendPathSuffix, getFlashWorkspace, getPreviewUrl, summarizeThread, offloadThread } from '../../ChatAgent/utils/api';
 import { attachmentsToContexts } from '../../ChatAgent/utils/fileUpload';
 import {
   resolveSubagentTelemetry as resolveSubagentTelemetryPure,
@@ -29,6 +29,7 @@ import type { Workspace } from '@/types/api';
 import MarketChatHistoryButton from './MarketChatHistoryButton';
 import MarketDetailDialog, { type DialogPayload } from './MarketDetailDialog';
 import { getMarketThreadId, setMarketThreadId, clearMarketThreadId } from '../utils/threadPersistence';
+import { readMarketViewRoute } from '../utils/marketRoute';
 import { normalizeTimeframe } from '../stores/chartAnnotationStore';
 import { chartSelectionStore, useChartSelections, isConfirmedFor } from '../stores/chartSelectionStore';
 import { buildChartSelectionSend } from '../utils/selectionSend';
@@ -47,18 +48,6 @@ function bannerStyle(background: string): React.CSSProperties {
     color: 'var(--color-text-tertiary)',
     fontSize: '0.75rem',
   };
-}
-
-/** Append a URL path suffix (e.g. "/report.html") to a resolved signed URL. */
-function appendPathSuffix(baseUrl: string, path?: string): string {
-  if (!path) return baseUrl;
-  try {
-    const parsed = new URL(baseUrl);
-    parsed.pathname = parsed.pathname.replace(/\/+$/, '') + path;
-    return parsed.toString();
-  } catch {
-    return baseUrl;
-  }
 }
 
 /** Slash-command shapes emitted by ChatInput (skill/subagent pills, action verbs). */
@@ -142,19 +131,30 @@ export default function MarketChatPanel(props: MarketChatPanelProps): React.Reac
   // engine can re-initialise with a different thread.
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeThreadInit, setActiveThreadInit] = useState<string>(() => {
-    const fromUrl = searchParams.get('thread');
+    const fromUrl = readMarketViewRoute(searchParams).threadId;
     if (fromUrl) return fromUrl;
     return getMarketThreadId(activeWorkspaceId, symbol) ?? '__default__';
   });
 
-  // Re-resolve thread when symbol changes — restore the last-seen thread for
-  // the new symbol in the current workspace (or start a fresh chat if none).
+  // Re-resolve thread when symbol changes: restore the last-seen thread for
+  // the new symbol in the current workspace, or start a fresh chat if none.
+  // A fresh chat also drops `?thread` from the URL; the mirror below rewrites
+  // it for a restored thread but never touches it for a default one, so a
+  // reload would otherwise reopen the previous symbol's conversation and
+  // save it as this symbol's.
   const lastSymbolRef = useRef(symbol);
   useEffect(() => {
     if (lastSymbolRef.current === symbol) return;
     lastSymbolRef.current = symbol;
-    setActiveThreadInit(getMarketThreadId(activeWorkspaceId, symbol) ?? '__default__');
-  }, [symbol, activeWorkspaceId]);
+    const restored = getMarketThreadId(activeWorkspaceId, symbol);
+    setActiveThreadInit(restored ?? '__default__');
+    if (restored) return;
+    setSearchParams((p) => {
+      const next = new URLSearchParams(p);
+      if (next.has('thread')) next.delete('thread');
+      return next;
+    }, { replace: true });
+  }, [symbol, activeWorkspaceId, setSearchParams]);
 
   // Reset to a fresh chat when scope (mode / workspace) changes. The user
   // explicitly chose a different scope — surface a clean slate. localStorage

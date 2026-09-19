@@ -56,3 +56,5 @@ export function useFileBackup({ workspaceId, files, readOnly }: {
     handleBackup,
   };
 }
+
+export type FileBackup = ReturnType<typeof useFileBackup>;

@@ -40,6 +40,7 @@ import { speechSupported, useVoiceInput } from './chat-input.useVoiceInput';
 import { useFileAttachments } from './chat-input.useFileAttachments';
 import { modelPrefs, modelProfile } from '@/lib/modelPreferences';
 import { queryKeys } from '@/lib/queryKeys';
+import { formatContextBlock } from './chat-input.contextBlocks';
 
 /** Autosize cap for the composer textarea; past this the box scrolls. */
 const MAX_TEXTAREA_HEIGHT = 200;
@@ -50,7 +51,7 @@ const MODEL_SWITCH_TOAST_MS = 8000;
 
 export interface ChatInputHandle {
   getModelOptions: () => ModelOptions;
-  addContext: (ctx: { path?: string; snippet?: string; label?: string; lineStart?: number; lineEnd?: number; lineCount?: number; source?: string }) => void;
+  addContext: (ctx: { path?: string; snippet?: string; label?: string; locator?: string; lineStart?: number; lineEnd?: number; lineCount?: number; source?: string }) => void;
   /**
    * Imperatively add a widget context snapshot to the deck. Local-only —
    * this does NOT publish to ContextBus. Use this when re-seeding the deck
@@ -336,13 +337,13 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         marketWatch: effectiveMarketWatch,
       };
     },
-    addContext({ path, snippet, label, lineStart, lineEnd, lineCount, source }) {
+    addContext({ path, snippet, label, locator, lineStart, lineEnd, lineCount, source }) {
       if (snippet) {
         // Snippet context — add pill with snippet data, don't modify textarea
         setMentionedFiles((prev) => {
           // Deduplicate by exact snippet content (handles multiple selections)
-          if (prev.some((f) => f.snippet === snippet && f.path === (path || '') && f.source === (source || undefined))) return prev;
-          return [...prev, { path: path || '', snippet, label, lineStart, lineEnd, lineCount, source }];
+          if (prev.some((f) => f.snippet === snippet && f.path === (path || '') && f.locator === locator && f.source === (source || undefined))) return prev;
+          return [...prev, { path: path || '', snippet, label, locator, lineStart, lineEnd, lineCount, source }];
         });
       } else if (path) {
         // Whole file context — same behavior as selectFile via @mention
@@ -569,18 +570,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     let finalMessage = message;
     const snippetMentions = mentionedFiles.filter((f) => f.snippet);
     if (snippetMentions.length > 0) {
-      const blocks = snippetMentions.map((f) => {
-        if (f.source === 'chat') {
-          return `\n<details>\n<summary>[${t('context.fromAgentResponse')}]</summary>\n\n\`\`\`\n${f.snippet}\n\`\`\`\n</details>`;
-        }
-        if (f.source === 'paste') {
-          return `\n<details>\n<summary>[${t('context.pastedText')}]</summary>\n\n\`\`\`\n${f.snippet}\n\`\`\`\n</details>`;
-        }
-        const lineInfo = f.lineStart != null
-          ? ` (lines ${f.lineStart}-${f.lineEnd}, ${f.lineCount} line${f.lineCount !== 1 ? 's' : ''})`
-          : '';
-        return `\n<details>\n<summary>@${f.path}${lineInfo}</summary>\n\n\`\`\`\n${f.snippet}\n\`\`\`\n</details>`;
-      });
+      const blocks = snippetMentions.map((f) => formatContextBlock(f, t));
       finalMessage = finalMessage.trimEnd() + '\n' + blocks.join('\n');
     }
     onSend(finalMessage, planMode, readyAttachments, slashCommands, {
@@ -769,6 +759,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
               {mentionedFiles.map((f, idx) => {
                 const isSnippet = !!f.snippet;
                 const isPaste = f.source === 'paste';
+                const isChart = f.source === 'chart';
                 const name = isSnippet ? f.label : f.path.split('/').pop();
                 const pillKey = (f.path || '') + '::' + (f.label || '') + '::' + idx;
                 // Snippet tooltips preview, not mirror — a condensed paste can
@@ -784,6 +775,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                   >
                     {isPaste
                       ? <ClipboardList className="h-3 w-3 flex-shrink-0" style={{ color: 'var(--color-accent-primary)' }} />
+                      : isChart
+                        ? <ChartCandlestick className="h-3 w-3 flex-shrink-0" style={{ color: 'var(--color-accent-primary)' }} />
                       : isSnippet
                         ? <TextSelect className="h-3 w-3 flex-shrink-0" style={{ color: 'var(--color-accent-primary)' }} />
                         : <FileText className="h-3 w-3 flex-shrink-0" style={{ color: 'var(--color-accent-primary)' }} />

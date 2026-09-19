@@ -714,7 +714,7 @@ function Markdown({ content, variant = 'panel', className = '', style, onOpenFil
               <a
                 className="underline hover:opacity-80 transition-opacity cursor-pointer"
                 style={{ color: 'var(--color-accent-primary)' }}
-                onClick={(e: React.MouseEvent) => { e.preventDefault(); onOpenFile(normalizeFilePath(path), wsRef?.workspaceId, location ?? undefined, parseAgentPath(path).absolute || !!wsRef); }}
+                onClick={(e: React.MouseEvent) => { e.preventDefault(); onOpenFile(normalizeFilePath(path), wsRef?.workspaceId, location ?? undefined, { rooted: parseAgentPath(path).absolute || !!wsRef }); }}
               >{linkText}</a>
             );
           }
@@ -750,7 +750,7 @@ function Markdown({ content, variant = 'panel', className = '', style, onOpenFil
             <a
               className="underline hover:opacity-80 transition-opacity cursor-pointer"
               style={{ color: 'var(--color-accent-primary)' }}
-              onClick={(e: React.MouseEvent) => { e.preventDefault(); onOpenFile(normalizeFilePath(path), wsRef?.workspaceId, location ?? undefined, parseAgentPath(path).absolute || !!wsRef); }}
+              onClick={(e: React.MouseEvent) => { e.preventDefault(); onOpenFile(normalizeFilePath(path), wsRef?.workspaceId, location ?? undefined, { rooted: parseAgentPath(path).absolute || !!wsRef }); }}
               {...props}
             >{children}</a>
           );

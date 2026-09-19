@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo, Suspense } from 'react';
-import { ArrowLeft, X, RefreshCw, Upload, ArrowUpDown, Trash2, CheckSquare, HardDrive, Pencil, TextSelect, FolderOpen, Settings, ScrollText, Search } from 'lucide-react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState, Suspense } from 'react';
+import { TextSelect, Upload } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import {
   memoMimeForName,
   useAddToMemo,
@@ -8,67 +9,75 @@ import {
   MemoStaleBanner,
   MemoDiffModal,
 } from './FilePanelMemo';
-import { Loader } from '@/components/ui/loader';
-import { toast } from '@/components/ui/use-toast';
 import { useWorkspace } from '@/hooks/useWorkspace';
-import { SandboxSettingsContent } from './SandboxSettingsPanel';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import SyntaxHighlighter, { oneDark, oneLight } from './SyntaxHighlighter';
-import { useTranslation } from 'react-i18next';
-import { readWorkspaceFile, readWorkspaceFileFull, writeWorkspaceFile, downloadWorkspaceFile, downloadWorkspaceFileAsArrayBuffer, triggerFileDownload, resolveWorkspaceFile } from '../utils/api';
-import { basename, isSystemPath, linkCandidates, resolveExact } from '../utils/fileRefResolver';
-import { classifyAgentPath, normalizeAgentPath, parseAgentPath } from '../utils/agentPaths';
+import { useNarrowContainer } from '@/hooks/useNarrowContainer';
+import { SandboxSettingsContent } from './SandboxSettingsPanel';
+import {
+  readWorkspaceFile, readWorkspaceFileFull, writeWorkspaceFile, downloadWorkspaceFileAsArrayBuffer,
+  triggerFileDownload, resolveWorkspaceFile,
+} from '../utils/api';
+import { linkCandidates } from '../utils/fileRefResolver';
+import type { WriteEvent } from '../utils/fileRefResolver';
+import { classifyAgentPath, parseAgentPath } from '../utils/agentPaths';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { parseFragment, type FileLocation, type OpenFileHandler } from '../utils/fileLocation';
-import { stripLineNumbers } from './toolDisplayConfig';
-import Markdown from './Markdown';
-import ImageLightbox from './ImageLightbox';
-import DocumentErrorBoundary from './viewers/DocumentErrorBoundary';
 import FileHeaderActions from './FileHeaderActions';
 import './FilePanel.css';
 
-const PdfViewer = React.lazy(() => import('./viewers/PdfViewer'));
-const ExcelViewer = React.lazy(() => import('./viewers/ExcelViewer'));
-const CsvViewer = React.lazy(() => import('./viewers/CsvViewer'));
-const HtmlViewer = React.lazy(() => import('./viewers/HtmlViewer'));
-const CodeEditor = React.lazy(() => import('./viewers/CodeEditor'));
 const ExportPreviewModal = React.lazy(() => import('./ExportPreviewModal'));
 
-import type { ApiAdapter, ContextPayload, FileRefResolution } from './filePanel/types';
-import type { FileError } from './filePanel/fileErrors';
-import { categorizeFileError, FileErrorDisplay } from './filePanel/fileErrors';
-import { DOWNLOAD_ONLY_EXTENSIONS, EDITABLE_EXTENSIONS, EXT_TO_LANG, getAvailableTypes, getFileExtension, getFileType, SORT_OPTIONS, sortFiles } from './filePanel/fileMeta';
-import { buildFileTree } from './filePanel/fileTree';
-import type { TreeNode } from './filePanel/types';
-import { DirectoryNode } from './filePanel/DirectoryNode';
-import { DocumentErrorFallback, DocumentLoadingFallback } from './filePanel/fallbacks';
+import type { ApiAdapter, ChartTabSpec, ContextPayload, PanelTarget } from './filePanel/types';
+import { EDITABLE_EXTENSIONS, getFileExtension, viewerFor } from './filePanel/fileMeta';
 import { useFileUpload } from './filePanel/useFileUpload';
 import { useFileEdit } from './filePanel/useFileEdit';
 import { useSelectionContext } from './filePanel/useSelectionContext';
 import { useFileSelection } from './filePanel/useFileSelection';
 import { useFileBackup } from './filePanel/useFileBackup';
-import { useFileFocus, type FocusViewer } from './filePanel/useFileFocus';
+import { useFileFocus } from './filePanel/useFileFocus';
 import { FocusChip } from './filePanel/FocusChip';
+import { useFileTabs, lastChartSymbol } from './filePanel/useFileTabs';
+import { useTreeFilter } from './filePanel/useTreeFilter';
+import { useTreeInteraction } from './filePanel/useTreeInteraction';
+import { useFileRefOpen } from './filePanel/useFileRefOpen';
+import { PanelNotices } from './filePanel/PanelNotices';
+import { FileContextMenu, type FileMenuAction } from './filePanel/FileContextMenu';
+import { useFileDownloads } from './filePanel/useFileDownloads';
+import { useFileBodyCache, useFileBody } from './filePanel/useFileBody';
+import { useChangedFiles } from './filePanel/useChangedFiles';
+import { countLines } from '../utils/fileLocation';
+import { TabStrip } from './filePanel/TabStrip';
+import { AnimatePresence } from 'framer-motion';
+import { TreeColumn } from './filePanel/TreeColumn';
+import { FileCrumbs } from './filePanel/FileCrumbs';
+import { FileViewer } from './filePanel/FileViewer';
+import { EmptyTab } from './filePanel/EmptyTab';
+import { PreviewCrumbs } from './filePanel/PreviewCrumbs';
+import { PreviewPanes } from './filePanel/PreviewPanes';
+import { ChartTab } from './filePanel/ChartTab';
+import { usePreviews } from './filePanel/usePreviews';
 
-// --- FilePanel ---
+/** Below this the tree cannot be a column without starving the viewer. */
+const TREE_OVERLAY_WIDTH = 720;
 
 interface FilePanelProps {
   workspaceId: string;
+  /** Scopes the tab strip; absent for a chat that has not sent its first message, or a share. */
+  threadId?: string | null;
   onClose: () => void;
-  targetFile?: string | null;
-  /** Where in `targetFile` the reference pointed (a line, page or heading). */
-  targetLocation?: FileLocation | null;
-  onTargetFileHandled?: () => void;
-  targetDirectory?: string | null;
-  /** Which folder request `targetDirectory` carries. It stays on screen as the
-   *  tree's filter after the click that set it, so the string alone cannot say
-   *  a new request arrived; the same folder asked for twice bumps this. */
-  targetDirSeq?: number | null;
-  onTargetDirHandled?: () => void;
+  /** What the chat asked the panel to show. Only `file`, `preview` and `chart`
+   *  concern this panel; a `file` target's `dir` stays on as the tree's scope
+   *  until `onTargetHandled` clears it. */
+  target?: PanelTarget | null;
+  onTargetHandled?: () => void;
+  /** Leaves the panel for the full MarketView page on this symbol. */
+  onOpenInMarketView?: ((spec: ChartTabSpec) => void) | null;
   /** Opens a reference to another workspace (a `__wsref__` link inside a viewed file). */
   onOpenFile?: OpenFileHandler | null;
   /** This thread's Write/Edit paths, newest first, for resolving a reference by name. */
   getRecentWritePaths?: (() => string[]) | null;
+  /** Every Write/Edit in the thread, newest first; what marks an open tab changed. */
+  getWriteLog?: (() => WriteEvent[]) | null;
   files?: string[];
   filesLoading?: boolean;
   filesError?: string | null;
@@ -78,34 +87,36 @@ interface FilePanelProps {
    *  `allow_files` without `allow_download`, and the download endpoint refuses
    *  what `allow_files` alone opened, so an offered save fails after the click. */
   canDownload?: boolean;
-  /** Lock to a single file — back button closes the panel instead of returning to the file tree. */
+  /** Lock to one file: no tree, and closing the last tab closes the panel. */
   singleFileMode?: boolean;
+  /** False keeps the strip in memory only: a panel browsing beside a gallery
+   *  must not write over the strip the workspace's conversations seed from. */
+  persistTabs?: boolean;
   apiAdapter?: ApiAdapter | null;
   onAddContext?: ((ctx: ContextPayload) => void) | null;
   showSystemFiles?: boolean;
   onToggleSystemFiles?: (() => void) | null;
-  /** Hide the panel-close affordances (the mobile back arrow and the trailing X)
-   * when FilePanel is embedded inside a tabbed wrapper that owns the close button. */
+  /** Hide the panel-close affordances when FilePanel is embedded inside a
+   * tabbed wrapper that owns the close button. */
   hideClose?: boolean;
+  /** Whether any open tab holds an unsaved edit. A wrapper that owns the close
+   *  button reads this to ask before it unmounts the panel. */
+  onDirtyChange?: ((dirty: boolean) => void) | null;
   onSwitchToMemoTab?: (() => void) | null;
-  /** Copy a shareable link to an HTML report (authenticated app only). Enables
-   *  sharing if needed, then copies a direct full-tab link to the served file
-   *  (`${origin}/api/v1/public/shared/{token}/files/serve/<path>`). */
+  /** Copy a shareable link to an HTML report (authenticated app only). */
   onCopyShareLink?: ((filePath: string) => void) | null;
 }
 
 function FilePanel({
   workspaceId,
+  threadId = null,
   onClose,
-  targetFile,
-  targetLocation = null,
-  onTargetFileHandled,
-  targetDirectory,
-  targetDirSeq = null,
-  onTargetDirHandled,
+  target = null,
+  onTargetHandled,
+  onOpenInMarketView = null,
   onOpenFile = null,
   getRecentWritePaths = null,
-  // Shared file list from useWorkspaceFiles hook
+  getWriteLog = null,
   files = [],
   filesLoading = false,
   filesError = null,
@@ -113,1218 +124,658 @@ function FilePanel({
   readOnly = false,
   canDownload = true,
   singleFileMode = false,
+  persistTabs = true,
   apiAdapter = null,
   onAddContext = null,
   showSystemFiles = false,
   onToggleSystemFiles = null,
   hideClose = false,
+  onDirtyChange = null,
   onSwitchToMemoTab = null,
   onCopyShareLink = null,
 }: FilePanelProps): React.ReactElement {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
-  // Resolve API functions -- use adapter overrides if provided, otherwise fall back to authenticated imports
-  const readFileFn = apiAdapter?.readFile
-    ? (_: string, path: string) => apiAdapter.readFile!(path)
-    : readWorkspaceFile;
-  const downloadFileFn = apiAdapter?.downloadFile
-    ? (_: string, path: string) => apiAdapter.downloadFile!(path)
-    : downloadWorkspaceFile;
-  const downloadFileAsArrayBufferFn = apiAdapter?.downloadFileAsArrayBuffer
-    ? (_: string, path: string) => apiAdapter.downloadFileAsArrayBuffer!(path)
-    : downloadWorkspaceFileAsArrayBuffer;
-  const triggerDownloadFn = apiAdapter?.triggerDownload
-    ? (_: string, path: string) => apiAdapter.triggerDownload!(path)
-    : triggerFileDownload;
-  const writeFileFn = apiAdapter?.writeFile
-    ? (_: string, path: string, content: string) => apiAdapter.writeFile!(path, content)
-    : writeWorkspaceFile;
-  const readFileFullFn = apiAdapter?.readFileFull
-    ? (_: string, path: string) => apiAdapter.readFileFull!(path)
-    : readWorkspaceFileFull;
-  // The server settles a reference against the real workspace (or a share's listing).
-  const resolveFileFn = apiAdapter
-    ? apiAdapter.resolveFile ?? null
-    : (candidates: string[], recentWrites: string[]) => resolveWorkspaceFile(workspaceId, candidates, recentWrites);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const narrow = useNarrowContainer(panelRef, TREE_OVERLAY_WIDTH);
 
-  // Workspace settings inline view
-  const [showSettings, setShowSettings] = useState(false);
+  // A share reads through its own endpoints, which take no workspace id.
+  // Memoised as one object: every hook below closes over these, and rebuilding
+  // them per render would make each of those callbacks unstable in turn.
+  const { readFileFn, readFileFullFn, downloadFileAsArrayBufferFn, triggerDownloadFn, writeFileFn, resolveFileFn } = useMemo(() => {
+    const adapter: ApiAdapter = apiAdapter ?? {};
+    const { readFile, readFileFull, downloadFileAsArrayBuffer, triggerDownload, writeFile, resolveFile } = adapter;
+    return {
+      readFileFn: readFile ? (_: string, p: string) => readFile(p) : readWorkspaceFile,
+      readFileFullFn: readFileFull ? (_: string, p: string) => readFileFull(p) : readWorkspaceFileFull,
+      downloadFileAsArrayBufferFn: downloadFileAsArrayBuffer
+        ? (_: string, p: string) => downloadFileAsArrayBuffer(p)
+        : downloadWorkspaceFileAsArrayBuffer,
+      triggerDownloadFn: triggerDownload ? (_: string, p: string) => triggerDownload(p) : triggerFileDownload,
+      writeFileFn: writeFile ? (_: string, p: string, c: string) => writeFile(p, c) : writeWorkspaceFile,
+      resolveFileFn: apiAdapter
+        ? resolveFile ?? null
+        : (candidates: string[], recentWrites: string[]) => resolveWorkspaceFile(workspaceId, candidates, recentWrites),
+    };
+  }, [apiAdapter, workspaceId]);
+
   const { data: wsData } = useWorkspace(workspaceId);
   const isFlashWorkspace = wsData?.status === 'flash';
-  const workspaceName = wsData?.name;
 
-  // File detail view state
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [fileContent, setFileContent] = useState<string | null>(null);
-  const [fileArrayBuffer, setFileArrayBuffer] = useState<ArrayBuffer | null>(null);
-  const [fileMime, setFileMime] = useState<string | null>(null);
-  const [imageLightboxOpen, setImageLightboxOpen] = useState(false);
-  const [fileLoading, setFileLoading] = useState(false);
-  const [fileError, setFileError] = useState<FileError | null>(null);
-  const [fileTruncated, setFileTruncated] = useState(false);
-  const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
+  // A share has no workspace id of its own, so its bodies are scoped to this
+  // mount: two shares open at once must not read each other's bytes.
+  const mountId = useId();
+  const scope = workspaceId || `adapter:${mountId}`;
+  const readers = useMemo(
+    () => ({ readFile: readFileFn, readFileFull: readFileFullFn, downloadFileAsArrayBuffer: downloadFileAsArrayBufferFn }),
+    [readFileFn, readFileFullFn, downloadFileAsArrayBufferFn],
+  );
+  const cache = useFileBodyCache({ scope, workspaceId, readers });
 
-  // Tree search, and the landing a reference that did not resolve opens on:
-  // the query is its file name, `missedRef` names what was asked for, and
-  // `extraMatches` carries hits the loaded list hides (system directories).
-  const [searchQuery, setSearchQuery] = useState('');
-  const [missedRef, setMissedRef] = useState<string | null>(null);
-  const [extraMatches, setExtraMatches] = useState<string[]>([]);
-  // Bumped by every reference open, so a slow name search cannot land after
-  // the user has already clicked something else.
-  const openSeqRef = useRef(0);
-  // The reference behind a file the lookup could not place, kept so its Retry
-  // asks the lookup again rather than re-reading the path it fell back to.
-  const unresolvedRef = useRef<{ rawRef: string; fromFile: string | null; location: FileLocation | null } | null>(null);
+  // A peek at one file borrows the PTC workspace's id for its reads; its strip
+  // must not become that workspace's seed, so it is kept in memory only, and
+  // the last chart symbol is neither read nor left behind. The strip is still
+  // this workspace's: pointing the panel at another one starts that
+  // workspace's strip rather than leaving these tabs under the new id.
+  const persistStrip = !singleFileMode && persistTabs;
+  const tabs = useFileTabs(workspaceId, threadId, { persist: persistStrip });
+  const activeTab = tabs.activeTab;
+  const selectedFile = activeTab.kind === 'file' ? activeTab.path : null;
 
-  // Upload + drag-and-drop (filePanel/useFileUpload).
-  const {
-    uploadProgress,
-    uploadError,
-    setUploadError,
-    fileInputRef,
-    isDragOver,
-    handleFileInputChange,
-    handleDragEnter,
-    handleDragLeave,
-    handleDragOver,
-    handleDrop,
-  } = useFileUpload({ workspaceId, onRefreshFiles });
+  const previews = usePreviews(workspaceId);
 
-  // Edit mode (filePanel/useFileEdit).
-  const {
-    isEditing,
-    setIsEditing,
-    editContent,
-    setEditContent,
-    isSaving,
-    saveError,
-    setSaveError,
-    showDiff,
-    setShowDiff,
-    originalContent,
-    setOriginalContent,
-    editorRef,
-    canUndo,
-    setCanUndo,
-    canRedo,
-    setCanRedo,
-    handleUndoRedoChange,
-    hasUnsavedChanges,
-    handleStartEdit,
-    handleEditorChange,
-    handleSave,
-    handleCancelEdit,
-  } = useFileEdit({ workspaceId, selectedFile, fileContent, setFileContent, readFileFullFn, writeFileFn });
+  const { body, loading: fileLoading, error: readError, readAt, refetch } = useFileBody({
+    cache, path: selectedFile, workspaceStatus: wsData?.status,
+  });
+  const fileContent = body?.content ?? null;
+  const fileMime = body?.mime ?? null;
 
-  // Selection tooltip + right-click context menu (filePanel/useSelectionContext).
-  const {
-    selectionTooltip,
-    contentWrapperRef,
-    contextMenu,
-    setContextMenu,
-    handleContentMouseUp,
-    handleEditorTextSelect,
-    handleAddSelectionContext,
-  } = useSelectionContext({ selectedFile, fileContent, onAddContext });
+  const changed = useChangedFiles(getWriteLog);
+  useEffect(() => {
+    if (selectedFile && readAt) changed.markRead(selectedFile);
+  }, [selectedFile, readAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The read marks die with this mount, so the bytes they describe must too:
+  // a panel reopened inside the body's fresh window would otherwise show
+  // bytes written over while it was away and stamp that write as read. With
+  // no observer left, marking stale issues no request; the active tab
+  // re-reads on the way back in.
+  const dropBodies = useStableHandler(() => cache.invalidate());
+  useEffect(() => () => dropBodies(), [dropBodies]);
 
-  // Mirrors the viewer branches in the render below.
-  const focusViewer: FocusViewer = (() => {
-    if (!selectedFile || isEditing) return 'other';
-    const ext = getFileExtension(selectedFile);
-    if (fileMime === 'pdf') return 'pdf';
-    if (fileMime === 'excel' || fileMime === 'image' || ext === 'csv') return 'other';
-    if (ext === 'html' || ext === 'htm') return 'html';
-    if (selectedFile.startsWith('/large_tool_results/')) return 'other';
-    if (fileMime?.includes('markdown') || ext === 'md') return 'markdown';
-    return 'code';
-  })();
-  const fileFocus = useFileFocus({
+  const downloads = useFileDownloads({ workspaceId, triggerDownloadFn, workspaceStatus: wsData?.status });
+  const fileError = downloads.errorFor(selectedFile) ?? readError;
+
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [pageCounts, setPageCounts] = useState<Record<string, number>>({});
+
+  const { uploadProgress, uploadError, setUploadError, fileInputRef, isDragOver, handleFileInputChange, handleDragEnter, handleDragLeave, handleDragOver, handleDrop } =
+    useFileUpload({ workspaceId, onRefreshFiles });
+
+  const setFileContent = useCallback((next: React.SetStateAction<string | null>) => {
+    if (!selectedFile) return;
+    const value = typeof next === 'function' ? next(fileContent) : next;
+    cache.patchBody(selectedFile, { content: value, truncated: false });
+  }, [cache, selectedFile, fileContent]);
+
+  const edit = useFileEdit({
+    tabId: activeTab.id, workspaceId, selectedFile, fileContent, setFileContent, readFileFullFn, writeFileFn,
+  });
+
+  // Every draft, parked or on screen, lives in this mount and dies with it. A
+  // wrapper that owns the close button therefore has to ask before it unmounts
+  // the panel, and can only know to when the panel says so. Reporting clean on
+  // the way out keeps it from asking about a panel that is already gone.
+  const reportDirty = useStableHandler((dirty: boolean) => onDirtyChange?.(dirty));
+  useEffect(() => { reportDirty(edit.hasAnyUnsavedChanges); }, [edit.hasAnyUnsavedChanges, reportDirty]);
+  useEffect(() => () => reportDirty(false), [reportDirty]);
+
+  const { selectionTooltip, contentWrapperRef, contextMenu, setContextMenu, handleContentMouseUp, handleEditorTextSelect, handleAddSelectionContext } =
+    useSelectionContext({ selectedFile, fileContent, onAddContext });
+
+  const viewer = selectedFile ? viewerFor(selectedFile, fileMime, edit.isEditing) : 'other';
+  const focus = useFileFocus({
     selectedFile,
-    viewer: focusViewer,
+    viewer,
     ready: !fileLoading && !fileError,
-    editing: isEditing,
+    editing: edit.isEditing,
     content: fileContent,
-    truncated: fileTruncated,
-    pageCount: pdfPageCount,
+    truncated: !!body?.truncated,
+    pageCount: selectedFile ? pageCounts[selectedFile] ?? null : null,
     containerRef: contentWrapperRef,
   });
 
-  const handleAddToMemo = useAddToMemo({
-    workspaceId,
-    downloadFileAsArrayBufferFn,
-    readFileFullFn,
-    onSwitchToMemoTab,
+  // Replay the tab's own location whenever it comes back to the front.
+  const tabLocationSeq = activeTab.kind === 'file' ? activeTab.locationSeq : 0;
+  useEffect(() => {
+    if (activeTab.kind === 'file' && activeTab.location) focus.focusAt(activeTab.path, activeTab.location);
+  }, [activeTab.id, tabLocationSeq]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAddToMemo = useAddToMemo({ workspaceId, downloadFileAsArrayBufferFn, readFileFullFn, onSwitchToMemoTab });
+  const memoedMap = useWorkspaceMemoIndex(workspaceId);
+  const memoEntry = selectedFile ? memoedMap.get(selectedFile) ?? null : null;
+  const { status: memoStaleStatus, sandboxText: memoStaleSandboxText, refresh: refreshMemoStale } = useMemoStaleCheck({
+    workspaceId, selectedFile, fileMime, memoSha256: memoEntry?.sha256 ?? null, readFileFullFn,
+  });
+  const [memoSyncing, setMemoSyncing] = useState(false);
+  const [memoDiffOpen, setMemoDiffOpen] = useState(false);
+
+  // The folder a chat link pointed the tree at; it filters until the back
+  // button clears it. The panel's own state rather than a reading of the
+  // target: the target clears once handled, like every other kind, so a
+  // remount does not replay the ask and pop the tree open again.
+  const [scopeDir, setScopeDir] = useState<string | null>(() => (target?.kind === 'file' ? target.dir ?? null : null));
+  const filter = useTreeFilter({ workspaceId, files, scopeDir, rootRef: panelRef });
+  // A deleted file's tab goes with it, draft and cached bytes included, or the
+  // strip keeps showing a file the tree no longer lists and a save would write
+  // it back. No confirm: the reader just confirmed the delete, and the write
+  // log never records a panel-side delete, so the close path's change marker
+  // would not drop the body on its own.
+  const forgetDeleted = useCallback((paths: string[]) => {
+    const gone = new Set(paths);
+    for (const tab of tabs.tabs) {
+      if (tab.kind !== 'file' || !gone.has(tab.path)) continue;
+      edit.forgetTab(tab.id);
+      changed.forget(tab.path);
+      cache.invalidate(tab.path);
+      tabs.closeTab(tab.id);
+    }
+  }, [tabs, edit, changed, cache]);
+  const selection = useFileSelection({ workspaceId, filteredSortedFiles: filter.filteredSortedFiles, targetDirectory: scopeDir, onRefreshFiles, onDeleted: forgetDeleted });
+  const backup = useFileBackup({ workspaceId, files, readOnly });
+
+  // `openFileAt` is defined below, so the tree reaches it through a handler
+  // that stays the same object across renders.
+  const openFromTree = useStableHandler((path: string) => { void openFileAt(path); });
+  const tree = useTreeInteraction({
+    workspaceId, rootRef: panelRef, selection, narrow, activePath: selectedFile, openFile: openFromTree,
+  });
+  const { open: treeOpen, setOpen: setTreeOpen } = tree;
+
+  /** A breadcrumb segment points the tree at that directory. */
+  const revealInTree = useCallback((dir: string) => {
+    setTreeOpen(true);
+    filter.revealDir(dir);
+  }, [setTreeOpen, filter]);
+
+  /** Nothing the panel is showing over the viewer survives a file landing in it. */
+  const onBeforeOpen = useCallback(() => {
+    downloads.clearError();
+  }, [downloads]);
+
+  /** A reference nothing could settle: the tree, filtered to the name it used. */
+  const landOnSearch = useCallback((ref: string, name: string, matches: string[]) => {
+    filter.showMatches(ref, name, matches);
+    setTreeOpen(true);
+    // A folder scope would hide candidates outside it, so it goes.
+    setScopeDir(null);
+  }, [filter, setTreeOpen]);
+
+  const { openFileAt, openFileRef, retryOpen, cancelPending } = useFileRefOpen({
+    tabs,
+    cache,
+    hasChanged: changed.hasChanged,
+    files,
+    workspaceStatus: wsData?.status,
+    resolveFileFn,
+    getRecentWritePaths,
+    onBeforeOpen,
+    clearSearch: filter.clearSearch,
+    onLandOnSearch: landOnSearch,
+    refetch,
   });
 
-  const handleContextMenuAction = useCallback((action: string, filePath: string) => {
+  // A folder from chat points the tree, which stays on screen beside the open
+  // file, so nothing has to be closed to honour it. A parent that leaves the
+  // target in place re-runs this on every render of it, so the ask is keyed:
+  // a target that only shed its path must not re-open a tree the reader has
+  // since folded away, only a new ask does.
+  const lastDirAsk = useRef<string | null>(null);
+  useEffect(() => {
+    if (!target) return;
+    switch (target.kind) {
+      case 'file': {
+        if (target.dir != null) {
+          setScopeDir(target.dir);
+          const ask = `${target.seq ?? 0}:${target.dir}`;
+          if (lastDirAsk.current !== ask) {
+            lastDirAsk.current = ask;
+            filter.clearSearch();
+            setTreeOpen(true);
+          }
+        }
+        if (target.path) void openFileRef(target.path, { location: target.location ?? null, pin: !!target.pin });
+        onTargetHandled?.();
+        return;
+      }
+      case 'preview':
+        // The agent published an app: its tab, and a URL fresh enough to load.
+        cancelPending();
+        tabs.openPreview(target);
+        previews.open(target);
+        onTargetHandled?.();
+        return;
+      case 'chart':
+        cancelPending();
+        tabs.openChart(target);
+        onTargetHandled?.();
+        return;
+      default:
+        return;
+    }
+  }, [target]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const retry = useCallback(() => {
+    downloads.clearError();
+    retryOpen(selectedFile);
+  }, [downloads, retryOpen, selectedFile]);
+
+  // --- file actions ---
+
+  const handleDownloadSelected = canDownload && selectedFile ? () => downloads.download(selectedFile) : undefined;
+  const handleDownloadInFallback = canDownload && selectedFile ? () => downloads.downloadQuietly(selectedFile) : undefined;
+
+  const handleContextMenuAction = useCallback((action: FileMenuAction, filePath: string) => {
     setContextMenu(null);
     if (action === 'add-context' && onAddContext) {
+      tabs.openFile(filePath, { pin: true });
       onAddContext({ path: filePath });
     } else if (action === 'add-to-memo') {
       handleAddToMemo(filePath);
     } else if (action === 'open') {
-      handleFileClick(filePath);
+      void openFileAt(filePath);
+    } else if (action === 'open-new-tab') {
+      void openFileAt(filePath, { pin: true });
+    } else if (action === 'download') {
+      downloads.download(filePath);
+    } else if (action === 'download-many') {
+      void downloads.downloadMany([...selection.selectedPaths]);
     }
-  }, [onAddContext, handleAddToMemo]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [onAddContext, handleAddToMemo, openFileAt, downloads, selection.selectedPaths, setContextMenu, tabs]);
 
-  // Export modal state
-  const [exportModalOpen, setExportModalOpen] = useState(false);
+  /**
+   * Coming back to a tab whose file the agent has rewritten re-reads it. The
+   * amber dot is the notice; arriving at the tab is the moment the reader
+   * wants the new bytes, and re-reading every open tab the instant a write
+   * lands would fight whoever is reading one of them.
+   */
+  const activateTab = useCallback((id: string) => {
+    const tab = tabs.tabs.find((x) => x.id === id);
+    if (tab?.kind === 'file' && changed.hasChanged(tab.path)) cache.invalidate(tab.path);
+    cancelPending();
+    tabs.activate(id);
+  }, [tabs, changed, cache, cancelPending]);
 
-  // Filter and sort state
-  const [filterType, setFilterType] = useState('All');
-  const [sortBy, setSortBy] = useState('name-asc');
-  const [showSortMenu, setShowSortMenu] = useState(false);
-  const sortMenuRef = useRef<HTMLDivElement>(null);
+  const newTab = useCallback(() => {
+    cancelPending();
+    tabs.newTab();
+  }, [tabs, cancelPending]);
 
-  // Memo'd lookup + stale-check verdict — see FilePanelMemo.tsx.
-  const memoedMap = useWorkspaceMemoIndex(workspaceId);
-  const memoedTitle = t('context.inMemo');
-  const memoEntryForSelected = selectedFile ? memoedMap.get(selectedFile) ?? null : null;
-  const {
-    status: memoStaleStatus,
-    sandboxText: memoStaleSandboxText,
-    refresh: refreshMemoStale,
-  } = useMemoStaleCheck({
-    workspaceId,
-    selectedFile,
-    fileMime,
-    memoSha256: memoEntryForSelected?.sha256 ?? null,
-    readFileFullFn,
+  const openSettings = useCallback(() => {
+    cancelPending();
+    tabs.openSettings();
+  }, [tabs, cancelPending]);
+
+  const startEdit = useCallback(() => {
+    tabs.pinTab(activeTab.id);
+    void edit.handleStartEdit();
+  }, [tabs, activeTab.id, edit]);
+
+  // Citing a range is working with the file, so its tab stops being the loaned
+  // one, the same rule the selection tooltip and the tree's menu follow.
+  const addViewerContext = useCallback((ctx: ContextPayload) => {
+    tabs.pinTab(activeTab.id);
+    onAddContext?.(ctx);
+  }, [tabs, activeTab.id, onAddContext]);
+
+  // A route change fires no beforeunload, so the panel's drafts would go with it.
+  const leaveForMarketView = useCallback((spec: ChartTabSpec) => {
+    if (edit.hasAnyUnsavedChanges && !window.confirm(t('filePanel.discardUnsaved'))) return;
+    onOpenInMarketView?.(spec);
+  }, [edit.hasAnyUnsavedChanges, onOpenInMarketView, t]);
+
+  const closeTab = useCallback((id: string) => {
+    if (edit.tabHasUnsavedChanges(id) && !window.confirm(t('filePanel.discardUnsaved'))) return;
+    edit.forgetTab(id);
+    const tab = tabs.tabs.find((x) => x.id === id);
+    if (tab?.kind === 'file') {
+      // The marker is what forces a re-read on reopen; the cached bytes must
+      // not outlive it, or a rewrite lands inside the body's fresh window.
+      if (changed.hasChanged(tab.path)) cache.invalidate(tab.path);
+      changed.forget(tab.path);
+    }
+    if (singleFileMode && tabs.tabs.length <= 1) return onClose();
+    tabs.closeTab(id);
+  }, [edit, tabs, changed, cache, singleFileMode, onClose, t]);
+
+  const handleViewerLink = useStableHandler((path: string, linkWorkspaceId?: string, location?: FileLocation, opts?: { rooted?: boolean; pin?: boolean }) => {
+    const rooted = !!opts?.rooted;
+    const otherWorkspace = !!linkWorkspaceId && linkWorkspaceId !== workspaceId;
+    const kind = classifyAgentPath(path).kind;
+    const directory = parseAgentPath(path).directory;
+    // A folder inside a viewed file is written relative to it, the same as a
+    // file link, but the router takes the path as given, so the join happens here.
+    const linkTarget = directory && kind === 'file' && !otherWorkspace
+      ? linkCandidates(path, rooted ? null : selectedFile)[0]
+      : path;
+    if (otherWorkspace || kind !== 'file' || directory) {
+      onOpenFile?.(linkTarget, linkWorkspaceId, location);
+      return;
+    }
+    // A rooted reference named where it starts, so the open file's directory is
+    // not a reading it invited.
+    void openFileRef(path, { fromFile: rooted ? null : selectedFile, location, pin: opts?.pin });
   });
-  const [memoSyncing, setMemoSyncing] = useState(false);
-  const [memoDiffOpen, setMemoDiffOpen] = useState(false);
+
+  const handleAnchorLink = useStableHandler((fragment: string) => {
+    if (selectedFile) focus.focusAt(selectedFile, parseFragment(fragment));
+  });
 
   const handleSyncMemo = useCallback(async () => {
     if (!selectedFile || memoSyncing) return;
     setMemoSyncing(true);
     try {
       await handleAddToMemo(selectedFile);
-      // Re-run the stale check even if memoListData is still revalidating.
       refreshMemoStale();
     } finally {
       setMemoSyncing(false);
     }
   }, [selectedFile, memoSyncing, handleAddToMemo, refreshMemoStale]);
 
-  const handleViewMemoDiff = useCallback(() => {
-    setMemoDiffOpen(true);
-  }, []);
+  // A write lands in the sandbox, so the copy the panel holds and the backup
+  // verdict beside it are both a version behind until they are re-read.
+  const handleSave = useCallback(async () => {
+    await edit.handleSave();
+    if (selectedFile) cache.invalidate(selectedFile);
+    onRefreshFiles?.();
+  }, [edit, cache, selectedFile, onRefreshFiles]);
 
-  const listedFiles = useMemo(
-    // Search hits outside the listing belong to the reference search that found them.
-    () => (extraMatches.length && searchQuery ? [...new Set([...files, ...extraMatches])] : files),
-    [files, extraMatches, searchQuery],
-  );
-  const availableTypes = useMemo(() => getAvailableTypes(listedFiles), [listedFiles]);
-  const trimmedQuery = searchQuery.trim().toLowerCase();
-
-  // Apply directory filter, search, type filter, sort, then group
-  const filteredSortedFiles = useMemo(() => {
-    let result = listedFiles;
-    if (trimmedQuery) {
-      result = result.filter((fp) => fp.toLowerCase().includes(trimmedQuery));
-    }
-    if (targetDirectory) {
-      const prefix = targetDirectory.endsWith('/') ? targetDirectory : targetDirectory + '/';
-      result = result.filter((fp) => fp.startsWith(prefix));
-    }
-    if (filterType !== 'All') {
-      result = result.filter((fp) => getFileType(fp) === filterType);
-    }
-    return sortFiles(result, sortBy);
-  }, [listedFiles, trimmedQuery, filterType, sortBy, targetDirectory]);
-
-  // Multi-select + delete (filePanel/useFileSelection).
-  const {
-    selectMode,
-    setSelectMode,
-    selectedPaths,
-    deleteLoading,
-    deleteError,
-    setDeleteError,
-    deleteConfirm,
-    toggleSelect,
-    toggleSelectAll,
-    toggleDirSelect,
-    exitSelectMode,
-    handleDelete,
-  } = useFileSelection({ workspaceId, filteredSortedFiles, targetDirectory, onRefreshFiles });
-
-  // COS backup status + trigger (filePanel/useFileBackup).
-  const {
-    backedUpSet,
-    modifiedSet,
-    backingUp,
-    backupResult,
-    setBackupResult,
-    handleBackup,
-  } = useFileBackup({ workspaceId, files, readOnly });
-
-  // Directory expand state
-  const storageKey = `filePanel.expandedDirs.${workspaceId}`;
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem(storageKey);
-      return saved ? new Set(JSON.parse(saved) as string[]) : new Set();
-    } catch { return new Set(); }
-  });
-  const fileTree = useMemo(() => buildFileTree(filteredSortedFiles), [filteredSortedFiles]);
-  // A search shows every hit, so it opens every directory on the way to one.
-  const visibleExpandedDirs = useMemo(() => {
-    if (!trimmedQuery) return expandedDirs;
-    const all = new Set<string>();
-    const walk = (node: TreeNode) => {
-      all.add(node.fullPath);
-      node.children.forEach(walk);
-    };
-    fileTree.forEach(walk);
-    return all;
-  }, [trimmedQuery, expandedDirs, fileTree]);
-
-  useEffect(() => {
-    localStorage.setItem(storageKey, JSON.stringify([...expandedDirs]));
-  }, [expandedDirs, storageKey]);
-
-  const toggleDir = useCallback((dir: string) => {
-    setExpandedDirs((prev) => {
-      const next = new Set(prev);
-      if (next.has(dir)) next.delete(dir);
-      else next.add(dir);
-      return next;
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!showSortMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (sortMenuRef.current && !sortMenuRef.current.contains(e.target as Node)) {
-        setShowSortMenu(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showSortMenu]);
-
-  useEffect(() => {
-    return () => {
-      if (fileMime === 'image' && fileContent) {
-        URL.revokeObjectURL(fileContent);
-      }
-    };
-  }, [fileContent, fileMime]);
-
-  useEffect(() => {
-    if (targetFile) {
-      void openFileRef(targetFile, { location: targetLocation });
-      onTargetFileHandled?.();
-    }
-  }, [targetFile]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // A folder opened from chat supersedes a reference still being searched for.
-  useEffect(() => {
-    // `''` is the workspace root, a folder like any other here, so the test is
-    // for absence rather than emptiness.
-    if (targetDirectory == null) return;
-    // The body below prefers `selectedFile` over `targetDirectory`, so a folder
-    // accepted while a file is open stayed behind it and the click read as dead
-    // until the reader pressed Back. Leaving the file is what puts the folder on
-    // screen. Declining cannot simply return the way the click handlers do: the
-    // prop has already changed, so the target has to go back to its owner.
-    if (hasUnsavedChanges && !window.confirm(t('filePanel.discardUnsaved'))) {
-      onTargetDirHandled?.();
-      return;
-    }
-    openSeqRef.current += 1;
-    dropLanding();
-    leaveOpenFile();
-    // Keyed on the request, not on the folder: `targetDirectory` outlives the
-    // click as the tree's filter, so a reader who opened a file from `data/` and
-    // then clicked `data/` again changed nothing here, and the file stayed on
-    // screen. `targetDirectory` stays in the deps for a caller that sets no
-    // sequence, which is then the one-shot behaviour this had before.
-  }, [targetDirSeq, targetDirectory]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  /** Leave edit mode without saving, so the next file never opens in the last one's editor. */
-  const resetEdit = () => {
-    setIsEditing(false);
-    setEditContent(null);
-    setShowDiff(false);
-    setOriginalContent(null);
-    editorRef.current = null;
-    setCanUndo(false);
-    setCanRedo(false);
-    setSaveError(null);
-  };
-
-  /** Clear the tree filter a missed reference set, so it does not outlive the miss. */
-  const dropLanding = () => {
-    if (!missedRef) return;
-    setSearchQuery('');
-    setExtraMatches([]);
-    setMissedRef(null);
-  };
-
-  /**
-   * Open a file in the viewer. Resolves to the read's error, or null once it
-   * loaded or a later open took over; a read that finishes after a later open
-   * started is dropped, so a slow file never lands under another file's name.
-   */
-  const handleFileClick = async (filePath: string): Promise<FileError | null> => {
-    const seq = ++openSeqRef.current;
-    // Every open lands here, so this is where a reference stops being the one a
-    // retry should re-run. `openFileRef` re-arms it after its own fallback open.
-    unresolvedRef.current = null;
-    const current = () => seq === openSeqRef.current;
-    const ext = getFileExtension(filePath);
-    setFileError(null);
-    // Measured on the file being replaced: only the text branch writes it, so
-    // leaving it set carries one file's truncation onto the next one's name.
-    setFileTruncated(false);
-    // The settings pane replaces the content wrapper the viewer scrolls, so a
-    // file opened behind it loads into no container and the line or heading it
-    // named is never found. `landOnSearch` already clears it for the same reason.
-    setShowSettings(false);
-    resetEdit();
-
-    if (DOWNLOAD_ONLY_EXTENSIONS.has(ext)) {
-      setSelectedFile(filePath);
-      setFileContent(null);
-      setFileArrayBuffer(null);
-      setFileMime(null);
-      setFileLoading(false);
-      setFileError({ category: 'binary_file' });
-      return null;
-    }
-
-    const load = async (read: () => Promise<void>, label: string, onError?: () => void): Promise<FileError | null> => {
-      setSelectedFile(filePath);
-      setFileLoading(true);
-      try {
-        await read();
-        return null;
-      } catch (err) {
-        if (!current()) return null;
-        console.error(`[FilePanel] Failed to load ${label}:`, err);
-        const error = categorizeFileError(err, wsData?.status);
-        setFileError(error);
-        onError?.();
-        return error;
-      } finally {
-        if (current()) setFileLoading(false);
-      }
-    };
-
-    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp'].includes(ext)) {
-      if (fileMime === 'image' && fileContent) {
-        URL.revokeObjectURL(fileContent);
-      }
-      setFileMime('image');
-      return load(async () => {
-        const blobUrl = await downloadFileFn(workspaceId, filePath);
-        if (!current()) return URL.revokeObjectURL(blobUrl);
-        setFileContent(blobUrl);
-      }, 'image', () => { setFileContent(null); setFileMime(null); });
-    }
-
-    if (ext === 'pdf' || ext === 'xlsx' || ext === 'xlsm' || ext === 'xls') {
-      setFileMime(ext === 'pdf' ? 'pdf' : 'excel');
-      if (ext === 'pdf') setPdfPageCount(null);
-      return load(async () => {
-        const buf = await downloadFileAsArrayBufferFn(workspaceId, filePath);
-        if (current()) setFileArrayBuffer(buf);
-      }, ext === 'pdf' ? 'PDF' : 'Excel file', () => setFileMime(null));
-    }
-
-    // HTML files: read the full source (the viewer renders via the served URL,
-    // but the Source tab needs untruncated content — the paginated read caps at 20k lines).
-    if (['html', 'htm'].includes(ext)) {
-      return load(async () => {
-        const data = await readFileFullFn(workspaceId, filePath);
-        if (!current()) return;
-        setFileContent(data.content || '');
-        setFileMime('text/html');
-      }, 'HTML file', () => { setFileContent(null); setFileMime(null); });
-    }
-
-    // Text files - read content
-    return load(async () => {
-      const data = await readFileFn(workspaceId, filePath);
-      if (!current()) return;
-      setFileContent(data.content || '');
-      setFileMime(data.mime || 'text/plain');
-      setFileTruncated(!!data.truncated);
-    }, 'file', () => { setFileContent(null); setFileMime(null); });
-  };
-
-  /** Close the viewer, so whatever comes next is not rendered behind the last
-   *  file. The revoke is load-bearing: an image body is a blob URL this panel
-   *  minted, and dropping the reference without it leaks the bytes. */
-  const leaveOpenFile = () => {
-    if (fileMime === 'image' && fileContent) URL.revokeObjectURL(fileContent);
-    setSelectedFile(null);
-    setFileContent(null);
-    setFileArrayBuffer(null);
-    setFileMime(null);
-    setFileError(null);
-    setFileLoading(false);
-    resetEdit();
-    setShowSettings(false);
-  };
-
-  /** Leave any open file and show the tree filtered to a reference's name. */
-  const landOnSearch = (ref: string, matches: string[]) => {
-    leaveOpenFile();
-    setFilterType('All');
-    setSearchQuery(basename(ref));
-    setExtraMatches(matches);
-    setMissedRef(ref);
-    if (targetDirectory) onTargetDirHandled?.();
-  };
-
-  /**
-   * Open a file reference that may not name a real path. Certain matches
-   * open at once; otherwise the server's lookup decides between opening the
-   * file it names and landing on the tree filtered to the name.
-   */
-  const openFileRef = async (
-    rawRef: string,
-    { fromFile = null, location = null }: { fromFile?: string | null; location?: FileLocation | null } = {},
-  ) => {
-    const candidates = fromFile ? linkCandidates(rawRef, fromFile) : [normalizeAgentPath(rawRef)];
-    const primary = candidates[0];
-    if (!primary) return;
-    if (hasUnsavedChanges && !window.confirm(t('filePanel.discardUnsaved'))) return;
-    resetEdit();
-    dropLanding();
-    const openAt = (path: string) => {
-      fileFocus.focusAt(path, location);
-      return handleFileClick(path);
-    };
-    const tried = new Set<string>();
-    // Resolves true once the path opened (or failed for a reason a search cannot fix).
-    // A stopped workspace reports a missing path as not backed up.
-    const landed = async (path: string) => {
-      // A download-only file opens with no read, so opening one proves nothing
-      // about the path: a moved .docx would sit behind a download card built on
-      // a name the listing still remembers. Only the lookup settles it.
-      if (resolveFileFn && DOWNLOAD_ONLY_EXTENSIONS.has(getFileExtension(path))) return false;
-      tried.add(path);
-      const category = (await openAt(path))?.category;
-      return category !== 'not_found' && category !== 'not_backed_up';
-    };
-    const writes = getRecentWritePaths?.() ?? [];
-
-    // A known path can still be stale (the agent moved it), so a miss falls through to the lookup.
-    const exact = resolveExact(candidates, files, writes);
-    if (exact && await landed(exact)) return;
-    // Absolute and system paths are not in the default listing, and the agent
-    // names them exactly (tool rows, skill files), so read them first. A
-    // system-looking path can still be a folder inside the work tree.
-    const direct = candidates.find((c) => c.startsWith('/') || isSystemPath(c));
-    if (direct && !tried.has(direct) && await landed(direct)) return;
-    if (!resolveFileFn) {
-      if (!tried.has(primary)) void openAt(primary);
-      return;
-    }
-
-    const seq = ++openSeqRef.current;
-    setSelectedFile(primary);
-    setFileContent(null);
-    setFileArrayBuffer(null);
-    setFileMime(null);
-    setFileError(null);
-    setFileLoading(true);
-    let result: FileRefResolution | null = null;
-    try {
-      result = await resolveFileFn(candidates, writes);
-    } catch (err) {
-      console.error('[FilePanel] File reference lookup failed:', err);
-    }
-    if (seq !== openSeqRef.current) return;
-
-    // With no answer (sandbox starting, request failed), reading the path as
-    // written shows why, with a retry.
-    if (!result || result.status === 'unavailable') {
-      // The seq the fallback open is about to take, claimed before the await so
-      // an open that overtakes it leaves the reference alone.
-      const fallbackSeq = openSeqRef.current + 1;
-      await openAt(primary);
-      // Retrying the path alone asks the same unanswerable question: `report.md`
-      // is not where the file is, the lookup is the only thing that knows
-      // `work/report.md`, and the lookup is the part that was unavailable.
-      // Keeping the reference is what lets a retry once the sandbox is up
-      // resolve, instead of failing again on the guess.
-      if (openSeqRef.current === fallbackSeq) unresolvedRef.current = { rawRef, fromFile, location };
-      return;
-    }
-    if (result.status === 'resolved' && result.path) return void openAt(result.path);
-    // Name the reference as written; the joined reading is only our guess.
-    landOnSearch(candidates[candidates.length - 1], result.matches);
-  };
-
-  /** Try the failed open again, as the same question that was asked the first time. */
-  const retryOpen = () => {
-    const ref = unresolvedRef.current;
-    if (ref) return void openFileRef(ref.rawRef, { fromFile: ref.fromFile, location: ref.location });
-    if (selectedFile) void handleFileClick(selectedFile);
-  };
-
-  // Links inside a viewed file resolve against that file's directory first.
-  // Stable identity: Markdown memoizes its renderers on this handler.
-  const handleViewerLink = useStableHandler((
-    path: string,
-    linkWorkspaceId?: string,
-    location?: FileLocation,
-    rooted?: boolean,
-  ) => {
-    const otherWorkspace = !!linkWorkspaceId && linkWorkspaceId !== workspaceId;
-    const kind = classifyAgentPath(path).kind;
-    const directory = parseAgentPath(path).directory;
-    // A folder inside a viewed file is written relative to it, the same as a
-    // file link, but the router takes the path as given, so the join happens
-    // here: `../data/` read from `docs/index.md` names `data/`, and delegated
-    // unjoined it opened the tree at a prefix the workspace has no entry for.
-    // The join is the one `openFileRef` does below, skipped for exactly the
-    // references that named their own starting point.
-    const target = directory && kind === 'file' && !otherWorkspace
-      ? linkCandidates(path, rooted ? null : selectedFile)[0]
-      : path;
-    // Memory and memo entries live outside the sandbox and open in their own tabs.
-    // A folder goes with them: the router reads the trailing slash and opens the
-    // tree there, while resolving it here can only miss, because the lookup
-    // globs files and a directory never matches one.
-    if (otherWorkspace || kind !== 'file' || directory) {
-      // Resolving here would open a namesake from the wrong place.
-      onOpenFile?.(target, linkWorkspaceId, location);
-      return;
-    }
-    // A rooted reference named where it starts, so the open file's directory is
-    // not a reading it invited: joining would prefer a namesake one level down.
-    void openFileRef(path, { fromFile: rooted ? null : selectedFile, location });
-  });
-
-  // `[Valuation](#valuation)` inside the open file moves within it, no reload.
-  const handleAnchorLink = useStableHandler((fragment: string) => {
-    if (selectedFile) fileFocus.focusAt(selectedFile, parseFragment(fragment));
-  });
-
-  // Every save this panel offers comes from one of the two handlers below, and
-  // both are undefined when the share forbids saving. Reading the permission
-  // once here is what stops the next affordance from shipping without it: the
-  // menu, the binary-file error, four viewer error boundaries and the HTML
-  // fullscreen bar were nine copies of the same call before.
-  const handleDownloadSelected = canDownload
-    ? () => {
-        if (!selectedFile) return;
-        // A save pulls the whole body before the anchor click, and nothing stops
-        // the reader opening another file meanwhile. The token the read path
-        // already uses says whether the panel has moved on, so a late rejection
-        // does not replace the file now on screen with this one's error. Starting
-        // a save is not an open, so the token is read here rather than bumped.
-        const seq = openSeqRef.current;
-        triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => {
-          console.error('[FilePanel] Download failed:', err);
-          if (seq !== openSeqRef.current) return;
-          setFileError(categorizeFileError(err, wsData?.status));
-        });
-      }
-    : undefined;
-
-  // The same save from inside a viewer's error boundary, and the one the HTML
-  // viewer's own toolbar offers. Raising `fileError` here would replace the
-  // thing the reader is looking at with a second error, so the failure is
-  // reported additively: an error fallback keeps the message it is already
-  // showing, and a save started from a healthy report still says it went
-  // nowhere rather than reading as a dead button.
-  const handleDownloadInFallback = canDownload
-    ? () => {
-        if (!selectedFile) return;
-        void triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => {
-          console.error('[FilePanel] Download failed:', err);
-          toast({ description: t('filePanel.downloadFailed'), variant: 'destructive' });
-        });
-      }
-    : undefined;
-
-  const clearSearch = () => {
-    setSearchQuery('');
-    setMissedRef(null);
-    setExtraMatches([]);
-  };
-
+  // Editing needs a text viewer under it: the pdf, excel and html readers are
+  // not editors, and an image or a parked tool result is not text. A CSV reads
+  // in the grid (`other`) but edits as the text it is; a file already in the
+  // editor keeps its verdict rather than reading the editor as `other`.
   const selectedExt = selectedFile ? getFileExtension(selectedFile) : '';
-  const canEdit = !!(selectedFile
-    && !readOnly
-    && !fileError
+  const canEdit = !!(selectedFile && !readOnly && !fileError
     && EDITABLE_EXTENSIONS.has(selectedExt)
-    && fileMime !== 'image'
-    && fileMime !== 'pdf'
-    && fileMime !== 'excel'
-    && !['html', 'htm'].includes(selectedExt)
-    && !selectedFile.startsWith('/large_tool_results/'));
+    && (edit.isEditing || viewer === 'code' || viewer === 'markdown' || (viewer === 'other' && selectedExt === 'csv' && fileMime !== 'image')));
 
-  const handleBack = () => {
-    // In single-file mode, back closes the panel instead of returning to file tree
-    if (singleFileMode) {
-      onClose();
-      return;
+  const meta = useMemo(() => {
+    if (!selectedFile || !body) return null;
+    const pages = pageCounts[selectedFile];
+    if (body.mime === 'pdf') return pages ? t('filePanel.metaPages', { count: pages }) : null;
+    if (body.content == null) return null;
+    const lines = countLines(body.content);
+    return body.truncated ? t('filePanel.metaFirstLines', { count: lines }) : t('filePanel.metaLines', { count: lines });
+  }, [selectedFile, body, pageCounts, t]);
+
+  /** Opening a running app from the tree: the tab it already has, or a new one. */
+  const openPreviewTab = useCallback((port: number) => {
+    const entry = previews.byPort.get(port);
+    cancelPending();
+    tabs.openPreview({ port, title: entry?.title, path: entry?.path, command: entry?.command });
+    previews.ensure(port);
+  }, [previews, tabs, cancelPending]);
+
+  // Only a folder-like tab takes a drop: a preview is a frame and a chart is a
+  // live view, and settings is a form.
+  const canDropHere = !readOnly && (activeTab.kind === 'empty' || activeTab.kind === 'file');
+
+  /** What fills the viewer slot. Preview panes are rendered beside this, always mounted. */
+  const renderActive = (): React.ReactNode => {
+    switch (activeTab.kind) {
+      case 'preview':
+        return null;
+      case 'chart':
+        return (
+          <ChartTab
+            tab={activeTab}
+            tabs={tabs}
+            workspaceId={workspaceId}
+            onAddContext={onAddContext}
+            onOpenInMarketView={onOpenInMarketView ? leaveForMarketView : null}
+          />
+        );
+      case 'settings':
+        return (
+          <div className="file-panel-settings">
+            <SandboxSettingsContent workspaceId={workspaceId} />
+          </div>
+        );
+      case 'file': {
+        const path = activeTab.path;
+        return (
+          <FileViewer
+            path={path}
+            body={body}
+            loading={fileLoading}
+            error={fileError}
+            onRetry={retry}
+            onDownload={handleDownloadSelected}
+            onDownloadInFallback={handleDownloadInFallback}
+            workspaceId={workspaceId}
+            focus={focus}
+            onPageCount={(pages) => setPageCounts((prev) => (prev[path] === pages ? prev : { ...prev, [path]: pages }))}
+            isEditing={edit.isEditing}
+            editContent={edit.editContent}
+            originalContent={edit.originalContent}
+            showDiff={edit.showDiff}
+            editorRef={edit.editorRef}
+            onEditorChange={edit.handleEditorChange}
+            onUndoRedoChange={edit.handleUndoRedoChange}
+            onEditorTextSelect={handleEditorTextSelect}
+            onAddContext={onAddContext ? addViewerContext : null}
+            onContentMouseUp={handleContentMouseUp}
+            onViewerLink={handleViewerLink}
+            onAnchorLink={handleAnchorLink}
+            servedUrl={apiAdapter?.buildServedUrl?.(path, { injectTheme: true })}
+            onCopyShareLink={onCopyShareLink}
+          />
+        );
+      }
+      case 'empty':
+        return (
+          <EmptyTab
+            canUpload={!readOnly}
+            treeOpen={treeOpen}
+            onShowTree={singleFileMode ? null : () => setTreeOpen(true)}
+            onOpenChart={readOnly || singleFileMode ? null : () => { cancelPending(); tabs.openChart({ symbol: lastChartSymbol(workspaceId, { persist: persistStrip }) }); }}
+          />
+        );
+      default:
+        return activeTab satisfies never;
     }
-    if (hasUnsavedChanges) {
-      if (!window.confirm(t('filePanel.discardUnsaved'))) return;
-    }
-    // A reference search still pending must not reopen the file just left.
-    openSeqRef.current += 1;
-    if (fileMime === 'image' && fileContent) {
-      URL.revokeObjectURL(fileContent);
-    }
-    setSelectedFile(null);
-    setFileContent(null);
-    setFileArrayBuffer(null);
-    setFileMime(null);
-    setFileError(null);
-    setExportModalOpen(false);
-    resetEdit();
   };
 
-  const fileName = selectedFile?.split('/').pop() || '';
+  // The panel's own close button, on a mount that owns one. An unsaved edit
+  // takes it away rather than asking about it: the tab's close asks already,
+  // and that is the way out that lets the reader save first.
+  const panelClose = hideClose || edit.hasAnyUnsavedChanges ? null : onClose;
 
-  // The JSX return is very large. Due to its size and the fact that it is
-  // purely template code with no logic changes, we keep it identical to the
-  // original JS version. TypeScript inference handles the JSX elements.
   return (
-    <div className="file-panel">
-      {/* Header */}
-      <div className="file-panel-header">
-        <div className="flex items-center gap-2 min-w-0">
-          {showSettings ? (
-            <button onClick={() => setShowSettings(false)} className="file-panel-icon-btn" title={t('filePanel.backToFileList')}>
-              <ArrowLeft className="h-4 w-4" />
-            </button>
-          ) : selectedFile ? (
-            <button onClick={handleBack} className="file-panel-icon-btn" title={t('filePanel.backToFileList')}>
-              <ArrowLeft className="h-4 w-4" />
-            </button>
-          ) : targetDirectory ? (
-            <button onClick={() => onTargetDirHandled?.()} className="file-panel-icon-btn" title={t('filePanel.backToAllFiles')}>
-              <ArrowLeft className="h-4 w-4" />
-            </button>
-          ) : isMobile && !hideClose ? (
-            <button onClick={onClose} className="file-panel-icon-btn" title={t('filePanel.close')}>
-              <ArrowLeft className="h-4 w-4" />
-            </button>
-          ) : null}
-          <span className="text-sm font-semibold truncate" style={{ color: 'var(--color-text-primary)' }}>
-            {showSettings ? t('chat.workspaceSettings') : selectedFile ? (<>{fileName}{hasUnsavedChanges && <span style={{ color: 'var(--color-text-tertiary)' }}> *</span>}</>) : targetDirectory ? `${targetDirectory}/` : t('chat.workspaceFiles')}
-          </span>
-          {!showSettings && fileFocus.chip && (
-            <FocusChip state={fileFocus.chip} onJump={fileFocus.jump} onDismiss={fileFocus.dismiss} />
+    <div className="file-panel" ref={panelRef} onKeyDown={tree.onEscape}>
+      <TabStrip
+        tabs={tabs.tabs}
+        activeId={tabs.activeId}
+        onActivate={activateTab}
+        onClose={closeTab}
+        onPin={tabs.pinTab}
+        onNewTab={singleFileMode || readOnly ? null : newTab}
+        hasChanged={changed.hasChanged}
+        treeOpen={treeOpen}
+        onToggleTree={singleFileMode ? null : () => setTreeOpen((v) => !v)}
+        onPanelClose={panelClose}
+        backArrow={isMobile}
+      />
+
+      {activeTab.kind === 'preview' && (
+        <PreviewCrumbs
+          entry={previews.byPort.get(activeTab.port) ?? { port: activeTab.port, url: '', loading: true, error: false, reloadToken: 0 }}
+          onRefresh={() => previews.refresh(activeTab.port)}
+        />
+      )}
+
+      {selectedFile && (
+        <FileCrumbs
+          path={selectedFile}
+          onOpenDir={revealInTree}
+          meta={meta}
+          unsaved={edit.hasUnsavedChanges}
+          chip={focus.chip && (
+            <FocusChip state={focus.chip} onJump={focus.jump} onDismiss={() => { focus.dismiss(); tabs.clearLocation(activeTab.id); }} />
           )}
-        </div>
-        <div className="flex items-center gap-1">
-          {!showSettings && !selectedFile && !selectMode && (
-            <>
-              {!readOnly && files.length > 0 && (
-                <button
-                  onClick={() => setSelectMode(true)}
-                  className="file-panel-icon-btn"
-                  title={t('filePanel.selectFiles')}
-                >
-                  <CheckSquare className="h-4 w-4" />
-                </button>
-              )}
-              {!readOnly && (
-                <>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="file-panel-icon-btn"
-                    title={t('filePanel.uploadFile')}
-                    disabled={uploadProgress !== null}
-                  >
-                    <Upload className="h-4 w-4" />
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    className="hidden"
-                    onChange={handleFileInputChange}
-                  />
-                  <button
-                    onClick={handleBackup}
-                    className="file-panel-icon-btn"
-                    title={t('filePanel.backupFiles')}
-                    disabled={backingUp}
-                  >
-                    <HardDrive className={`h-4 w-4 ${backingUp ? 'animate-pulse' : ''}`} />
-                  </button>
-                </>
-              )}
-              {!readOnly && (
-                <button
-                  onClick={onRefreshFiles}
-                  className="file-panel-icon-btn"
-                  title={t('filePanel.refresh')}
-                >
-                  {filesLoading
-                    ? <Loader size={16} className="text-current" />
-                    : <RefreshCw className="h-4 w-4" />}
-                </button>
-              )}
-            </>
-          )}
-          {!readOnly && !selectedFile && selectMode && (
-            <>
-              <span className="text-xs" style={{ color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
-                {selectedPaths.size} selected
-              </span>
-              <button
-                onClick={toggleSelectAll}
-                className="file-panel-chip"
-                style={{ marginLeft: 2, fontSize: '0.625rem', padding: '1px 6px' }}
-              >
-                {selectedPaths.size === filteredSortedFiles.length ? 'Deselect All' : 'Select All'}
-              </button>
-              {deleteConfirm ? (
-                <button
-                  onClick={handleDelete}
-                  className="file-panel-delete-confirm-btn"
-                  disabled={deleteLoading}
-                >
-                  Delete {selectedPaths.size}?
-                </button>
-              ) : (
-                <button
-                  onClick={handleDelete}
-                  className="file-panel-icon-btn"
-                  title={t('filePanel.deleteSelected')}
-                  disabled={selectedPaths.size === 0 || deleteLoading}
-                  style={selectedPaths.size > 0 ? { color: 'var(--color-icon-danger)' } : undefined}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              )}
-              <button onClick={exitSelectMode} className="file-panel-icon-btn" title={t('filePanel.cancelSelection')}>
-                <X className="h-4 w-4" />
-              </button>
-            </>
-          )}
-          <FileHeaderActions
-            selectedFile={selectedFile}
-            isEditing={isEditing}
-            workspaceId={workspaceId}
-            fileContent={fileContent}
-            fileMime={fileMime}
-            canEdit={canEdit}
-            onStartEdit={handleStartEdit}
-            onOpenExportModal={() => setExportModalOpen(true)}
-            triggerDownloadFn={triggerDownloadFn}
-            canDownload={canDownload}
-            readFileFullFn={readFileFullFn}
-            htmlServedUrl={selectedFile ? apiAdapter?.buildServedUrl?.(selectedFile) : undefined}
-            editorRef={editorRef}
-            canUndo={canUndo}
-            canRedo={canRedo}
-            hasUnsavedChanges={hasUnsavedChanges}
-            showDiff={showDiff}
-            setShowDiff={setShowDiff}
-            isSaving={isSaving}
-            saveError={saveError}
-            onSave={handleSave}
-            onCancelEdit={handleCancelEdit}
-          />
-          {!selectMode && !isEditing && !hideClose && (
-            <button onClick={onClose} className="file-panel-icon-btn" title={t('filePanel.close')}>
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Upload progress bar */}
-      {uploadProgress !== null && (
-        <div className="file-panel-upload-progress">
-          <div className="file-panel-upload-progress-bar" style={{ width: `${uploadProgress}%` }} />
-        </div>
-      )}
-
-      {uploadError && (
-        <div className="file-panel-upload-error">
-          <span>{uploadError}</span>
-          <button onClick={() => setUploadError(null)} className="file-panel-icon-btn">
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
-
-      {deleteLoading && <div className="file-panel-progress-indeterminate" />}
-
-      {deleteError && (
-        <div className="file-panel-upload-error">
-          <span>{deleteError}</span>
-          <button onClick={() => setDeleteError(null)} className="file-panel-icon-btn">
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
-
-      {backupResult && (
-        <div className={`file-panel-backup-result ${backupResult.error ? 'error' : ''}`}>
-          <span>
-            {backupResult.error
-              ? backupResult.error
-              : `Backed up ${backupResult.synced} file${backupResult.synced !== 1 ? 's' : ''}${backupResult.skipped ? `, ${backupResult.skipped} unchanged` : ''}`}
-          </span>
-          <button onClick={() => setBackupResult(null)} className="file-panel-icon-btn" style={{ padding: 2 }}>
-            <X className="h-3 w-3" />
-          </button>
-        </div>
-      )}
-
-      {backingUp && <div className="file-panel-progress-indeterminate" />}
-
-      {isEditing && (
-        <div className="file-panel-edit-hint">
-          <Pencil className="h-3 w-3" style={{ flexShrink: 0 }} />
-          <span>{t('filePanel.editingHint')}</span>
-        </div>
-      )}
-
-
-      {/* Search + the note a missed reference lands with */}
-      {!showSettings && !selectedFile && !selectMode && (listedFiles.length > 0 || missedRef) && (
-        <div className="file-panel-search">
-          {/* The pill answers for the field inside it, twice over: `rings-within`
-              draws the keyboard ring on its behalf, and `owns-its-edge` moves
-              the focused-field accent edge onto the pill's own border. Without
-              the second, the borderless input keeps the edge rule's 1px halo
-              and paints a faint rectangle inside a box already lit. Both rules
-              live in tokens.css. */}
-          <div
-            className="rings-within owns-its-edge flex items-center gap-1.5 h-8 px-2 rounded-md border"
-            style={{ backgroundColor: 'var(--color-bg-input)', borderColor: 'var(--color-border-muted)' }}
-          >
-            <Search className="h-3.5 w-3.5 flex-shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => { setSearchQuery(e.target.value); setMissedRef(null); }}
-              onKeyDown={(e) => { if (e.key === 'Escape' && searchQuery) { e.stopPropagation(); clearSearch(); } }}
-              placeholder={t('filePanel.searchFiles')}
-              aria-label={t('filePanel.searchFiles')}
-              className="flex-1 min-w-0 text-base sm:text-xs bg-transparent border-none"
-              style={{ color: 'var(--color-text-primary)' }}
+          actions={(
+            <FileHeaderActions
+              selectedFile={selectedFile}
+              isEditing={edit.isEditing}
+              workspaceId={workspaceId}
+              fileContent={fileContent}
+              fileMime={fileMime}
+              canEdit={canEdit}
+              onStartEdit={startEdit}
+              onOpenExportModal={() => setExportModalOpen(true)}
+              triggerDownloadFn={triggerDownloadFn}
+              canDownload={canDownload}
+              readFileFullFn={readFileFullFn}
+              htmlServedUrl={apiAdapter?.buildServedUrl?.(selectedFile)}
+              editorRef={edit.editorRef}
+              canUndo={edit.canUndo}
+              canRedo={edit.canRedo}
+              hasUnsavedChanges={edit.hasUnsavedChanges}
+              showDiff={edit.showDiff}
+              setShowDiff={edit.setShowDiff}
+              isSaving={edit.isSaving}
+              saveError={edit.saveError}
+              onSave={handleSave}
+              onCancelEdit={edit.handleCancelEdit}
             />
-            {searchQuery && (
-              <button type="button" onClick={clearSearch} className="file-panel-icon-btn" title={t('filePanel.clearSearch')} aria-label={t('filePanel.clearSearch')} style={{ margin: '-0.25rem' }}>
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
-          {missedRef && (
-            <p className="mt-1.5 text-xs break-all" style={{ color: 'var(--color-text-secondary)' }}>
-              {extraMatches.length > 1
-                ? t('filePanel.refAmbiguous', { path: missedRef })
-                : t('filePanel.refNotFound', { path: missedRef })}
-            </p>
           )}
-        </div>
+        />
       )}
 
-      {/* Filter & Sort toolbar */}
-      {!showSettings && !selectedFile && !filesLoading && !filesError && listedFiles.length > 0 && (
-        <div className="file-panel-toolbar">
-          <div className="file-panel-filter-chips">
-            <button className={`file-panel-chip ${filterType === 'All' ? 'active' : ''}`} onClick={() => setFilterType('All')}>
-              All
-            </button>
-            {availableTypes.map((tp) => (
-              <button
-                key={tp}
-                className={`file-panel-chip ${filterType === tp ? 'active' : ''}`}
-                onClick={() => setFilterType(filterType === tp ? 'All' : tp)}
-              >
-                {tp}
-              </button>
-            ))}
-          </div>
-          {onToggleSystemFiles && (
-            <button
-              className={`file-panel-chip ${showSystemFiles ? 'active' : ''}`}
-              onClick={onToggleSystemFiles}
-              title="Show system directories (.agents/, .system/, tools/, etc.)"
-            >
-              System
-            </button>
-          )}
-          <div className="file-panel-sort-wrapper" ref={sortMenuRef}>
-            <button className="file-panel-icon-btn" title={t('filePanel.sortFiles')} onClick={() => setShowSortMenu((v) => !v)}>
-              <ArrowUpDown className="h-3.5 w-3.5" />
-            </button>
-            {showSortMenu && (
-              <div className="file-panel-sort-menu">
-                {SORT_OPTIONS.map((opt) => (
-                  <div
-                    key={opt.value}
-                    className={`file-panel-sort-item ${sortBy === opt.value ? 'active' : ''}`}
-                    onClick={() => { setSortBy(opt.value); setShowSortMenu(false); }}
-                  >
-                    {opt.label}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+      <PanelNotices
+        uploadProgress={uploadProgress}
+        error={uploadError || selection.deleteError}
+        onDismissError={() => { setUploadError(null); selection.setDeleteError(null); }}
+        // The tree shows this itself; the body takes it over while the tree is
+        // folded or absent, so a listing that failed is never a silent blank.
+        filesError={treeOpen && !singleFileMode ? null : filesError}
+        onRefreshFiles={onRefreshFiles}
+        busy={selection.deleteLoading || backup.backingUp}
+        backupResult={backup.backupResult}
+        onDismissBackupResult={() => backup.setBackupResult(null)}
+        editing={edit.isEditing}
+      />
+      {memoEntry && selectedFile && (
+        <MemoStaleBanner
+          status={memoStaleStatus}
+          syncing={memoSyncing}
+          onSwitchToMemoTab={onSwitchToMemoTab}
+          onSync={handleSyncMemo}
+          onViewDiff={memoStaleSandboxText !== null ? () => setMemoDiffOpen(true) : null}
+        />
       )}
 
-      {/* Workspace settings card */}
-      {!showSettings && !selectedFile && !readOnly && !isFlashWorkspace && !selectMode && (
-        <div
-          className="flex items-center justify-between mx-3 mt-2 mb-1 px-3 py-2 rounded-lg cursor-pointer transition-colors hover:opacity-80"
-          style={{ backgroundColor: 'var(--color-bg-card)', border: '1px solid var(--color-border-muted)' }}
-          onClick={() => setShowSettings(true)}
-        >
-          <span className="text-xs truncate" style={{ color: 'var(--color-text-secondary)' }}>
-            {workspaceName || t('thread.workspace')}
-          </span>
-          <Settings className="h-3.5 w-3.5 flex-shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
-        </div>
-      )}
-
-      {/* Inline settings view */}
-      {showSettings ? (
-        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', padding: '0 12px 12px' }}>
-          <SandboxSettingsContent workspaceId={workspaceId} />
-        </div>
-      ) : (
-      /* Content */
-      <div
-        className="file-panel-content-wrapper"
-        onDragEnter={!readOnly && !selectedFile ? handleDragEnter : undefined}
-        onDragLeave={!readOnly && !selectedFile ? handleDragLeave : undefined}
-        onDragOver={!readOnly && !selectedFile ? handleDragOver : undefined}
-        onDrop={!readOnly && !selectedFile ? handleDrop : undefined}
-        style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}
-      >
-        {!readOnly && isDragOver && !selectedFile && (
-          <div className="file-panel-drag-overlay">
-            <Upload className="h-8 w-8" style={{ color: 'var(--color-accent-primary)' }} />
-            <span>Drop file to upload</span>
-          </div>
-        )}
-
-        {/* font-content only while viewing a file: the reading surface gets the
-            content face, the file tree stays on the UI font. */}
-        <div className={`file-panel-content${selectedFile ? ' font-content' : ''}`} ref={contentWrapperRef}>
-          {selectionTooltip && onAddContext && (
-            <div
-              className="file-panel-selection-tooltip"
-              style={{ left: Math.max(8, selectionTooltip.x - 60), top: Math.max(4, selectionTooltip.y - 32) }}
-              onMouseDown={(e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); handleAddSelectionContext(); }}
-            >
-              <TextSelect className="h-3.5 w-3.5" style={{ color: 'var(--color-accent-primary)' }} />
-              {selectionTooltip.lineStart != null
-                ? (selectionTooltip.lineEnd !== selectionTooltip.lineStart
-                    ? t('context.addLinesToContext', { start: selectionTooltip.lineStart, end: selectionTooltip.lineEnd })
-                    : t('context.addLineToContext', { line: selectionTooltip.lineStart }))
-                : t('context.addToContext')}
-            </div>
-          )}
-
-          {contextMenu && (
-            <div
-              className="file-panel-context-menu"
-              style={{ left: contextMenu.x, top: contextMenu.y }}
-              onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
-            >
-              {onAddContext && (
-                <div className="file-panel-context-menu-item" onClick={() => handleContextMenuAction('add-context', contextMenu.filePath)}>
-                  <TextSelect className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
-                  {t('context.addToContext')}
-                </div>
-              )}
-              {memoMimeForName(contextMenu.filePath) && (
-                <div className="file-panel-context-menu-item" onClick={() => handleContextMenuAction('add-to-memo', contextMenu.filePath)}>
-                  {memoedMap.has(contextMenu.filePath) ? (
-                    <>
-                      <RefreshCw className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
-                      {t('context.syncWithMemo')}
-                    </>
-                  ) : (
-                    <>
-                      <ScrollText className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
-                      {t('context.addToMemo')}
-                    </>
-                  )}
-                </div>
-              )}
-              <div className="file-panel-context-menu-item" onClick={() => handleContextMenuAction('open', contextMenu.filePath)}>
-                <FolderOpen className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
-                {t('context.openFile')}
-              </div>
-            </div>
-          )}
-
-          {selectedFile ? (
-            <>
-              {memoEntryForSelected && (
-                <MemoStaleBanner
-                  status={memoStaleStatus}
-                  syncing={memoSyncing}
-                  onSwitchToMemoTab={onSwitchToMemoTab}
-                  onSync={handleSyncMemo}
-                  onViewDiff={memoStaleSandboxText !== null ? handleViewMemoDiff : null}
-                />
-              )}
-              {fileLoading ? (
-              <div className="p-4">
-                <div className="flex items-center justify-center py-12">
-                  <Loader size={20} className="text-[color:var(--color-text-tertiary)]" />
-                </div>
-              </div>
-            ) : fileError ? (
-              <FileErrorDisplay
-                error={fileError}
-                onRetry={() => retryOpen()}
-                onDownload={handleDownloadSelected}
-              />
-            ) : fileMime === 'pdf' ? (
-              <Suspense fallback={<DocumentLoadingFallback />}>
-                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={handleDownloadInFallback} />}>
-                  <PdfViewer data={fileArrayBuffer!} focusPage={fileFocus.focusPage} focusSeq={fileFocus.seq} onPageCount={setPdfPageCount} />
-                </DocumentErrorBoundary>
-              </Suspense>
-            ) : fileMime === 'excel' ? (
-              <Suspense fallback={<DocumentLoadingFallback />}>
-                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={handleDownloadInFallback} />}>
-                  <ExcelViewer data={fileArrayBuffer!} />
-                </DocumentErrorBoundary>
-              </Suspense>
-            ) : getFileExtension(selectedFile) === 'csv' ? (
-              isEditing ? (
-                <div className="file-panel-editor-container">
-                  <Suspense fallback={<DocumentLoadingFallback />}>
-                    <CodeEditor value={editContent ?? undefined} onChange={handleEditorChange} fileName={selectedFile} diffMode={showDiff} originalValue={originalContent ?? undefined} editorRef={editorRef} onUndoRedoChange={handleUndoRedoChange} onTextSelect={onAddContext ? handleEditorTextSelect : undefined} />
-                  </Suspense>
-                </div>
-              ) : (
-                <Suspense fallback={<DocumentLoadingFallback />}>
-                  <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={handleDownloadInFallback} />}>
-                    <CsvViewer content={fileContent ?? ''} />
-                  </DocumentErrorBoundary>
-                </Suspense>
-              )
-            ) : ['html', 'htm'].includes(getFileExtension(selectedFile)) ? (
-              <Suspense fallback={<DocumentLoadingFallback />}>
-                <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={handleDownloadInFallback} />}>
-                  <HtmlViewer
-                    content={fileContent ?? ''}
-                    fileName={fileName}
-                    workspaceId={workspaceId}
-                    filePath={selectedFile}
-                    servedUrlOverride={apiAdapter?.buildServedUrl?.(selectedFile, { injectTheme: true })}
-                    anchor={fileFocus.htmlAnchor}
-                    anchorSeq={fileFocus.seq}
-                    onCopyShareLink={onCopyShareLink ?? undefined}
-                    onTriggerDownload={handleDownloadInFallback}
-                  />
-                </DocumentErrorBoundary>
-              </Suspense>
-            ) : isEditing ? (
-              <div className="file-panel-editor-container">
-                <Suspense fallback={<DocumentLoadingFallback />}>
-                  <CodeEditor value={editContent ?? undefined} onChange={handleEditorChange} fileName={selectedFile} diffMode={showDiff} originalValue={originalContent ?? undefined} editorRef={editorRef} onUndoRedoChange={handleUndoRedoChange} onTextSelect={onAddContext ? handleEditorTextSelect : undefined} />
-                </Suspense>
-              </div>
-            ) : (
-              <div className="p-4" onMouseUp={handleContentMouseUp}>
-                {fileMime === 'image' ? (
-                  <>
-                    <img src={fileContent!} alt={fileName} className="max-w-full rounded cursor-pointer" onClick={() => setImageLightboxOpen(true)} />
-                    <ImageLightbox src={fileContent!} alt={fileName} open={imageLightboxOpen} onClose={() => setImageLightboxOpen(false)} />
-                  </>
-                ) : selectedFile?.startsWith('/large_tool_results/') ? (
-                  <div className="markdown-print-content">
-                    <Markdown variant="panel" content={stripLineNumbers(fileContent) ?? ''} className="text-sm" />
-                  </div>
-                ) : fileMime?.includes('markdown') || getFileExtension(selectedFile) === 'md' ? (
-                  <div className="markdown-print-content">
-                    <Markdown variant="panel" content={fileContent ?? ''} className="text-sm" onOpenFile={handleViewerLink} onAnchorLink={handleAnchorLink} />
-                  </div>
-                ) : (
-                  <SyntaxHighlighter
-                    language={EXT_TO_LANG[getFileExtension(selectedFile)] || 'text'}
-                    style={typeof window !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'light' ? oneLight : oneDark}
-                    customStyle={{ margin: 0, padding: 0, backgroundColor: 'transparent', fontSize: '0.75rem', lineHeight: '1.6' }}
-                    codeTagProps={{ style: { backgroundColor: 'transparent' } }}
-                    showLineNumbers
-                    lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1em', color: 'var(--color-text-tertiary)', userSelect: 'none', fontSize: '0.6875rem', opacity: 0.5 }}
-                    wrapLines
-                    lineProps={(lineNumber: number) => {
-                      const range = fileFocus.lineRange;
-                      const focused = !!range && lineNumber >= range[0] && lineNumber <= range[1];
-                      return { 'data-line': lineNumber, ...(focused ? { className: 'file-focus-line' } : {}) } as React.HTMLProps<HTMLElement>;
-                    }}
-                    wrapLongLines
-                  >
-                    {fileContent!}
-                  </SyntaxHighlighter>
-                )}
+        <div className="file-panel-body">
+          <div
+            className="file-panel-viewer"
+            onDragEnter={canDropHere ? handleDragEnter : undefined}
+            onDragLeave={canDropHere ? handleDragLeave : undefined}
+            onDragOver={canDropHere ? handleDragOver : undefined}
+            onDrop={canDropHere ? handleDrop : undefined}
+          >
+            {canDropHere && isDragOver && (
+              <div className="file-panel-drag-overlay">
+                <Upload className="h-8 w-8" style={{ color: 'var(--color-accent-primary)' }} />
+                <span>{t('filePanel.dropToUpload')}</span>
               </div>
             )}
-            </>
-          ) : (
-            <div className="py-1 file-tree-root">
-              {filesLoading ? (
-                Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="file-panel-item animate-pulse">
-                    <div className="h-4 w-4 rounded" style={{ backgroundColor: 'var(--color-border-muted)' }} />
-                    <div className="h-4 flex-1 rounded" style={{ backgroundColor: 'var(--color-border-muted)', width: `${50 + i * 10}%` }} />
-                  </div>
-                ))
-              ) : filesError ? (
-                <div className="px-4 py-8 text-center">
-                  <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>{filesError}</p>
-                </div>
-              ) : listedFiles.length === 0 && !trimmedQuery ? (
-                <div className="px-4 py-8 text-center">
-                  <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>No files yet</p>
-                </div>
-              ) : filteredSortedFiles.length === 0 ? (
-                <div className="px-4 py-8 text-center">
-                  <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
-                    {trimmedQuery ? t('filePanel.noSearchMatches') : `No ${filterType.toLowerCase()} files`}
-                  </p>
-                </div>
-              ) : (
-                fileTree.map((node) => (
-                  <DirectoryNode
-                    key={node.fullPath}
-                    node={node}
-                    depth={0}
-                    showHeader={node.name !== '/'}
-                    expandedDirs={visibleExpandedDirs}
-                    toggleDir={toggleDir}
-                    selectMode={selectMode}
-                    selectedPaths={selectedPaths}
-                    toggleSelect={toggleSelect}
-                    toggleDirSelect={toggleDirSelect}
-                    handleFileClick={handleFileClick}
-                    readOnly={readOnly}
-                    backedUpSet={backedUpSet}
-                    modifiedSet={modifiedSet}
-                    memoedMap={memoedMap}
-                    memoedTitle={memoedTitle}
-                    onAddContext={onAddContext}
-                    setContextMenu={setContextMenu}
-                    activeContextPath={contextMenu?.filePath ?? null}
-                  />
-                ))
+            {/* font-content only while reading a file: the tree stays on the UI font. */}
+            <div className={`file-panel-content${selectedFile ? ' font-content' : ''}`} ref={contentWrapperRef}>
+              {selectionTooltip && onAddContext && (
+                <button
+                  type="button"
+                  className="file-panel-selection-tooltip"
+                  style={{ left: Math.max(8, selectionTooltip.x - 60), top: Math.max(4, selectionTooltip.y - 32) }}
+                  // Acts on mousedown: a click would land after the browser has
+                  // already collapsed the selection it is meant to capture.
+                  onMouseDown={(e: React.MouseEvent) => {
+                    e.preventDefault(); e.stopPropagation();
+                    tabs.pinTab(activeTab.id);
+                    handleAddSelectionContext();
+                  }}
+                  onKeyDown={(e: React.KeyboardEvent) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
+                    tabs.pinTab(activeTab.id);
+                    handleAddSelectionContext();
+                  }}
+                >
+                  <TextSelect className="h-3.5 w-3.5" style={{ color: 'var(--color-accent-primary)' }} />
+                  {selectionTooltip.lineStart != null
+                    ? (selectionTooltip.lineEnd !== selectionTooltip.lineStart
+                        ? t('context.addLinesToContext', { start: selectionTooltip.lineStart, end: selectionTooltip.lineEnd })
+                        : t('context.addLineToContext', { line: selectionTooltip.lineStart }))
+                    : t('context.addToContext')}
+                </button>
               )}
+              <PreviewPanes tabs={tabs.tabs} activeId={activeTab.id} previews={previews} />
+              {renderActive()}
             </div>
+          </div>
+
+          <AnimatePresence initial={false}>
+          {!singleFileMode && treeOpen && (
+            <TreeColumn
+              key="tree"
+              filter={filter}
+              selection={selection}
+              backup={backup}
+              filesLoading={filesLoading}
+              filesError={filesError}
+              onRefreshFiles={onRefreshFiles}
+              showSystemFiles={showSystemFiles}
+              onToggleSystemFiles={onToggleSystemFiles}
+              scopeDir={scopeDir}
+              onClearScope={() => setScopeDir(null)}
+              openPaths={tabs.openPaths}
+              activePath={selectedFile}
+              onFileClick={tree.onOpen}
+              onFileDoubleClick={(path) => { tabs.openFile(path, { pin: true }); void cache.fetchBody(path).catch(() => {}); }}
+              onOpenFromKeyboard={tree.onOpen}
+              onEscape={() => (selection.selectMode ? selection.exitSelectMode() : setTreeOpen(!narrow))}
+              memoedMap={memoedMap}
+              memoedTitle={t('context.inMemo')}
+              onAddContext={onAddContext}
+              setContextMenu={setContextMenu}
+              activeContextPath={contextMenu?.filePath ?? null}
+              readOnly={readOnly}
+              uploadDisabled={uploadProgress !== null}
+              onUpload={() => fileInputRef.current?.click()}
+              previews={previews.previews}
+              onOpenPreview={openPreviewTab}
+              activePreviewPort={activeTab.kind === 'preview' ? activeTab.port : null}
+              onOpenSettings={!readOnly && !isFlashWorkspace ? openSettings : null}
+              workspaceName={wsData?.name}
+              overlay={narrow}
+              onDismissOverlay={() => setTreeOpen(false)}
+            />
           )}
+          </AnimatePresence>
         </div>
-      </div>
+
+      <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileInputChange} />
+
+      {contextMenu && (
+        <FileContextMenu
+          menu={contextMenu}
+          onAction={handleContextMenuAction}
+          onClose={() => setContextMenu(null)}
+          canAddContext={!!onAddContext}
+          memoState={memoMimeForName(contextMenu.filePath)
+            ? (memoedMap.has(contextMenu.filePath) ? 'present' : 'absent')
+            : null}
+          canDownload={canDownload}
+          selectedCount={selection.selectedPaths.has(contextMenu.filePath) ? selection.selectedPaths.size : 0}
+        />
       )}
 
       {selectedFile && exportModalOpen && (
@@ -1339,10 +790,10 @@ function FilePanel({
           />
         </Suspense>
       )}
-      {selectedFile && memoEntryForSelected && memoStaleSandboxText !== null && (
+      {selectedFile && memoEntry && memoStaleSandboxText !== null && (
         <MemoDiffModal
           open={memoDiffOpen}
-          memoKey={memoEntryForSelected.key}
+          memoKey={memoEntry.key}
           fileName={selectedFile.split('/').pop() || selectedFile}
           sandboxText={memoStaleSandboxText}
           onClose={() => setMemoDiffOpen(false)}
@@ -1353,7 +804,7 @@ function FilePanel({
 }
 
 export default FilePanel;
-export type { ContextPayload } from './filePanel/types';
+export type { ContextPayload, PanelTarget } from './filePanel/types';
 export { SYSTEM_DIR_PREFIXES } from './filePanel/fileMeta';
 // eslint-disable-next-line react-refresh/only-export-components
 export { categorizeFileError } from './filePanel/fileErrors';

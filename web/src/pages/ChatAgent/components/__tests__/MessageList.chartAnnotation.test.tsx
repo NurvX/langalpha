@@ -70,6 +70,7 @@ vi.mock('../charts/InlineArtifactCards', () => {
   );
   const NullCard = () => null;
   return {
+    chartSymbolOf: () => null,
     INLINE_ARTIFACT_TOOLS: new Set<string>(['draw_chart_annotation']),
     isInlineArtifactReady: (name: string, artifact: unknown) =>
       !!artifact && name === 'draw_chart_annotation',

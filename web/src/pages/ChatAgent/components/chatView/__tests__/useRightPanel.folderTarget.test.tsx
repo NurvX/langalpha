@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 import { useRightPanel } from '../useRightPanel';
 
-vi.mock('../../../utils/api', () => ({ getPreviewUrl: vi.fn() }));
+vi.mock('../../../utils/api', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), getPreviewUrl: vi.fn() }));
 
 function open() {
   const { result } = renderHook(() => useRightPanel({

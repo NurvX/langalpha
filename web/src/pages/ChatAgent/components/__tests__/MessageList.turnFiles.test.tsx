@@ -208,8 +208,8 @@ describe('turn deliverables deck', () => {
       { button: 0, ctrlKey: false },
     );
     const items = await screen.findAllByRole('menuitem');
-    expect(items.map((el) => el.textContent)).toEqual(['chat.turnFiles.open', 'chat.turnFiles.download']);
-    fireEvent.click(items[1]);
+    expect(items.map((el) => el.textContent)).toEqual(['chat.turnFiles.open', 'filePanel.openInNewTab', 'chat.turnFiles.download']);
+    fireEvent.click(items[2]);
     expect(onDownloadFile).toHaveBeenCalledWith('results/review.md', undefined);
   });
 
@@ -224,7 +224,7 @@ describe('turn deliverables deck', () => {
       { button: 0, ctrlKey: false },
     );
     const items = await screen.findAllByRole('menuitem');
-    expect(items.map((el) => el.textContent)).toEqual(['chat.turnFiles.open']);
+    expect(items.map((el) => el.textContent)).toEqual(['chat.turnFiles.open', 'filePanel.openInNewTab']);
   });
 
   /**

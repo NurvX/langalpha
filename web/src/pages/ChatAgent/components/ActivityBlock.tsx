@@ -21,7 +21,9 @@ import Markdown from './Markdown';
 import {
   INLINE_ARTIFACT_MAP,
   isInlineArtifactReady,
+  openCardTarget,
 } from './charts/InlineArtifactCards';
+import type { ChartTabSpec } from './filePanel/types';
 import { useTranslation } from 'react-i18next';
 import './ActivityBlock.css';
 import { LiveRow } from './messageList/LiveRow';
@@ -106,6 +108,8 @@ interface ActivityBlockProps {
   isFirst: boolean;
   onToolCallClick?: (item: ActivityItem) => void;
   onOpenFile?: (path: string, workspaceId?: string) => void;
+  /** Opens a live chart for the stock an inline card is about. */
+  onOpenChart?: (spec: ChartTabSpec) => void;
 }
 
 /**
@@ -115,7 +119,7 @@ interface ActivityBlockProps {
  * eliminating the visible gap that separate components caused between
  * fade-out and reappear across render cycles.
  */
-const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, isStreaming, isFirst, onToolCallClick, onOpenFile }: ActivityBlockProps): React.ReactElement | null {
+const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, isStreaming, isFirst, onToolCallClick, onOpenFile, onOpenChart }: ActivityBlockProps): React.ReactElement | null {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
   const reduceMotion = useReducedMotion();
@@ -298,7 +302,10 @@ const ActivityBlock = memo(function ActivityBlock({ items, preparingToolCall, is
             if (!ChartComponent) return null;
             return (
               <div key={`chart-${item.id || idx}`}>
-                <ChartComponent artifact={artifact} onClick={() => onToolCallClick?.(item)} />
+                <ChartComponent
+                  artifact={artifact}
+                  onClick={() => openCardTarget(artifact, onOpenChart, () => onToolCallClick?.(item))}
+                />
               </div>
             );
           })}

@@ -40,7 +40,7 @@ import './FilePanel.css';
 import ChatInput, { type ChatInputHandle } from '../../../components/ui/chat-input';
 import { attachmentsToContexts, widgetSnapshotsToContexts, type Attachment } from '../utils/fileUpload';
 import MessageList, { normalizeSubagentText } from './MessageList';
-import { MessageActionsProvider, type MessageActions } from './messageList/MessageActionsContext';
+import { MessageActionsProvider } from './messageList/MessageActionsContext';
 import { SubagentTelemetryContext } from './SubagentTelemetryContext';
 import { WorkflowRunContext } from './WorkflowRunContext';
 import WorkflowRunDetail from './WorkflowRunDetail';
@@ -83,6 +83,7 @@ import { useTurnEndScroll } from './chatView/useTurnEndScroll';
 import { useSubagentTabs } from './chatView/useSubagentTabs';
 import { publishSidebarAgents, clearSidebarAgents } from './sidebarAgentsBridge';
 import { useRightPanel } from './chatView/useRightPanel';
+import { useMessageActionBundles } from './chatView/useMessageActionBundles';
 
 
 function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName: initialWorkspaceName, isActive = true, onThreadResolved, warmingState = false }: ChatViewProps): React.ReactElement | null {
@@ -813,11 +814,15 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
 
 
 
+  // The route's `__default__` stands for a chat with no thread yet; handing it
+  // to the panel would give every unsent chat in a workspace one shared strip.
+  const liveThreadId = currentThreadId || threadId;
+  const panelThreadId = liveThreadId && liveThreadId !== '__default__' ? liveThreadId : undefined;
+
   // Right-panel controller (chatView/useRightPanel).
   const {
     panelTarget,
-    handleTargetFileHandled,
-    handleTargetDirHandled,
+    handleTargetHandled,
     handleTargetMemoryHandled,
     handleTargetMemoHandled,
     rightPanelType,
@@ -838,15 +843,21 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     handleClosePreview,
     handleRefreshPreview,
     handleToggleFilePanel,
+    handleFilesDirtyChange,
+    confirmLeaveFiles,
     handleOpenPreview,
+    handleOpenChart,
+    handleOpenInMarketView,
     detailToolCall,
     detailPlanData,
     sourcesRecords,
     allSourcesRecords,
     getRecentWritePaths,
+    getWriteLog,
   } = useRightPanel({
     isMobile,
     workspaceId,
+    threadId: panelThreadId,
     isActive,
     containerRef,
     setFilePanelWorkspaceId,
@@ -856,14 +867,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // Keep the ref in sync so SSE events (via handleOpenPreviewFromStream) use the latest closure
   openPreviewRef.current = handleOpenPreview;
 
-  // -------------------------------------------------------------------------
-  // Stable handler identities for the memoized message tree. MessageBubble is
-  // memo'd, but the handlers below are recreated upstream on every streamed
-  // chunk (useChatMessages/useRightPanel re-render per chunk) — passing them
-  // straight through would re-render every settled bubble on every chunk.
-  // useStableHandler pins each identity while always invoking the freshest
-  // closure, which is exactly what edit/regenerate need: their turn-index
-  // math must read the current messages array, never a memoized snapshot.
   // A deliverable card names its own workspace only for a cross-workspace ref;
   // otherwise the file belongs to the thread's own workspace, which the card
   // has no way to know.
@@ -894,95 +897,41 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     }
   }, [workspaceId, getRecentWritePaths, handleOpenFileFromChat, t]);
 
-  const stableOpenFile = useStableHandler(handleOpenFileFromChat);
-  const stableDownloadFile = useStableHandler(handleDownloadFileFromChat);
-  const stableRevealFiles = useStableHandler(revealFiles);
-  const stableOpenSources = useStableHandler(handleOpenSourcesFromChat);
-  const stableToolCallDetail = useStableHandler(handleToolCallDetailClick);
-  const stableOpenSubagentTask = useStableHandler(handleOpenSubagentTask);
-  const stableApprovePlan = useStableHandler(handleApproveInterrupt);
-  const stableRejectPlan = useStableHandler(handleRejectInterrupt);
-  const stablePlanDetail = useStableHandler(handlePlanDetailClick);
-  const stableAnswerQuestion = useStableHandler(handleAnswerQuestion);
-  const stableSkipQuestion = useStableHandler(handleSkipQuestion);
-  const stableApproveCreateWorkspace = useStableHandler(handleApproveCreateWorkspace);
-  const stableRejectCreateWorkspace = useStableHandler(handleRejectCreateWorkspace);
-  const stableApproveStartQuestion = useStableHandler(handleApproveStartQuestion);
-  const stableRejectStartQuestion = useStableHandler(handleRejectStartQuestion);
-  const stableApprovePTCAgent = useStableHandler(handleApprovePTCAgent);
-  const stableRejectPTCAgent = useStableHandler(handleRejectPTCAgent);
-  const stableApproveSecretaryAction = useStableHandler(handleApproveSecretaryAction);
-  const stableRejectSecretaryAction = useStableHandler(handleRejectSecretaryAction);
-  const stableResumeCreditPause = useStableHandler(handleResumeCreditPause);
-  const stableApproveToolCall = useStableHandler(handleApproveToolCall);
-  const stableRejectToolCall = useStableHandler(handleRejectToolCall);
-  const stableEditMessage = useStableHandler((id: string, content: string) =>
-    handleEditMessage(id, content, chatInputRef.current?.getModelOptions?.()));
-  const stableRegenerate = useStableHandler((id: string) =>
-    handleRegenerate(id, chatInputRef.current?.getModelOptions?.()));
-  const stableRetry = useStableHandler(() => handleRetry(chatInputRef.current?.getModelOptions?.()));
-  const stableReportWithAgent = useStableHandler((instruction: string) => {
-    handleSendMessage(`/self-improve ${instruction}`);
-  });
-  // Feedback handlers close over the stored ratings, so their raw identity
-  // churns on every load/submit — wrap them or a single thumbs click would
-  // re-render the whole transcript through the context value.
-  const stableThumbUp = useStableHandler(handleThumbUp);
-  const stableThumbDown = useStableHandler(handleThumbDown);
-
-  // The main transcript's action surface. Every member is identity-stable, so
-  // this object is built once and never re-renders the memoized message tree.
-  const messageActions = useMemo<MessageActions>(() => ({
-    onOpenFile: stableOpenFile,
-    onDownloadFile: stableDownloadFile,
-    onRevealFiles: stableRevealFiles,
-    onOpenSources: stableOpenSources,
-    onToolCallDetailClick: stableToolCallDetail,
-    onOpenSubagentTask: stableOpenSubagentTask,
-    onApprovePlan: stableApprovePlan,
-    onRejectPlan: stableRejectPlan,
-    onPlanDetailClick: stablePlanDetail,
-    onAnswerQuestion: stableAnswerQuestion,
-    onSkipQuestion: stableSkipQuestion,
-    onApproveCreateWorkspace: stableApproveCreateWorkspace,
-    onRejectCreateWorkspace: stableRejectCreateWorkspace,
-    onApproveStartQuestion: stableApproveStartQuestion,
-    onRejectStartQuestion: stableRejectStartQuestion,
-    onApprovePTCAgent: stableApprovePTCAgent,
-    onRejectPTCAgent: stableRejectPTCAgent,
-    onApproveSecretaryAction: stableApproveSecretaryAction,
-    onRejectSecretaryAction: stableRejectSecretaryAction,
-    onResumeCreditPause: stableResumeCreditPause,
-    onApproveToolCall: stableApproveToolCall,
-    onRejectToolCall: stableRejectToolCall,
-    onEditMessage: stableEditMessage,
-    onRegenerate: stableRegenerate,
-    onRetry: stableRetry,
-    onThumbUp: stableThumbUp,
-    onThumbDown: stableThumbDown,
-    onReportWithAgent: stableReportWithAgent,
+  // Identity-stable action bundles for the memoized message tree
+  // (chatView/useMessageActionBundles).
+  const { messageActions, subagentMessageActions } = useMessageActionBundles({
+    onOpenFile: handleOpenFileFromChat,
+    onDownloadFile: handleDownloadFileFromChat,
+    onRevealFiles: revealFiles,
+    onOpenSources: handleOpenSourcesFromChat,
+    onToolCallDetailClick: handleToolCallDetailClick,
+    onOpenChart: handleOpenChart,
+    onOpenSubagentTask: handleOpenSubagentTask,
+    onApprovePlan: handleApproveInterrupt,
+    onRejectPlan: handleRejectInterrupt,
+    onPlanDetailClick: handlePlanDetailClick,
+    onAnswerQuestion: handleAnswerQuestion,
+    onSkipQuestion: handleSkipQuestion,
+    onApproveCreateWorkspace: handleApproveCreateWorkspace,
+    onRejectCreateWorkspace: handleRejectCreateWorkspace,
+    onApproveStartQuestion: handleApproveStartQuestion,
+    onRejectStartQuestion: handleRejectStartQuestion,
+    onApprovePTCAgent: handleApprovePTCAgent,
+    onRejectPTCAgent: handleRejectPTCAgent,
+    onApproveSecretaryAction: handleApproveSecretaryAction,
+    onRejectSecretaryAction: handleRejectSecretaryAction,
+    onResumeCreditPause: handleResumeCreditPause,
+    onApproveToolCall: handleApproveToolCall,
+    onRejectToolCall: handleRejectToolCall,
+    onThumbUp: handleThumbUp,
+    onThumbDown: handleThumbDown,
     onWidgetSendPrompt: stableSendMessage,
-  }), [
-    stableOpenFile, stableDownloadFile, stableRevealFiles, stableOpenSources, stableToolCallDetail,
-    stableOpenSubagentTask, stableApprovePlan, stableRejectPlan, stablePlanDetail,
-    stableAnswerQuestion, stableSkipQuestion, stableApproveCreateWorkspace,
-    stableRejectCreateWorkspace, stableApproveStartQuestion, stableRejectStartQuestion,
-    stableApprovePTCAgent, stableRejectPTCAgent, stableApproveSecretaryAction,
-    stableRejectSecretaryAction, stableResumeCreditPause, stableApproveToolCall, stableRejectToolCall,
-    stableEditMessage, stableRegenerate, stableRetry,
-    stableThumbUp, stableThumbDown, stableReportWithAgent, stableSendMessage,
-  ]);
-
-  // The subagent transcript is a DIFFERENT surface: its cards belong to a task,
-  // not to the main thread's turn, so the main thread's approve/reject/edit
-  // handlers must not be reachable from it. Navigation only.
-  // No onRevealFiles: it moves the main transcript, and the settle-aware
-  // observer that follows an unfolding deck is only attached there.
-  const subagentMessageActions = useMemo<MessageActions>(() => ({
-    onOpenFile: stableOpenFile,
-    onDownloadFile: stableDownloadFile,
-    onToolCallDetailClick: stableToolCallDetail,
-  }), [stableOpenFile, stableDownloadFile, stableToolCallDetail]);
+    onEditMessage: handleEditMessage,
+    onRegenerate: handleRegenerate,
+    onRetry: handleRetry,
+    onSendMessage: handleSendMessage,
+    chatInputRef,
+  });
 
   // Flash-mode deep-link context for PTC-agent proposal cards. Memoized: a
   // fresh object per render would defeat the bubble memo in flash mode.
@@ -1843,7 +1792,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
         </MobileBottomSheet>
       )}
 
-      {/* Mobile preview bottom sheet */}
+      {/* Mobile preview bottom sheet. Desktop shows a running app as a tab in
+          the file panel instead; the sheet has no tab strip to land in. */}
       {isMobile && (
         <MobileBottomSheet
           open={rightPanelType === 'preview' && !!previewData}
@@ -1884,6 +1834,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
             dragElastic={{ left: 0, right: 0.5 }}
             onDragEnd={(_: unknown, info: PanInfo) => {
               if (info.velocity.x > 300 || info.offset.x > 120) {
+                if (!confirmLeaveFiles()) return;
                 setRightPanelType(null);
                 popPanelHistory();
               }
@@ -1896,17 +1847,20 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                 <WorkspaceProvider workspaceId={effectiveFileWorkspaceId || workspaceId} downloadFile={null}>
                 <RightPanel
                   workspaceId={effectiveFileWorkspaceId || workspaceId}
+                  threadId={panelThreadId}
                   onClose={() => { setRightPanelType(null); popPanelHistory(); }}
+                  onDirtyChange={handleFilesDirtyChange}
                   panelTarget={panelTarget}
-                  onTargetFileHandled={handleTargetFileHandled}
-                  onTargetDirHandled={handleTargetDirHandled}
+                  onTargetHandled={handleTargetHandled}
                   onTargetMemoryHandled={handleTargetMemoryHandled}
                   onTargetMemoHandled={handleTargetMemoHandled}
+                  onOpenInMarketView={handleOpenInMarketView}
                   sourcesRecords={sourcesRecords}
                   allSourcesRecords={allSourcesRecords}
                   marketWatch={marketWatch}
                   onOpenFile={handleOpenFileFromChat}
                   getRecentWritePaths={getRecentWritePaths}
+                  getWriteLog={getWriteLog}
                   files={workspaceFiles}
                   filesLoading={filesLoading}
                   filesError={filesError}
@@ -1956,17 +1910,20 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                     <WorkspaceProvider workspaceId={effectiveFileWorkspaceId || workspaceId} downloadFile={null}>
                     <RightPanel
                       workspaceId={effectiveFileWorkspaceId || workspaceId}
+                      threadId={panelThreadId}
                       onClose={() => { setRightPanelType(null); popPanelHistory(); }}
+                      onDirtyChange={handleFilesDirtyChange}
                       panelTarget={panelTarget}
-                      onTargetFileHandled={handleTargetFileHandled}
-                      onTargetDirHandled={handleTargetDirHandled}
+                      onTargetHandled={handleTargetHandled}
                       onTargetMemoryHandled={handleTargetMemoryHandled}
                       onTargetMemoHandled={handleTargetMemoHandled}
+                      onOpenInMarketView={handleOpenInMarketView}
                       sourcesRecords={sourcesRecords}
                       allSourcesRecords={allSourcesRecords}
                       marketWatch={marketWatch}
                       onOpenFile={handleOpenFileFromChat}
                       getRecentWritePaths={getRecentWritePaths}
+                      getWriteLog={getWriteLog}
                       files={workspaceFiles}
                       filesLoading={filesLoading}
                       filesError={filesError}
@@ -1991,18 +1948,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       onClose={handleCloseDetailPanel}
                       onOpenFile={handleOpenFileFromChat}
                       onOpenSubagentTask={handleOpenSubagentTask}
-                    />
-                  ) : rightPanelType === 'preview' && previewData ? (
-                    <PreviewViewer
-                      url={previewData.url}
-                      port={previewData.port}
-                      title={previewData.title}
-                      loading={previewData.loading}
-                      error={previewData.error}
-                      onClose={handleClosePreview}
-                      onRefresh={handleRefreshPreview}
-                      isDragging={isDragging}
-                      reloadToken={previewData.reloadToken}
                     />
                   ) : null}
                 </Suspense>

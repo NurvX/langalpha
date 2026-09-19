@@ -144,6 +144,10 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile, onReveal }: T
                           <PanelRight className="h-3.5 w-3.5" />
                           {t('chat.turnFiles.open')}
                         </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => onOpenFile(file.path, file.workspaceId, file.location, { pin: true })}>
+                          <PanelRight className="h-3.5 w-3.5" />
+                          {t('filePanel.openInNewTab')}
+                        </DropdownMenuItem>
                         {onDownloadFile && (
                           <DropdownMenuItem onSelect={() => onDownloadFile(file.path, file.workspaceId)}>
                             <Download className="h-3.5 w-3.5" />

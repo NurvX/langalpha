@@ -41,7 +41,15 @@ const EXPECTED = ['index', 'vendor-dnd', 'vendor-motion', 'vendor-react']
 // about 4 kB gz of strings ride the critical path; the dialog and sheet
 // keyframes in styles/animations.css add 0.6 kB to the entry stylesheet.
 // Nothing moved chunks; the eager set is unchanged.
-const MAX_EAGER_KB = 470
+//
+// Raised 470 -> 475 for the workspace tab strip, chart tab and Excel range
+// context. The strip, the chart header and the Excel viewer each carry copy in
+// both locales, so about 1.8 kB gz of strings ride the critical path; the
+// search helpers in lib/marketUtils add a little more. The CI runner's gzip
+// reads about 1.8 kB above a local build of the same tree, so the margin
+// here is read against CI, not a laptop. Nothing moved chunks; the eager set
+// is unchanged.
+const MAX_EAGER_KB = 475
 
 const outDir = process.argv[2] || 'dist'
 const indexPath = join(outDir, 'index.html')

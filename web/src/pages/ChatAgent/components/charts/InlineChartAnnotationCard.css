@@ -1,0 +1,36 @@
+/* The modal's two actions: primary in the quiet button pair, secondary
+   neutral. Hover and keyboard focus lift the edge; the ring is the global one. */
+.chart-annotation-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border-muted);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.chart-annotation-action:hover,
+.chart-annotation-action:focus-visible {
+  border-color: var(--color-border-elevated);
+  color: var(--color-text-primary);
+}
+
+.chart-annotation-action--primary {
+  border-color: var(--color-btn-primary-bg);
+  background: var(--color-btn-primary-bg);
+  color: var(--color-btn-primary-text);
+}
+
+.chart-annotation-action--primary:hover,
+.chart-annotation-action--primary:focus-visible {
+  border-color: var(--color-border-elevated);
+  color: var(--color-btn-primary-text);
+  opacity: 0.92;
+}

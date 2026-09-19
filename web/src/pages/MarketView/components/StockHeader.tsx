@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Info, List, Sunrise, Sunset, ChevronDown } from 'lucide-react';
+import { SymbolSwitcher } from './SymbolSwitcher';
+import { HeaderPill } from './HeaderPill';
 import './StockHeader.css';
 import { isUSEquity, EXT_COLOR_PRE, EXT_COLOR_POST } from '../utils/chartConstants';
-import { getExtendedHoursInfo } from '@/lib/marketUtils';
+import { getExtendedHoursInfo, type StockSearchHit } from '@/lib/marketUtils';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useTranslation } from 'react-i18next';
 import type { StockInfo, RealTimePrice, SnapshotData } from '@/types/market';
 import type { PriceUpdate, ConnectionStatus, DataLevel } from '../hooks/useMarketDataWS';
 
@@ -44,6 +47,10 @@ interface StockHeaderProps {
   snapshot: SnapshotData | null;
   /** Venue market phase (`pre|open|post|closed`) from the chart's bars responses. */
   marketPhase?: string | null;
+  /** Makes the ticker a control: clicking it opens a search, and a pick lands here. */
+  onSwitchSymbol?: (symbol: string, hit?: StockSearchHit) => void;
+  /** A host's own buttons, beside Company Overview. */
+  headerActions?: React.ReactNode;
 }
 
 const EXCHANGE_LABELS: Record<string, string> = { HK: 'HK', SS: 'SH', SZ: 'SZ', L: 'LON', T: 'TYO', TO: 'TSX', AX: 'ASX' };
@@ -57,7 +64,8 @@ function getVenueStatusLabel(sym: string | null | undefined, status: 'Delayed' |
   return EXCHANGE_LABELS[suffix] ? `${EXCHANGE_LABELS[suffix]} ${status}` : status;
 }
 
-const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta: _chartMeta, displayOverride, onToggleOverview, onOpenWatchlist, wsStatus, wsHasData = false, wsDataLevel = null, ginlixDataEnabled: _ginlixDataEnabled = true, quoteData, marketStatus, snapshot, marketPhase = null }: StockHeaderProps) => {
+const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta: _chartMeta, displayOverride, onToggleOverview, onOpenWatchlist, wsStatus, wsHasData = false, wsDataLevel = null, ginlixDataEnabled: _ginlixDataEnabled = true, quoteData, marketStatus, snapshot, marketPhase = null, onSwitchSymbol, headerActions }: StockHeaderProps) => {
+  const { t } = useTranslation();
   const formatNumber = (num: number | null | undefined): string => {
     if (num == null || (num !== 0 && !num)) return '—';
     if (num >= 1e12) return (num / 1e12).toFixed(2) + 'T';
@@ -145,7 +153,11 @@ const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta: _chartMeta, 
       <div className="stock-header-top">
         <div>
           <div className="stock-title">
-            <span className="stock-symbol">{symbol}</span>
+            {onSwitchSymbol ? (
+              <SymbolSwitcher symbol={symbol} onPick={onSwitchSymbol} />
+            ) : (
+              <span className="stock-symbol">{symbol}</span>
+            )}
             <span className="stock-name">{displayName}</span>
             {displayExchange && <span className="stock-exchange">{displayExchange}</span>}
             <span className="stock-data-source stock-data-source--inline">
@@ -172,10 +184,13 @@ const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta: _chartMeta, 
               </span>
             </span>
           </div>
-          <button className="stock-overview-toggle" onClick={onToggleOverview}>
-            <Info size={13} />
-            Company Overview
-          </button>
+          <div className="stock-header-actions">
+            <HeaderPill onClick={onToggleOverview}>
+              <Info size={13} />
+              {t('marketView.companyOverview')}
+            </HeaderPill>
+            {headerActions}
+          </div>
         </div>
         <div className="stock-price-section">
           {extType && settledClose != null && extDisplayPrice != null && extDisplayPct != null ? (

@@ -1,0 +1,10 @@
+/* A live chart fills the viewer slot the way a preview does; the surface
+   inside paints its own card ground and manages its own height. */
+.file-panel-chart-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background-color: var(--color-bg-page);
+}

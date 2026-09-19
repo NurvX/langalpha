@@ -81,6 +81,13 @@ html {
   --color-bg-hover: rgba(255, 255, 255, 0.05);
   --color-bg-subtle: rgba(255, 255, 255, 0.03);
   --color-bg-chart-placeholder: #FFFFFF;
+  /* Spreadsheet grid (ExcelViewer, CsvViewer). Deliberately theme-invariant,
+     like a printed page: a workbook's own fills and font colours were chosen
+     against a white sheet, and only on one do they read as their author saw
+     them. The surface around the grid carries the theme instead. Every other
+     grid shade is mixed from this pair in ExcelViewer.css. */
+  --color-sheet-paper: #FFFFFF;
+  --color-sheet-ink: #1F1F1E;
   --color-bg-overlay: rgba(0, 0, 0, 0.6);
   --color-bg-overlay-strong: rgba(0, 0, 0, 0.8);
 
@@ -263,6 +270,9 @@ html {
   --color-bg-hover: rgba(0, 0, 0, 0.04);
   --color-bg-subtle: rgba(0, 0, 0, 0.02);
   --color-bg-chart-placeholder: #FFFFFF;
+  /* Spreadsheet grid: the same printed page as dark (see the role note in :root). */
+  --color-sheet-paper: #FFFFFF;
+  --color-sheet-ink: #1F1F1E;
   --color-bg-overlay: rgba(0, 0, 0, 0.25);
   --color-bg-overlay-strong: rgba(0, 0, 0, 0.45);
 

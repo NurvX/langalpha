@@ -31,6 +31,26 @@ describe('parseFragment', () => {
     expect(parseFragment('l2')).toEqual({ anchor: 'l2' });
   });
 
+  it('reads a spreadsheet cell or range, keeping the anchor beside it', () => {
+    expect(parseFragment('B7')).toEqual({ cell: 'B7', anchor: 'B7' });
+    expect(parseFragment('Model!B7')).toEqual({ cell: 'Model!B7', anchor: 'Model!B7' });
+    expect(parseFragment('Model!B4:D9')).toEqual({ cell: 'Model!B4:D9', anchor: 'Model!B4:D9' });
+    expect(parseFragment("'My Sheet'!B4:D9")).toEqual({
+      cell: "'My Sheet'!B4:D9",
+      anchor: "'My Sheet'!B4:D9",
+    });
+  });
+
+  it('leaves prose that merely looks addressable as a plain anchor', () => {
+    // Lowercase is prose far more often than it is a column, and `L42` is a
+    // line fragment before it is ever a cell.
+    expect(parseFragment('b7')).toEqual({ anchor: 'b7' });
+    expect(parseFragment('L42')).toEqual({ line: 42 });
+    expect(parseFragment('Q3')).toEqual({ cell: 'Q3', anchor: 'Q3' });
+    expect(parseFragment('risks')).toEqual({ anchor: 'risks' });
+    expect(parseFragment('B0')).toEqual({ anchor: 'B0' });
+  });
+
   it('keeps anything else as a decoded anchor', () => {
     expect(parseFragment('risks-1')).toEqual({ anchor: 'risks-1' });
     expect(parseFragment('%E4%BC%B0%E5%80%BC')).toEqual({ anchor: '估值' });
@@ -45,6 +65,10 @@ describe('splitFileLocation', () => {
       location: { anchor: 'valuation' },
     });
     expect(splitFileLocation('filing.pdf#page=2')).toEqual({ path: 'filing.pdf', location: { page: 2 } });
+    expect(splitFileLocation('models/dcf.xlsx#Model!B7')).toEqual({
+      path: 'models/dcf.xlsx',
+      location: { cell: 'Model!B7', anchor: 'Model!B7' },
+    });
   });
 
   it('splits a line suffix, ignoring a column', () => {

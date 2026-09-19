@@ -1,28 +1,45 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { getPreviewUrl } from '../../utils/api';
+import { useTranslation } from 'react-i18next';
+import { appendPathSuffix, getPreviewUrl } from '../../utils/api';
 import { computeAgentArtifactRouting } from '../../utils/agentPaths';
-import { collectRecentWritePaths, type TurnMessage } from '../../utils/fileRefResolver';
+import { collectRecentWritePaths, collectWriteLog, type TurnMessage } from '../../utils/fileRefResolver';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { isValidUuid } from '../../utils/uuid';
 import { clampPanelWidth as clampPanelWidthUtil } from '@/lib/panelUtils';
-import type { PanelTarget } from '../RightPanel';
-import type { FileLocation } from '../../utils/fileLocation';
+import { buildMarketViewUrl } from '@/pages/MarketView/utils/marketRoute';
+import { isFilesPanelKind, stampTarget, type ChartTabSpec, type PanelTarget, type UnsequencedTarget } from '../filePanel/types';
+import type { OpenFileHandler } from '../../utils/fileLocation';
 import type { PreviewData } from '../../hooks/utils/types';
 import type { ProvenanceRecord } from '@/types/chat';
 import type { PlanData, ToolCallProcessRecord } from './types';
 
-/** Append an optional path suffix to a base URL (e.g. "/timeline.html"). */
-function appendPathSuffix(baseUrl: string, path?: string): string {
-  if (!path) return baseUrl;
-  try {
-    const parsed = new URL(baseUrl);
-    parsed.pathname = parsed.pathname.replace(/\/+$/, '') + path;
-    return parsed.toString();
-  } catch {
-    return baseUrl;
+// A running app or a live chart opens wide, so its toolbar has room.
+const PREVIEW_MAX_RATIO = 0.92;
+/** What the file panel opens at before a drag has said otherwise. */
+const DEFAULT_PANEL_WIDTH = 850;
+
+// Determine detail panel width based on content type
+function detailPanelWidth(toolCallProcess: ToolCallProcessRecord | null): number {
+  let desired = 650;
+  if (!toolCallProcess) { desired = 550; }
+  else {
+    const toolName = toolCallProcess.toolName || '';
+    const artifactType = toolCallProcess.toolCallResult?.artifact?.type;
+
+    // Wide: file reading, SEC filings, subagent results
+    if (artifactType === 'sec_filing') desired = 850;
+    else if (toolName === 'Read') desired = 850;
+    else if (toolName === 'Task' || toolName === 'task') desired = 750;
+    // Medium: charts, search results, default markdown
+    else if (artifactType === 'stock_prices' || artifactType === 'market_indices' || artifactType === 'sector_performance') desired = 650;
+    else if (toolName === 'WebSearch' || toolName === 'web_search') desired = 650;
+    // Slim: compact data cards
+    else if (artifactType === 'company_overview') desired = 480;
+    else if (artifactType === 'automations') desired = 480;
   }
+  return desired;
 }
 
 /** Right-panel controller (carved out of ChatView, 5.9c): panel type/width,
@@ -31,6 +48,7 @@ function appendPathSuffix(baseUrl: string, path?: string): string {
 export function useRightPanel({
   isMobile,
   workspaceId,
+  threadId,
   isActive,
   containerRef,
   setFilePanelWorkspaceId,
@@ -38,6 +56,8 @@ export function useRightPanel({
 }: {
   isMobile: boolean;
   workspaceId: string;
+  /** The conversation a MarketView page opened from here resumes. */
+  threadId?: string | null;
   isActive: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
   setFilePanelWorkspaceId: Dispatch<SetStateAction<string | null>>;
@@ -50,23 +70,23 @@ export function useRightPanel({
   const fileDeepLinkConsumedRef = useRef(false);
 
   // Single source of truth for what the RightPanel is pointed at. Exactly one
-  // target is ever set (file/memory/memo/sources/status); the panel derives the
-  // active tab, tab visibility, and snap-back from `.kind`. Sources/status stay
-  // set while their tab is open (tab chrome persistence) and are cleared on
-  // panel close by the effect below; file/memory/memo self-clear once the child
-  // panel consumes the pre-select (the handled callbacks).
+  // target is ever set (file/preview/chart/memory/memo/sources/status); the
+  // panel derives the active tab, tab visibility, and snap-back from `.kind`.
+  // Sources/status stay set while their tab is open (tab chrome persistence)
+  // and are cleared on panel close by the effect below; file/preview/chart/
+  // memory/memo self-clear once the child panel consumes the pre-select (the
+  // handled callbacks).
   const [panelTarget, setPanelTarget] = useState<PanelTarget | null>(null);
-  // Counts folder requests, so a second click on the folder already filtering
-  // the tree is still a request. See `PanelTarget`.
-  const artifactSeqRef = useRef(0);
-  // Stable handlers — these land in useEffect deps in MemoryPanel/MemoPanel/
+  // Counts every ask, so the same folder, port or symbol asked for twice
+  // arrives twice. See `PanelTarget`.
+  const targetSeqRef = useRef(0);
+  // Stable handlers: these land in useEffect deps in MemoryPanel/MemoPanel/
   // FilePanel. Inline arrows would create a new identity on every ChatView
   // render, re-triggering those effects on every streaming chunk (the
   // `targetKey == null` guard makes them no-ops, but the wakeup is wasted).
   // Each clears the target only if it still matches the kind it consumed, so a
   // fast follow-up open of a different kind isn't wiped by a late callback.
-  const handleTargetFileHandled = useCallback(() => setPanelTarget((pt) => (pt?.kind === 'file' ? null : pt)), []);
-  const handleTargetDirHandled = useCallback(() => setPanelTarget((pt) => (pt?.kind === 'file' ? null : pt)), []);
+  const handleTargetHandled = useCallback(() => setPanelTarget((pt) => (isFilesPanelKind(pt?.kind) ? null : pt)), []);
   const handleTargetMemoryHandled = useCallback(() => setPanelTarget((pt) => (pt?.kind === 'memory' ? null : pt)), []);
   const handleTargetMemoHandled = useCallback(() => setPanelTarget((pt) => (pt?.kind === 'memo' ? null : pt)), []);
 
@@ -83,9 +103,25 @@ export function useRightPanel({
 
   // Right panel management - can show 'file', 'detail', 'preview', or null (closed)
   const [rightPanelType, setRightPanelType] = useState<'file' | 'detail' | 'preview' | null>(null);
+
+  // The Files panel holds its drafts in memory, and any switch of the panel's
+  // type unmounts it. RightPanel guards its own chrome; this is the same
+  // question for the exits this hook owns. A ref, not state: nothing here
+  // renders on it, and a handler reads the current answer either way.
+  const { t } = useTranslation();
+  const filesDirtyRef = useRef(false);
+  const handleFilesDirtyChange = useCallback((dirty: boolean) => { filesDirtyRef.current = dirty; }, []);
+  const confirmLeaveFiles = useCallback(
+    () => !filesDirtyRef.current || window.confirm(t('filePanel.discardUnsaved')),
+    [t],
+  );
   const [rightPanelWidth, setRightPanelWidth] = useState(750);
-  // Multi-port preview state: Map keyed by port lives in a ref (non-active updates don't re-render).
-  // activePreviewPort + derived previewData drive the panel render.
+  // Mobile-sheet-only preview state. On desktop a running app is a tab in the
+  // file panel, which mints and refreshes its own URL; the bottom sheet has no
+  // tab strip, shows one app at a time, and keeps this Map keyed by port in a
+  // ref (non-active updates don't re-render) with the derived previewData
+  // driving the sheet. resolvePreviewUrl/resolveAndSetPreview,
+  // handleClosePreview and handleRefreshPreview below all serve this sheet.
   const previewMapRef = useRef<Map<number, PreviewData>>(new Map());
   const activePreviewPortRef = useRef<number | null>(null);
   const reloadCounterRef = useRef(0);
@@ -108,14 +144,18 @@ export function useRightPanel({
   // Plan detail panel state
   const [detailPlanData, setDetailPlanData] = useState<PlanData | null>(null);
 
-  const clampPanelWidth = useCallback(
-    (desired: number) => clampPanelWidthUtil(desired, containerRef.current?.offsetWidth || window.innerWidth),
-    [containerRef],
-  );
+  // The cap the open content asked for. A running app opens past the default
+  // cap on purpose, and the divider has to hold that width instead of snapping
+  // it back on the first pixel, so the ask is recorded rather than inferred
+  // from the width.
+  const panelMaxRatioRef = useRef<number | undefined>(undefined);
+  const applyPanelWidth = useCallback((desired: number, maxRatio?: number) => {
+    panelMaxRatioRef.current = maxRatio;
+    setRightPanelWidth(clampPanelWidthUtil(desired, containerRef.current?.offsetWidth || window.innerWidth, maxRatio));
+  }, [containerRef]);
 
-  // Handle drag panel width — direct DOM manipulation for smooth, jank-free resize.
+  // Handle drag panel width: direct DOM manipulation for smooth, jank-free resize.
   // React state is only updated once on mouseup; during drag we bypass React/Framer.
-  const PREVIEW_MAX_RATIO = 0.92;
   const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     isDraggingRef.current = true;
@@ -123,7 +163,7 @@ export function useRightPanel({
     const startX = e.clientX;
     const startWidth = rightPanelWidth;
     const containerW = containerRef.current?.offsetWidth || window.innerWidth;
-    const maxRatio = rightPanelType === 'preview' ? PREVIEW_MAX_RATIO : undefined;
+    const maxRatio = panelMaxRatioRef.current;
 
     // Immediately disable pointer events on iframes to prevent them from
     // capturing mouse events during resize (can't wait for React re-render).
@@ -168,7 +208,7 @@ export function useRightPanel({
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
     dragCleanupRef.current = teardown;
-  }, [rightPanelWidth, rightPanelType, containerRef]);
+  }, [rightPanelWidth, containerRef]);
 
   // Push a sentinel history entry when a panel opens so that the browser back
   // gesture closes the panel instead of navigating away from ChatView.
@@ -235,11 +275,24 @@ export function useRightPanel({
   }, []);
 
   /**
+   * The one landing for everything the right panel is pointed at: stamps the
+   * ask's `seq`, sizes the panel, opens it on the file view and arms the mobile
+   * back gesture. Sizing is in one place so the divider reads the cap that was
+   * asked for.
+   */
+  const landInFilePanel = useCallback((target: UnsequencedTarget, opts?: { maxRatio?: number }) => {
+    setPanelTarget(stampTarget(target, ++targetSeqRef.current));
+    applyPanelWidth(DEFAULT_PANEL_WIDTH, opts?.maxRatio);
+    setRightPanelType('file');
+    pushPanelHistory();
+  }, [applyPanelWidth, pushPanelHistory]);
+
+  /**
    * Routes a click on a tool-call artifact to the right panel tab that owns
    * its domain. The pure decision is computed by computeAgentArtifactRouting;
    * we apply the result atomically (clear everything, then set).
    */
-  const handleOpenAgentArtifactFromChat = useCallback((rawPath: string, targetWorkspaceId?: string, location?: FileLocation) => {
+  const handleOpenFileFromChat = useCallback<OpenFileHandler>((rawPath, targetWorkspaceId, location, opts) => {
     const r = computeAgentArtifactRouting(rawPath, targetWorkspaceId);
     if (r.setWorkspaceId && !isValidUuid(r.setWorkspaceId)) {
       console.warn('[ChatView] ignoring artifact ref with invalid workspace id', r.setWorkspaceId);
@@ -249,7 +302,7 @@ export function useRightPanel({
     // The routing result carries exactly one non-null target field; map it to
     // the matching panel kind. `targetMemoKey` may legitimately be '' (memo
     // index → LIST view), so test for null rather than truthiness.
-    let target: PanelTarget;
+    let target: UnsequencedTarget;
     if (r.targetMemoryKey != null && r.targetMemoryTier != null) {
       target = { kind: 'memory', key: r.targetMemoryKey, tier: r.targetMemoryTier };
     } else if (r.targetMemoKey != null) {
@@ -257,48 +310,32 @@ export function useRightPanel({
     } else if (r.targetDirectory != null) {
       // `''` is the workspace root, which the router returns for `/home/workspace/`
       // and `./`. Folding it to null said "no directory was asked for", and with a
-      // file open neither panel effect ran, so the link read as dead. The counter
-      // is what makes the same folder asked for twice arrive twice.
-      target = { kind: 'file', dir: r.targetDirectory, seq: ++artifactSeqRef.current };
+      // file open neither panel effect ran, so the link read as dead.
+      target = { kind: 'file', dir: r.targetDirectory };
     } else {
-      target = { kind: 'file', path: r.targetFile, location: location ?? null };
+      target = { kind: 'file', path: r.targetFile, location: location ?? null, pin: !!opts?.pin };
     }
-    setPanelTarget(target);
     if (r.clearWorkspaceId) {
       setFilePanelWorkspaceId(null);
     } else if (r.setWorkspaceId) {
       setFilePanelWorkspaceId(r.setWorkspaceId);
     }
-
-    setRightPanelWidth(clampPanelWidth(850));
-    setRightPanelType('file');
-    pushPanelHistory();
-  }, [clampPanelWidth, pushPanelHistory, setFilePanelWorkspaceId]);
-
-  // Alias kept for the existing callers (tool-call rows, ws:// flash links,
-  // file-panel handoffs) that still use the older name. Pure identity — the
-  // unified router does the path-aware classification on every call.
-  const handleOpenFileFromChat = handleOpenAgentArtifactFromChat;
+    landInFilePanel(target);
+  }, [landInFilePanel, setFilePanelWorkspaceId]);
 
   // Opens the Sources tab for a turn by pinning the message id — the single
   // target replaces any prior file/memory/memo/status one, so the panel snaps
   // to Sources; it resolves live records from `messages`.
   const handleOpenSourcesFromChat = useCallback((messageId: string) => {
-    setPanelTarget({ kind: 'sources', messageId });
-    setRightPanelWidth(clampPanelWidth(850));
-    setRightPanelType('file');
-    pushPanelHistory();
-  }, [clampPanelWidth, pushPanelHistory]);
+    landInFilePanel({ kind: 'sources', messageId });
+  }, [landInFilePanel]);
 
   // Opens the Status tab (live market watch) from the persistent chip. The
   // single 'status' target replaces any prior one, so the panel snaps to Status;
   // it resolves live watch state from `marketWatch`.
   const handleOpenStatusFromChat = useCallback(() => {
-    setPanelTarget({ kind: 'status' });
-    setRightPanelWidth(clampPanelWidth(850));
-    setRightPanelType('file');
-    pushPanelHistory();
-  }, [clampPanelWidth, pushPanelHistory]);
+    landInFilePanel({ kind: 'status' });
+  }, [landInFilePanel]);
 
   // The message id whose provenance the Sources tab shows, when a sources target
   // is active. Drives the two provenance memos below.
@@ -336,11 +373,13 @@ export function useRightPanel({
   // needs this thread's Write/Edit paths when it resolves a reference, and a
   // memo over `messages` would rebuild on every streamed chunk.
   const getRecentWritePaths = useStableHandler(() => collectRecentWritePaths(messages as TurnMessage[]));
+  const getWriteLog = useStableHandler(() => collectWriteLog(messages as TurnMessage[]));
 
   // Drop a sticky sources/status target whenever the right panel is closed or
   // switches to a non-file view (detail/preview), so a later file/memory click
   // doesn't reopen that tab. These two are the only kinds that persist while
-  // their tab is open; file/memory/memo self-clear via the handled callbacks.
+  // their tab is open; file/preview/chart/memory/memo self-clear via the
+  // handled callbacks.
   // The many close call sites all funnel through rightPanelType.
   useEffect(() => {
     if (rightPanelType !== 'file' && (panelTarget?.kind === 'sources' || panelTarget?.kind === 'status')) {
@@ -369,28 +408,6 @@ export function useRightPanel({
     );
   }, [isActive, workspaceId, location.search, location.pathname, location.state, navigate, handleOpenFileFromChat]);
 
-  // Determine detail panel width based on content type
-  const getDetailPanelWidth = useCallback((toolCallProcess: ToolCallProcessRecord | null) => {
-    let desired = 650;
-    if (!toolCallProcess) { desired = 550; }
-    else {
-      const toolName = toolCallProcess.toolName || '';
-      const artifactType = toolCallProcess.toolCallResult?.artifact?.type;
-
-      // Wide: file reading, SEC filings, subagent results
-      if (artifactType === 'sec_filing') desired = 850;
-      else if (toolName === 'Read') desired = 850;
-      else if (toolName === 'Task' || toolName === 'task') desired = 750;
-      // Medium: charts, search results, default markdown
-      else if (artifactType === 'stock_prices' || artifactType === 'market_indices' || artifactType === 'sector_performance') desired = 650;
-      else if (toolName === 'WebSearch' || toolName === 'web_search') desired = 650;
-      // Slim: compact data cards
-      else if (artifactType === 'company_overview') desired = 480;
-      else if (artifactType === 'automations') desired = 480;
-    }
-    return clampPanelWidth(desired);
-  }, [clampPanelWidth]);
-
   // Resolve preview URL: always pass command so the backend can start the
   // server if the port is idle (common for history sessions where the
   // original server process is long gone).  The backend skips the start
@@ -410,9 +427,8 @@ export function useRightPanel({
     }
   }, []);
 
-  // Resolve a preview URL and update the Map entry for this port.
-  // Only syncs to render state if this port is still active.
-  // If the entry has a `path` suffix (e.g. "/timeline.html"), it's appended to the signed URL.
+  // Resolve a preview URL and update the Map entry for this port. Only syncs
+  // to render state if this port is still active.
   const resolveAndSetPreview = useCallback((wid: string, port: number, command?: string, pathSuffix?: string) => {
     resolvePreviewUrl(wid, port, command)
       .then((baseUrl: string) => {
@@ -432,20 +448,74 @@ export function useRightPanel({
       });
   }, [resolvePreviewUrl]);
 
-  // Open preview URL in right panel
+  /**
+   * Show a running app. On desktop it lands as a tab in the file panel beside
+   * the files it serves; the panel mints and refreshes its URL from there, so
+   * nothing is resolved here. Mobile keeps the bottom sheet.
+   */
   const handleOpenPreview = useCallback((data: PreviewData) => {
+    if (!isMobile) {
+      return landInFilePanel(
+        { kind: 'preview', port: data.port, title: data.title, path: data.path, command: data.command },
+        { maxRatio: PREVIEW_MAX_RATIO },
+      );
+    }
     previewMapRef.current.set(data.port, data);
     activePreviewPortRef.current = data.port;
     setPreviewData(data);
     setRightPanelType('preview');
-    const containerW = containerRef.current?.offsetWidth || window.innerWidth;
-    setRightPanelWidth(clampPanelWidthUtil(850, containerW, PREVIEW_MAX_RATIO));
+    applyPanelWidth(DEFAULT_PANEL_WIDTH, PREVIEW_MAX_RATIO);
     pushPanelHistory();
     // If opened with loading state (no URL yet), resolve via authenticated endpoint
     if (data.loading && !data.url && workspaceId) {
       resolveAndSetPreview(workspaceId, data.port, data.command, data.path);
     }
-  }, [pushPanelHistory, workspaceId, resolveAndSetPreview, containerRef]);
+  }, [isMobile, landInFilePanel, applyPanelWidth, pushPanelHistory, workspaceId, resolveAndSetPreview]);
+
+  // The sheet is the only surface that shows a `preview` panel type; the desktop
+  // column shows a running app as a Files tab and renders nothing for that
+  // type. A viewport that widens with the sheet open would otherwise leave an
+  // empty column, so the app it was showing lands as a tab instead.
+  const wasMobile = useRef(isMobile);
+  useEffect(() => {
+    const widened = wasMobile.current && !isMobile;
+    wasMobile.current = isMobile;
+    if (!widened || rightPanelType !== 'preview') return;
+    const data = previewData;
+    activePreviewPortRef.current = null;
+    if (!data) {
+      setRightPanelType(null);
+      return;
+    }
+    landInFilePanel(
+      { kind: 'preview', port: data.port, title: data.title, path: data.path, command: data.command },
+      { maxRatio: PREVIEW_MAX_RATIO },
+    );
+  }, [isMobile, rightPanelType, previewData, landInFilePanel]);
+
+  /** The full MarketView page on one symbol, with a way back to this chat. */
+  const handleOpenInMarketView = useCallback((spec: ChartTabSpec) => {
+    navigate(buildMarketViewUrl({
+      symbol: spec.symbol,
+      timeframe: spec.timeframe,
+      workspaceId,
+      threadId: threadId && threadId !== '__default__' ? threadId : null,
+      returnTo: location.pathname + location.search,
+    }));
+  }, [workspaceId, threadId, location.pathname, location.search, navigate]);
+
+  /**
+   * Show a live chart. On desktop it lands as a tab in the file panel beside
+   * the files about the same company, sized like a preview so the toolbar has
+   * room. Mobile has no tab strip and goes to the MarketView page itself.
+   */
+  const handleOpenChart = useCallback((spec: ChartTabSpec) => {
+    if (isMobile) {
+      handleOpenInMarketView(spec);
+      return;
+    }
+    landInFilePanel({ kind: 'chart', symbol: spec.symbol, timeframe: spec.timeframe }, { maxRatio: PREVIEW_MAX_RATIO });
+  }, [isMobile, handleOpenInMarketView, landInFilePanel]);
 
   // Open tool call detail in right panel (or preview panel for preview_url artifacts)
   const handleToolCallDetailClick = useCallback((toolCallProcess: ToolCallProcessRecord) => {
@@ -456,33 +526,37 @@ export function useRightPanel({
       const command = artifact.command as string | undefined;
       const path = artifact.path as string | undefined;
       const token = ++reloadCounterRef.current;
-      // Check Map cache (not single state) — show cached URL instantly, then verify in background
+      // A cached entry seeds the title, command and path; the URL itself is
+      // short-lived and re-minted, so the tab opens loading rather than on a
+      // link that may have expired.
       const cached = previewMapRef.current.get(port);
       if (cached?.url) {
+        // Loading with no URL: handleOpenPreview resolves it on the sheet too.
         handleOpenPreview({ ...cached, url: '', loading: true, error: undefined, reloadToken: token, path });
-        resolveAndSetPreview(workspaceId, port, command, path);
         return;
       }
-      // No cache — resolve (restarts server if needed via 503 fallback)
-      // handleOpenPreview will trigger resolution since loading=true and url=''
+      // No cache: handleOpenPreview resolves (restarting the server if needed
+      // via the 503 fallback) since loading=true and url=''
       handleOpenPreview({ url: '', port, title, command, path, loading: true, reloadToken: token });
       return;
     }
+    if (!confirmLeaveFiles()) return;
     setDetailToolCall(toolCallProcess);
     setDetailPlanData(null);
-    setRightPanelWidth(getDetailPanelWidth(toolCallProcess));
+    applyPanelWidth(detailPanelWidth(toolCallProcess));
     setRightPanelType('detail');
     pushPanelHistory();
-  }, [getDetailPanelWidth, pushPanelHistory, workspaceId, handleOpenPreview, resolveAndSetPreview]);
+  }, [applyPanelWidth, pushPanelHistory, workspaceId, handleOpenPreview, confirmLeaveFiles]);
 
   // Open plan detail in right panel
   const handlePlanDetailClick = useCallback((planData: PlanData) => {
+    if (!confirmLeaveFiles()) return;
     setDetailPlanData(planData);
     setDetailToolCall(null);
-    setRightPanelWidth(clampPanelWidth(550));
+    applyPanelWidth(550);
     setRightPanelType('detail');
     pushPanelHistory();
-  }, [clampPanelWidth, pushPanelHistory]);
+  }, [applyPanelWidth, pushPanelHistory, confirmLeaveFiles]);
 
   // Close detail panel (shared by MobileBottomSheet + DetailPanel onClose)
   const handleCloseDetailPanel = useCallback(() => {
@@ -527,19 +601,19 @@ export function useRightPanel({
   // Toggle file panel
   const handleToggleFilePanel = useCallback(() => {
     if (rightPanelType === 'file') {
+      if (!confirmLeaveFiles()) return;
       setRightPanelType(null);
       popPanelHistory();
     } else {
-      setRightPanelWidth(clampPanelWidth(850));
+      applyPanelWidth(DEFAULT_PANEL_WIDTH);
       setRightPanelType('file');
       pushPanelHistory();
     }
-  }, [rightPanelType, clampPanelWidth, pushPanelHistory, popPanelHistory]);
+  }, [rightPanelType, applyPanelWidth, pushPanelHistory, popPanelHistory, confirmLeaveFiles]);
 
   return {
     panelTarget,
-    handleTargetFileHandled,
-    handleTargetDirHandled,
+    handleTargetHandled,
     handleTargetMemoryHandled,
     handleTargetMemoHandled,
     rightPanelType,
@@ -560,11 +634,16 @@ export function useRightPanel({
     handleClosePreview,
     handleRefreshPreview,
     handleToggleFilePanel,
+    handleFilesDirtyChange,
+    confirmLeaveFiles,
     handleOpenPreview,
+    handleOpenChart,
+    handleOpenInMarketView,
     detailToolCall,
     detailPlanData,
     sourcesRecords,
     allSourcesRecords,
     getRecentWritePaths,
+    getWriteLog,
   };
 }
