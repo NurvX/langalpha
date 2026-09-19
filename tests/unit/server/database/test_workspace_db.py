@@ -37,6 +37,11 @@ def mock_connection(mock_cursor):
     async def _cursor_cm(**kwargs):
         yield mock_cursor
 
+    @asynccontextmanager
+    async def _transaction_cm():
+        yield
+
+    conn.transaction = _transaction_cm
     conn.cursor = _cursor_cm
     conn.execute = AsyncMock()
     return conn
@@ -319,12 +324,15 @@ async def test_delete_workspace_soft(ws_mock_db, mock_cursor):
     """delete_workspace (soft) updates status to 'deleted'."""
     from src.server.database.workspace import delete_workspace
 
-    mock_cursor.fetchone.return_value = {"workspace_id": "ws-1"}
+    mock_cursor.fetchone.return_value = {"workspace_id": "ws-1", "user_id": "user-1", "busy": False}
 
     deleted = await delete_workspace("ws-1")
 
     assert deleted is True
-    sql = mock_cursor.execute.call_args[0][0]
+    sql = next(
+        args.args[0] for args in mock_cursor.execute.call_args_list
+        if "UPDATE workspaces" in args.args[0]
+    )
     assert "UPDATE workspaces" in sql
     assert "status = 'deleted'" in sql
     assert "folder_cleanup_pending" in sql
@@ -336,11 +344,14 @@ async def test_delete_workspace_never_removes_the_row(ws_mock_db, mock_cursor):
     046's ON DELETE SET NULL then leaves its folder owned by nobody."""
     from src.server.database.workspace import delete_workspace
 
-    mock_cursor.fetchone.return_value = {"workspace_id": "ws-1"}
+    mock_cursor.fetchone.return_value = {"workspace_id": "ws-1", "user_id": "user-1", "busy": False}
 
     await delete_workspace("ws-1")
 
-    sql = mock_cursor.execute.call_args[0][0]
+    sql = next(
+        args.args[0] for args in mock_cursor.execute.call_args_list
+        if "UPDATE workspaces" in args.args[0]
+    )
     assert "DELETE FROM" not in sql
 
 
@@ -503,7 +514,7 @@ async def test_a_soft_delete_leaves_the_machine_alone(ws_mock_db, mock_cursor):
     share one, and the teardown belongs where the sandbox is destroyed."""
     from src.server.database.workspace import delete_workspace, update_workspace_status
 
-    mock_cursor.fetchone.return_value = {"workspace_id": "ws-1"}
+    mock_cursor.fetchone.return_value = {"workspace_id": "ws-1", "user_id": "user-1", "busy": False}
     await delete_workspace("ws-1")
     assert "computers" not in mock_cursor.execute.call_args[0][0]
 

@@ -135,6 +135,10 @@ async def start_task_run(
     try:
         async with _ledger_connection(conn) as conn:
             async with conn.transaction():
+                from src.server.database.workspace import lock_run_workspace
+
+                await lock_run_workspace(conn, thread_id)
+
                 # Fast-path dedup probe for checkpoint re-execution; the
                 # partial unique index below is the race-safe backstop.
                 if parent_run_id and launch_tool_call_id:

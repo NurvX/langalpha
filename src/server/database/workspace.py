@@ -992,6 +992,27 @@ async def update_workspace_activity(
         raise
 
 
+class WorkspaceBusyError(RuntimeError):
+    """Deletion must wait for the workspace's root and background runs."""
+
+
+async def lock_run_workspace(conn, thread_id: str) -> None:
+    """Serialize admission with deletion across workers until START commits."""
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            """
+            SELECT w.status FROM workspaces w
+            JOIN conversation_threads t ON t.workspace_id = w.workspace_id
+            WHERE t.conversation_thread_id = %s
+            FOR SHARE OF w
+            """,
+            (thread_id,),
+        )
+        workspace = await cur.fetchone()
+        if workspace and workspace["status"] == "deleted":
+            raise ValueError("Cannot start work in a deleted workspace")
+
+
 async def delete_workspace(
     workspace_id: str,
     conn=None,
@@ -1003,28 +1024,71 @@ async def delete_workspace(
     The tombstone is the only deletion: a row removed outright takes the layout
     owner's identity with it, and ON DELETE SET NULL leaves the folder unowned.
     """
+    from src.server.database.egress_grants import (
+        lock_user_egress_state,
+        retire_workspace_grants,
+    )
+
     try:
-        async with _ws_cursor(conn) as cur:
-            await cur.execute(
-                """
-                UPDATE workspaces
-                SET status = 'deleted',
-                    config = CASE
-                        WHEN computer_id IS NOT NULL AND dir_name IS NOT NULL
-                        THEN jsonb_set(
-                            COALESCE(config, '{}'::jsonb),
-                            '{folder_cleanup_pending}',
-                            'true'::jsonb
-                        )
-                        ELSE config
-                    END,
-                    updated_at = %s
-                WHERE workspace_id = %s AND status <> 'deleted'
-                RETURNING workspace_id, computer_id
-                """,
-                (datetime.now(timezone.utc), workspace_id),
-            )
-            result = await cur.fetchone()
+        async with get_db_connection(conn) as owned, owned.transaction():
+            async with owned.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    "SELECT user_id FROM workspaces WHERE workspace_id = %s",
+                    (workspace_id,),
+                )
+                owner = await cur.fetchone()
+                if owner is None:
+                    return False
+                # Same lock order as grant sync: owner first, workspace second.
+                await lock_user_egress_state(cur, owner["user_id"])
+                await cur.execute(
+                    "SELECT workspace_id FROM workspaces WHERE workspace_id = %s FOR UPDATE",
+                    (workspace_id,),
+                )
+                await cur.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM conversation_responses r
+                        JOIN conversation_threads t
+                          ON t.conversation_thread_id = r.conversation_thread_id
+                        WHERE t.workspace_id = %s AND r.status = 'in_progress'
+                        UNION ALL
+                        SELECT 1 FROM subagent_runs r
+                        JOIN conversation_threads t
+                          ON t.conversation_thread_id = r.thread_id
+                        WHERE t.workspace_id = %s AND r.status = 'in_progress'
+                    ) AS busy
+                    """,
+                    (workspace_id, workspace_id),
+                )
+                if (await cur.fetchone())["busy"]:
+                    raise WorkspaceBusyError(
+                        "This workspace has active work. Stop it or wait for it to finish before deleting."
+                    )
+                await cur.execute(
+                    """
+                    UPDATE workspaces
+                    SET status = 'deleted',
+                        config = CASE
+                            WHEN computer_id IS NOT NULL AND dir_name IS NOT NULL
+                            THEN jsonb_set(
+                                COALESCE(config, '{}'::jsonb),
+                                '{folder_cleanup_pending}',
+                                'true'::jsonb
+                            )
+                            ELSE config
+                        END,
+                        updated_at = %s
+                    WHERE workspace_id = %s AND status <> 'deleted'
+                    RETURNING workspace_id, computer_id
+                    """,
+                    (datetime.now(timezone.utc), workspace_id),
+                )
+                result = await cur.fetchone()
+                if result:
+                    await retire_workspace_grants(
+                        cur, workspace_id, result.get("computer_id")
+                    )
 
         if result:
             logger.info(f"Deleted workspace: {workspace_id}")

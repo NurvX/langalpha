@@ -159,6 +159,10 @@ async def start_run(
     try:
         async with _lifecycle_connection(conn) as conn:
             async with conn.transaction():
+                from src.server.database.workspace import lock_run_workspace
+
+                await lock_run_workspace(conn, thread_id)
+
                 # Fast-path dedup probe. The unique index below is the
                 # race-safe backstop; this just avoids burning a turn_index
                 # (and, on a fork, re-truncating rows the first transmit's
