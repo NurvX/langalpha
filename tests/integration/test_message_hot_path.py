@@ -5,8 +5,8 @@ real sandbox provider (Daytona in CI, memory locally).  Verifies that:
 
 - **Cold path** (first message): creates a new session, hits DB, initializes
   sandbox, syncs assets.
-- **Warm path** (subsequent messages): returns the cached session with zero
-  DB queries when the sync cooldown is active.
+- **Warm path** (subsequent messages): reuses the session and skips asset sync
+  during cooldown, while checking durable identity and project MCP config.
 - **`update_workspace_activity` conditional SQL**: first call writes, second
   call within 60 seconds is a no-op.
 - **`has_ready_session` accuracy**: reflects actual session/sandbox state.
@@ -92,7 +92,8 @@ def _build_agent_config(sandbox_base_dir: str) -> AgentConfig:
             "DAYTONA_BASE_URL", "https://app.daytona.io/api"
         )
         return _make_agent_config(
-            working_directory="/home/workspace",
+            # snapshot_enabled=False uses Daytona's base image home.
+            working_directory="/home/daytona",
             provider="daytona",
             api_key=api_key,
             base_url=base_url,
@@ -292,9 +293,9 @@ class TestColdWarmSessionPath:
         await workspace_manager.get_session_for_workspace(ws_id, user_id=user_id)
 
         # Call 3 (warm) — cooldown active
-        from src.server.services import workspace_manager as workspace_manager_module
+        from src.server.database.workspace import get_workspace_identity
 
-        real_identity = workspace_manager_module.db_get_workspace_identity
+        real_identity = get_workspace_identity
         with (
             patch(
                 "src.server.services.workspace_manager.db_get_workspace",
@@ -323,27 +324,58 @@ class TestColdWarmSessionPath:
     async def test_sync_cooldown_respected(
         self, workspace_manager, running_workspace, metrics_collector
     ):
-        """Session returned immediately when sync cooldown is active."""
+        """Cooldown skips asset sync but still validates the project config."""
         ws_id = str(running_workspace["workspace_id"])
         user_id = running_workspace["user_id"]
 
-        # Cold
+        initial = await workspace_manager.get_session_for_workspace(
+            ws_id, user_id=user_id
+        )
         await workspace_manager.get_session_for_workspace(ws_id, user_id=user_id)
+        binding = await workspace_manager.resolve_binding(ws_id)
+        # Cooldown skips unchanged assets only when the project config exists.
+        # The empty-server fixture must install one too; otherwise acquisition
+        # correctly performs self-healing, independently of the cooldown timer.
+        from ptc_agent.core.project_context import ProjectContext
 
-        # Warm — measure time. Should be sub-millisecond (no I/O).
-        t0 = time.perf_counter()
-        async with metrics_collector.timed(
-            provider=_PROVIDER, category="session", operation="warm_cooldown",
-            test_name="sync_cooldown_respected",
+        await initial.sandbox._install_tool_modules(
+            project=ProjectContext(ws_id, binding.dir_name or "")
+        )
+        assert not await initial.sandbox.workspace_overlay_missing(
+            workspace_id=ws_id, dir_name=binding.dir_name
+        )
+        assert workspace_manager._sync_cooldown_ok(binding.computer_id, ws_id)
+
+        # A real provider read is required for self-healing even during cooldown;
+        # network latency is not evidence that the asset sync ran again.
+        with (
+            patch.object(
+                workspace_manager, "_sync_sandbox_assets",
+                wraps=workspace_manager._sync_sandbox_assets,
+            ) as sync_assets,
+            patch.object(
+                workspace_manager, "_record_sync",
+                wraps=workspace_manager._record_sync,
+            ) as record_sync,
+            patch.object(
+                initial.sandbox, "workspace_overlay_missing",
+                wraps=initial.sandbox.workspace_overlay_missing,
+            ) as check_overlay,
         ):
-            session = await workspace_manager.get_session_for_workspace(
-                ws_id, user_id=user_id
-            )
-        elapsed_ms = (time.perf_counter() - t0) * 1000
+            async with metrics_collector.timed(
+                provider=_PROVIDER, category="session", operation="warm_cooldown",
+                test_name="sync_cooldown_respected",
+            ):
+                session = await workspace_manager.get_session_for_workspace(
+                    ws_id, user_id=user_id
+                )
 
-        assert session is not None
-        # Warm path should be under 5ms (just dict lookups + lock acquire)
-        assert elapsed_ms < 50, f"Warm path took {elapsed_ms:.1f}ms — expected < 50ms"
+        assert session is initial
+        sync_assets.assert_not_awaited()
+        record_sync.assert_not_called()
+        check_overlay.assert_awaited_once_with(
+            workspace_id=ws_id, dir_name=binding.dir_name
+        )
 
     async def test_cooldown_expired_triggers_sync(
         self, workspace_manager, running_workspace, metrics_collector
