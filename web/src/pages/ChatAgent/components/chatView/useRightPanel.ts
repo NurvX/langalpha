@@ -48,6 +48,7 @@ function detailPanelWidth(toolCallProcess: ToolCallProcessRecord | null): number
 export function useRightPanel({
   isMobile,
   workspaceId,
+  workspaceDirName,
   threadId,
   isActive,
   containerRef,
@@ -56,6 +57,7 @@ export function useRightPanel({
 }: {
   isMobile: boolean;
   workspaceId: string;
+  workspaceDirName?: string | null;
   /** The conversation a MarketView page opened from here resumes. */
   threadId?: string | null;
   isActive: boolean;
@@ -293,7 +295,11 @@ export function useRightPanel({
    * we apply the result atomically (clear everything, then set).
    */
   const handleOpenFileFromChat = useCallback<OpenFileHandler>((rawPath, targetWorkspaceId, location, opts) => {
-    const r = computeAgentArtifactRouting(rawPath, targetWorkspaceId);
+    const r = computeAgentArtifactRouting(
+      rawPath,
+      targetWorkspaceId,
+      workspaceDirName,
+    );
     if (r.setWorkspaceId && !isValidUuid(r.setWorkspaceId)) {
       console.warn('[ChatView] ignoring artifact ref with invalid workspace id', r.setWorkspaceId);
       return;
@@ -321,7 +327,7 @@ export function useRightPanel({
       setFilePanelWorkspaceId(r.setWorkspaceId);
     }
     landInFilePanel(target);
-  }, [landInFilePanel, setFilePanelWorkspaceId]);
+  }, [landInFilePanel, setFilePanelWorkspaceId, workspaceDirName]);
 
   // Opens the Sources tab for a turn by pinning the message id — the single
   // target replaces any prior file/memory/memo/status one, so the panel snaps

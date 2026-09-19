@@ -1,22 +1,28 @@
-// Source of truth for memory/memo dirs: src/ptc_agent/core/paths.py.
-// SKILLS_DIR is hardcoded here; the same '.agents/skills' literal is
-// duplicated across several backend files (sandbox builder, agent config
-// loader, skills middleware) — there's no shared constant yet, so any
-// rename has to touch the literal in each place.
-export const MEMORY_USER_DIR = '.agents/user/memory';
-export const MEMORY_WORKSPACE_DIR = '.agents/workspace/memory';
-export const MEMO_USER_DIR = '.agents/user/memo';
-export const USER_PROFILE_DIR = '.agents/user/profile';
-export const SKILLS_DIR = '.agents/skills';
-export const MEMORY_INDEX_FILENAME = 'memory.md';
-export const MEMO_INDEX_FILENAME = 'memo.md';
+// The sandbox layout is emitted from src/ptc_agent/core/paths.py: see
+// agentPaths.generated.ts. Re-exported here so callers keep one import.
+import {
+  MEMO_INDEX_FILENAME,
+  MEMO_USER_DIR,
+  MEMORY_INDEX_FILENAME,
+  MEMORY_USER_DIR,
+  MEMORY_WORKSPACE_DIR,
+  SANDBOX_ROOT_PREFIXES,
+  SKILLS_DIR,
+  USER_PROFILE_DIR,
+  USER_PROFILE_FILES,
+} from './agentPaths.generated';
 
-/** The three virtual JSON files that UserDataBackend serves. */
-export const USER_PROFILE_FILES = {
-  portfolio: 'portfolio.json',
-  watchlist: 'watchlist.json',
-  preference: 'preference.json',
-} as const;
+export {
+  MEMO_INDEX_FILENAME,
+  MEMO_USER_DIR,
+  MEMORY_INDEX_FILENAME,
+  MEMORY_USER_DIR,
+  MEMORY_WORKSPACE_DIR,
+  SKILLS_DIR,
+  USER_PROFILE_DIR,
+  USER_PROFILE_FILES,
+};
+
 export type UserProfileEntity = keyof typeof USER_PROFILE_FILES;
 
 /** The schema documentation file the agent reads to learn the JSON shapes.
@@ -34,11 +40,13 @@ export function isUserProfileReadmePath(rawPath: string): boolean {
   return workspaceRelativePath(rawPath) === `${USER_PROFILE_DIR}/${USER_PROFILE_README_FILENAME}`;
 }
 
-// The sandbox root the agent sometimes emits, bare or `file:///`-wrapped (see
-// normalizeFileRefs.ts). Both `workspace` and `daytona` variants appear in the
-// wild. The trailing slash is optional so a bare root collapses to '' instead
-// of surviving as `home/workspace`.
-const SANDBOX_ROOT_RE = /^\/?home\/(?:workspace|daytona)(?:\/|$)/;
+// The sandbox roots the agent sometimes emits, bare or `file:///`-wrapped (see
+// normalizeFileRefs.ts), from the generated layout. The trailing slash is
+// optional so a bare root collapses to '' instead of surviving as `home/workspace`.
+const SANDBOX_ROOTS_ALTERNATION = SANDBOX_ROOT_PREFIXES
+  .map((root) => root.replace(/\/$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  .join('|');
+const SANDBOX_ROOT_RE = new RegExp(`^/?(?:${SANDBOX_ROOTS_ALTERNATION})(?:/|$)`);
 const FILE_PROTO_RE = /^file:\/\/(?=\/)/;
 const WSREF_PREFIX = '__wsref__/';
 
@@ -212,6 +220,23 @@ export function workspaceRelativePath(rawPath: string): string {
   return takeApart(rawPath).path.replace(/^\/+/, '');
 }
 
+/** Remove the selected project folder from a machine-root absolute path. */
+function selectedWorkspacePath(rawPath: string, dirName?: string | null): string {
+  if (!dirName) return rawPath;
+  const parts = takeApart(rawPath, true);
+  if (!parts.absolute) return rawPath;
+  const path = parts.path.replace(/^\/+/, '');
+  if (path !== dirName && !path.startsWith(`${dirName}/`)) return rawPath;
+  const scoped = path === dirName ? '' : path.slice(dirName.length + 1);
+  if (!scoped && parts.directory) return './';
+  return scoped + (parts.directory && scoped ? '/' : '');
+}
+
+// The pre-folder spelling of the workspace memory dir, before a workspace
+// became a folder on a shared computer. Stored transcripts still carry it.
+const LEGACY_MEMORY_WORKSPACE_DIR = '.agents/workspace/memory';
+const WORKSPACE_MEMORY_DIRS = [MEMORY_WORKSPACE_DIR, LEGACY_MEMORY_WORKSPACE_DIR];
+
 /**
  * Classify an agent file path into its semantic domain.
  *
@@ -250,8 +275,9 @@ export function classifyAgentPath(rawPath: string): AgentPathInfo {
       crossWorkspaceId,
     };
   }
-  if (norm.startsWith(`${MEMORY_WORKSPACE_DIR}/`)) {
-    const key = norm.slice(MEMORY_WORKSPACE_DIR.length + 1);
+  const workspaceMemoryDir = WORKSPACE_MEMORY_DIRS.find((dir) => norm.startsWith(`${dir}/`));
+  if (workspaceMemoryDir) {
+    const key = norm.slice(workspaceMemoryDir.length + 1);
     if (!key) {
       return { kind: 'file', rawPath };
     }
@@ -341,8 +367,10 @@ export interface AgentArtifactRouting {
 export function computeAgentArtifactRouting(
   rawPath: string,
   targetWorkspaceId?: string,
+  workspaceDirName?: string | null,
 ): AgentArtifactRouting {
-  const info = classifyAgentPath(rawPath);
+  const routedPath = selectedWorkspacePath(rawPath, workspaceDirName);
+  const info = classifyAgentPath(routedPath);
   // Caller-supplied wsid wins; otherwise fall back to the wsid extracted from
   // a `__wsref__/...` marker in the path itself.
   const embeddedWsid =
@@ -411,12 +439,12 @@ export function computeAgentArtifactRouting(
     return {
       ...base,
       targetUserProfile: info.entity,
-      targetFile: rawPath,
+      targetFile: routedPath,
       clearWorkspaceId: true,
     };
   }
   // skill / file → Files tab; pass-through workspace id for cross-workspace links.
-  const parts = takeApart(rawPath, true);
+  const parts = takeApart(routedPath, true);
   if (parts.directory) {
     return {
       ...base,
@@ -426,7 +454,7 @@ export function computeAgentArtifactRouting(
   }
   return {
     ...base,
-    targetFile: rawPath,
+    targetFile: routedPath,
     setWorkspaceId: resolvedWsid,
   };
 }

@@ -28,6 +28,11 @@ import { useCardState } from '../hooks/useCardState';
 import { useWorkspaceFiles } from '../hooks/useWorkspaceFiles';
 import { useWorkspace } from '@/hooks/useWorkspace';
 import { classifyAgentPath } from '../utils/agentPaths';
+import {
+  fileArtifactPath,
+  reportSharePermissionUpdate,
+} from '../utils/fileArtifact';
+import type { FileOperationArtifactPayload } from '@/types/api';
 import { taskIdFromAgentId } from '../utils/agentId';
 import {
   routeStopAction,
@@ -222,7 +227,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // truth — same logic the chat row click routing uses.
   const handleFileArtifact = useCallback((event: { payload?: Record<string, unknown> }) => {
     refreshFiles();
-    const filePath = (event?.payload?.file_path as string | undefined) ?? '';
+    const filePath = fileArtifactPath(event?.payload as FileOperationArtifactPayload | undefined);
     if (!filePath) return;
     const info = classifyAgentPath(filePath);
     if (info.kind === 'memory') {
@@ -505,15 +510,11 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     if (!filePath || !tid) return;
     try {
       let status = await getThreadShareStatus(tid);
-      if (!status?.is_shared || !status?.share_token) {
+      const permissions = reportSharePermissionUpdate(filePath, status);
+      if (permissions) {
         status = await updateThreadSharing(tid, {
           is_shared: true,
-          permissions: { ...(status?.permissions || {}), allow_files: true },
-        });
-      } else if (!status.permissions?.allow_files) {
-        status = await updateThreadSharing(tid, {
-          is_shared: true,
-          permissions: { ...status.permissions, allow_files: true },
+          permissions,
         });
       }
       const token = status?.share_token;
@@ -857,6 +858,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   } = useRightPanel({
     isMobile,
     workspaceId,
+    workspaceDirName: workspaceRecord?.dir_name,
     threadId: panelThreadId,
     isActive,
     containerRef,

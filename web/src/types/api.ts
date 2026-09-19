@@ -253,6 +253,7 @@ export type WorkflowRunStatus =
 export interface ThreadSharePermissions {
   allow_files?: boolean;
   allow_download?: boolean;
+  root_path?: string;
 }
 
 export interface ThreadShareStatus {
