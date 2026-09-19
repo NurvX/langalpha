@@ -113,8 +113,8 @@ describe('useComputerStatusFanout', () => {
     expect(computers?.computers[0].status).toBe('stopped');
   });
 
-  it('holds no stream open for a machine at rest', async () => {
-    mockGetComputers.mockResolvedValue(computer('stopped'));
+  it.each(['stopped', 'creating'])('holds no stream open for a %s machine awaiting start', async (status) => {
+    mockGetComputers.mockResolvedValue(computer(status));
     mount();
     await waitFor(() => expect(mockGetComputers).toHaveBeenCalled());
     expect(mockStreamComputer).not.toHaveBeenCalled();
