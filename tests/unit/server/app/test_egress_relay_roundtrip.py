@@ -239,6 +239,9 @@ class _Harness:
         self.relay_jwt = token
 
     def _exec_generated_client(self) -> None:
+        config_path = Path(self._workdir) / ".agents/tools/mcp_client_config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({"workspace_id": "test", "servers": {SERVER_NAME: {}}}))
         code = ToolFunctionGenerator().generate_mcp_client_code(
             [_oauth_server()], working_dir=self._workdir
         )
