@@ -589,7 +589,7 @@ async def astream_ptc_workflow(
 
         # Multimodal Context Injection
         messages = await attach_request_files(
-            messages, request, session, effective_model, config
+            messages, request, session, effective_model, config, project=project
         )
 
         # Build input state or resume command

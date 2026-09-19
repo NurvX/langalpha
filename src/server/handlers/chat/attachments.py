@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ptc_agent.core.project_context import ProjectContext
+
 from src.llms.llm import get_input_modalities
 from src.server.models.chat import ChatRequest
 from src.server.utils.multimodal_context import (
@@ -43,6 +45,8 @@ async def attach_request_files(
     session: Any | None,
     effective_model: str | None,
     config: Any,
+    *,
+    project: ProjectContext | None = None,
 ) -> list[dict]:
     """Upload the turn's attachments and describe them to the PTC agent.
 
@@ -57,7 +61,9 @@ async def attach_request_files(
     # 1. Upload ALL files to sandbox
     file_paths: list = []
     if session and session.sandbox:
-        file_paths = await upload_to_sandbox(multimodal_contexts, session.sandbox)
+        file_paths = await upload_to_sandbox(
+            multimodal_contexts, session.sandbox, project=project
+        )
         logger.info(
             f"[PTC_CHAT] Uploaded {len(multimodal_contexts)} attachment(s) to sandbox"
         )

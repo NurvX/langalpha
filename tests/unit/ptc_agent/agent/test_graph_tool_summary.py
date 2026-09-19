@@ -76,3 +76,45 @@ async def test_two_turns_pass_identical_cached_summary():
 
     assert summaries == ["STABLE-SUMMARY", "STABLE-SUMMARY"]
     assert summaries[0] is summaries[1]
+
+
+@pytest.mark.asyncio
+async def test_shared_session_graph_redacts_its_own_workspace_secrets():
+    from ptc_agent.core.project_context import ProjectContext
+    from ptc_agent.agent.middleware.tool.leak_detection import LeakDetectionMiddleware
+
+    session = _make_session('summary')
+    session.sandbox.vault_secrets = {'KEY': 'synthetic-sibling-value'}
+    agent = MagicMock()
+    with (
+        patch('ptc_agent.agent.graph.PTCAgent', return_value=agent),
+        patch('ptc_agent.agent.graph._read_workspace_naming', AsyncMock(return_value=('A', ''))),
+        patch('src.server.database.vault_secrets.get_effective_secrets',
+              AsyncMock(return_value={'KEY': 'synthetic-project-value'})) as secrets,
+    ):
+        await build_ptc_graph_with_session(
+            session=session, config=MagicMock(), project=ProjectContext('ws-a', 'a'),
+        )
+    secrets.assert_awaited_once_with('ws-a', user_id=None)
+    middleware = LeakDetectionMiddleware(vault_secrets=agent.create_agent.call_args.kwargs['vault_secrets'])
+    session.sandbox.vault_secrets = {'KEY': 'synthetic-third-value'}
+    assert 'synthetic-project-value' not in middleware.redact('result synthetic-project-value')
+    assert middleware.redact('synthetic-sibling-value') == 'synthetic-sibling-value'
+
+
+@pytest.mark.asyncio
+async def test_graph_does_not_continue_with_wrong_secrets_when_vault_read_fails():
+    from ptc_agent.core.project_context import ProjectContext
+
+    agent = MagicMock()
+    with (
+        patch('ptc_agent.agent.graph.PTCAgent', return_value=agent),
+        patch('ptc_agent.agent.graph._read_workspace_naming', AsyncMock(return_value=('A', ''))),
+        patch('src.server.database.vault_secrets.get_effective_secrets',
+              AsyncMock(side_effect=RuntimeError('vault unavailable'))),
+        pytest.raises(RuntimeError, match='vault unavailable'),
+    ):
+        await build_ptc_graph_with_session(
+            session=_make_session('summary'), config=MagicMock(), project=ProjectContext('ws-a', 'a'),
+        )
+    agent.create_agent.assert_not_called()
