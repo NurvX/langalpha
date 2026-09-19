@@ -206,7 +206,7 @@ class TestStartPreviewServer:
         # Verify the session is stored correctly
         assert 8080 in sandbox._preview_sessions
         session_id, stored_cmd_id = sandbox._preview_sessions[8080]
-        assert session_id == "preview-8080"
+        assert session_id.startswith("preview-8080-")
         assert stored_cmd_id == "preview-cmd-1"
 
     @pytest.mark.asyncio
@@ -224,7 +224,8 @@ class TestStartPreviewServer:
         # delete_session should have been called for the stale session
         assert mock_runtime.delete_session.call_count >= 1
         # Verify updated preview sessions
-        assert sandbox._preview_sessions[8080] == ("preview-8080", "new-cmd")
+        assert sandbox._preview_sessions[8080][0].startswith("preview-8080-")
+        assert sandbox._preview_sessions[8080][1] == "new-cmd"
 
     @pytest.mark.asyncio
     async def test_stale_session_cleanup_failure_continues(
@@ -538,7 +539,9 @@ class TestPreviewRedirectEndpoint:
 
         app = create_test_app(preview_redirect_router)
 
-        mock_manager = MagicMock()
+        from src.server.services.workspace_manager import WorkspaceManager
+
+        mock_manager = MagicMock(spec=WorkspaceManager)
         mock_manager.get_session_for_workspace = AsyncMock(
             return_value=mock_session_for_endpoint
         )
@@ -585,7 +588,9 @@ class TestPreviewRedirectEndpoint:
 
         app = create_test_app(preview_redirect_router)
 
-        mock_manager = MagicMock()
+        from src.server.services.workspace_manager import WorkspaceManager
+
+        mock_manager = MagicMock(spec=WorkspaceManager)
         mock_manager.get_session_for_workspace = AsyncMock(
             return_value=mock_session_for_endpoint
         )
@@ -625,7 +630,9 @@ class TestPreviewRedirectEndpoint:
 
         app = create_test_app(preview_redirect_router)
 
-        mock_manager = MagicMock()
+        from src.server.services.workspace_manager import WorkspaceManager
+
+        mock_manager = MagicMock(spec=WorkspaceManager)
         mock_manager.get_session_for_workspace = AsyncMock(
             return_value=mock_session_for_endpoint
         )
@@ -669,7 +676,9 @@ class TestPreviewRedirectEndpoint:
 
         from src.server.app.workspace_sandbox import _preview_redirect
 
-        mock_manager = MagicMock()
+        from src.server.services.workspace_manager import WorkspaceManager
+
+        mock_manager = MagicMock(spec=WorkspaceManager)
         mock_manager.get_session_for_workspace = AsyncMock(
             return_value=mock_session_for_endpoint
         )
@@ -816,3 +825,23 @@ class TestPreviewRedirectEndpoint:
                     follow_redirects=False,
                 )
                 assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_occupied_preview_port_never_returns_sibling_url(sandbox, mock_runtime):
+    mock_runtime.exec.return_value = MagicMock(exit_code=0)
+    with pytest.raises(RuntimeError, match="already in use"):
+        await sandbox.start_and_get_preview_url("python -m http.server 8080", 8080)
+    mock_runtime.session_execute.assert_not_awaited()
+    mock_runtime.get_preview_url.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_preview_command_never_returns_an_existing_server(sandbox, mock_runtime):
+    mock_runtime.exec.side_effect = [MagicMock(exit_code=1), MagicMock(stdout="READY")]
+    mock_runtime.session_command_logs.return_value = SessionCommandResult(
+        cmd_id="cmd-001", exit_code=1, stdout="", stderr="Address already in use"
+    )
+    with pytest.raises(RuntimeError, match="Address already in use"):
+        await sandbox.start_and_get_preview_url("python -m http.server 8080", 8080)
+    mock_runtime.get_preview_url.assert_not_awaited()

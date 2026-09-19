@@ -339,6 +339,11 @@ class SandboxProvider(ABC):
         """Reconnect to an existing sandbox runtime by ID."""
         ...
 
+    async def prepare_reconnect(
+        self, runtime: SandboxRuntime, *, tier: str | None = None
+    ) -> None:
+        """Providers with mutable limits can repair an existing runtime before use."""
+
     @abstractmethod
     async def close(self) -> None:
         """Release provider resources (HTTP clients, etc.)."""

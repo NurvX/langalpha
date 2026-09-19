@@ -533,7 +533,7 @@ class TestStartPreviewServer:
     """
 
     async def test_creates_per_port_session(self, sandbox):
-        """start_preview_server creates a session named 'preview-{port}'."""
+        """Each start owns a distinct session so another worker cannot replace it."""
         created_sessions = []
 
         async def fake_create_session(session_id):
@@ -550,10 +550,11 @@ class TestStartPreviewServer:
         cmd_id = await sandbox.start_preview_server("python -m http.server 8080", 8080)
 
         assert cmd_id == "cmd-001"
-        assert "preview-8080" in created_sessions
+        assert any(sid.startswith("preview-8080-") for sid in created_sessions)
         assert 8080 in sandbox._preview_sessions
         session_id, stored_cmd_id = sandbox._preview_sessions[8080]
-        assert session_id == "preview-8080"
+        assert session_id in created_sessions
+        assert session_id.startswith("preview-8080-")
         assert stored_cmd_id == "cmd-001"
 
     async def test_replaces_existing_session_on_same_port(self, sandbox):
@@ -587,12 +588,14 @@ class TestStartPreviewServer:
         assert cmd_id_1 == "cmd-001"
         assert 8080 in sandbox._preview_sessions
 
+        first_session = sandbox._preview_sessions[8080][0]
         # Second start on the same port
         cmd_id_2 = await sandbox.start_preview_server("python -m http.server 8080", 8080)
         assert cmd_id_2 == "cmd-002"
 
-        # Old session should have been deleted
-        assert "preview-8080" in deleted_sessions
+        # Old session should have been deleted, and the replacement is distinct.
+        assert first_session in deleted_sessions
+        assert sandbox._preview_sessions[8080][0] != first_session
         # New session entry should replace the old one
         _, stored_cmd_id = sandbox._preview_sessions[8080]
         assert stored_cmd_id == "cmd-002"
@@ -621,12 +624,13 @@ class TestStartPreviewServer:
         await sandbox.start_preview_server("python -m http.server 3000", 3000)
         await sandbox.start_preview_server("python -m http.server 8080", 8080)
 
-        assert "preview-3000" in created_sessions
-        assert "preview-8080" in created_sessions
+        assert any(sid.startswith("preview-3000-") for sid in created_sessions)
+        assert any(sid.startswith("preview-8080-") for sid in created_sessions)
         assert 3000 in sandbox._preview_sessions
         assert 8080 in sandbox._preview_sessions
-        assert sandbox._preview_sessions[3000][0] == "preview-3000"
-        assert sandbox._preview_sessions[8080][0] == "preview-8080"
+        assert sandbox._preview_sessions[3000][0] in created_sessions
+        assert sandbox._preview_sessions[8080][0] in created_sessions
+        assert sandbox._preview_sessions[3000][0] != sandbox._preview_sessions[8080][0]
 
 
 class TestStopPreviewServer:
@@ -654,10 +658,11 @@ class TestStopPreviewServer:
         await sandbox.start_preview_server("python -m http.server 8080", 8080)
         assert 8080 in sandbox._preview_sessions
 
+        session_id = sandbox._preview_sessions[8080][0]
         result = await sandbox.stop_preview_server(8080)
 
         assert result is True
-        assert "preview-8080" in deleted_sessions
+        assert session_id in deleted_sessions
         assert 8080 not in sandbox._preview_sessions
 
     async def test_stop_nonexistent_port_returns_false(self, sandbox):

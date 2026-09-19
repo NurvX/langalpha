@@ -612,7 +612,7 @@ class SandboxBackend(SandboxBackendProtocol):
     ) -> PreviewInfo:
         """Start a server command in the sandbox and return a signed preview URL."""
         return await self.sandbox.start_and_get_preview_url(
-            command,
+            f"cd {shlex.quote(self.workspace_dir)} && {command}",
             port,
             expires_in=expires_in,
             startup_timeout=startup_timeout,
