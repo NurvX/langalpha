@@ -1393,6 +1393,7 @@ class PTCSandbox:
         user_id: str | None = None,
         project: "ProjectContext | None" = None,
         root_owner_dir_name: str | None = None,
+        workspace_dir_names: tuple[str, ...] = (),
         on_progress: Callable[[str], None] | None = None,
     ) -> SyncResult:
         result = await _assets.sync_sandbox_assets(
@@ -1406,6 +1407,7 @@ class PTCSandbox:
             user_id=user_id,
             project=project,
             root_owner_dir_name=root_owner_dir_name,
+            workspace_dir_names=workspace_dir_names,
             on_progress=on_progress,
         )
         # After the migration, never before: a fresh folder lets v3 to v4 move
