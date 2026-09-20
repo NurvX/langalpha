@@ -10,6 +10,7 @@ import copy
 import json
 import logging
 import re
+import time
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, cast
 
@@ -422,6 +423,10 @@ class RunSSEProducer:
 
         # Track reasoning status per agent for lifecycle management
         self.reasoning_active: Set[str] = set()
+        # Monotonic clock at each agent's open reasoning block, so its closing
+        # signal can carry how long the model thought. Stored frames replay
+        # verbatim, so the duration survives a reload without a schema change.
+        self._reasoning_started_at: Dict[str, float] = {}
 
         # Track reasoning block index per agent to detect block transitions
         # When index changes (e.g., 0→1), a separator (\n\n) is needed between blocks
@@ -1795,19 +1800,27 @@ class RunSSEProducer:
         *,
         is_compaction: bool = False,
     ) -> str:
-        """Format a reasoning lifecycle signal event."""
+        """Format a reasoning lifecycle signal event.
+
+        A ``complete`` carries ``elapsed_ms`` since the matching ``start``; a
+        close with no recorded open (a stop that synthesizes one) carries none.
+        """
         event_type = "compaction_chunk" if is_compaction else "message_chunk"
-        return self._format_sse_event(
-            event_type,
-            {
-                "thread_id": self.thread_id,
-                "agent": agent_name,
-                "id": message_id,
-                "role": "assistant",
-                "content": signal_type,
-                "content_type": "reasoning_signal",
-            },
-        )
+        data: Dict[str, Any] = {
+            "thread_id": self.thread_id,
+            "agent": agent_name,
+            "id": message_id,
+            "role": "assistant",
+            "content": signal_type,
+            "content_type": "reasoning_signal",
+        }
+        if signal_type == "start":
+            self._reasoning_started_at[agent_name] = time.monotonic()
+        elif signal_type == "complete":
+            started = self._reasoning_started_at.pop(agent_name, None)
+            if started is not None:
+                data["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+        return self._format_sse_event(event_type, data)
 
     def _format_sse_event(self, event_type: str, data: dict[str, Any], *, accumulate: bool = True) -> str:
         """

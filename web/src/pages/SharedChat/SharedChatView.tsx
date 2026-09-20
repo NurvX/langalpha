@@ -110,6 +110,10 @@ export default function SharedChatView() {
 
     const assistantMessagesByPair = new Map<number, string>();
     const pairStateByPair = new Map<number, PairState>();
+    // The turn's end, paired with the user bubble's timestamp to give the fold
+    // row its duration. This view replays the public stream itself rather than
+    // going through `replayHistory`, so it has to do this pass on its own.
+    const runSettledAtByPair = new Map<number, number>();
     let _currentActivePairIndex: number | null = null;
     let _currentActivePairState: PairState | undefined = undefined;
 
@@ -122,6 +126,20 @@ export default function SharedChatView() {
 
     // Cast setMessages to the narrower type expected by historyEventHandlers
     const setMessagesCompat: SetMessages = setMessages;
+
+    const stampSettledTurns = () => {
+      if (runSettledAtByPair.size === 0) return;
+      const settledAtByMessageId = new Map<string, number>();
+      for (const [pairIndex, settledAt] of runSettledAtByPair) {
+        const tailId = assistantMessagesByPair.get(pairIndex);
+        if (tailId) settledAtByMessageId.set(tailId, settledAt);
+      }
+      if (settledAtByMessageId.size === 0) return;
+      setMessages(prev => prev.map(msg => {
+        const settledAt = settledAtByMessageId.get(msg.id as string);
+        return msg.role === 'assistant' && settledAt !== undefined ? { ...msg, completedAt: settledAt } : msg;
+      }));
+    };
 
     (async () => {
       try {
@@ -138,6 +156,7 @@ export default function SharedChatView() {
           }
 
           if (eventType === 'replay_done') {
+            stampSettledTurns();
             setLoading(false);
             return;
           }
@@ -149,6 +168,10 @@ export default function SharedChatView() {
 
           // user_message
           if (eventType === 'user_message' && hasPairIndex) {
+            if (typeof event.run_completed_at === 'string') {
+              const settledAt = Date.parse(event.run_completed_at);
+              if (Number.isFinite(settledAt)) runSettledAtByPair.set(event.turn_index as number, settledAt);
+            }
             handleHistoryUserMessage({
               event,
               pairIndex: event.turn_index as number,
@@ -175,6 +198,7 @@ export default function SharedChatView() {
                 pairIndex,
                 pairState,
                 setMessages: setMessagesCompat,
+                elapsedMs: typeof event.elapsed_ms === 'number' ? event.elapsed_ms : undefined,
               });
               return;
             }
