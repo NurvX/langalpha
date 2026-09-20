@@ -6,7 +6,7 @@
  * as tall as the one row it now holds, not the three it held before.
  */
 import { configureSSE, resetMockServer, mockAPI, test, expect } from './fixtures.js';
-import { sseEvents } from './helpers/mockResponses.js';
+import { sseEvents, defaultResponses } from './helpers/mockResponses.js';
 import { TH, chatViewOverrides } from './helpers/chatScenario.js';
 import { MIN_LIVE_EXPOSURE_MS } from '../src/pages/ChatAgent/components/messageList/liveZoneTiming.ts';
 
@@ -66,12 +66,12 @@ test.describe('activity live zone', () => {
     // and the height below would be measured on a case that never regressed.
     const atFold = await page.waitForFunction(() => {
       if (!document.querySelector('[id^="activity-summary-"]')) return null;
-      return { active: document.querySelectorAll('[data-testid="activity-live-zone"] .nrow.state-active').length };
+      return { active: document.querySelectorAll('[data-testid="activity-live-zone"] .titem.running').length };
     }, null, { timeout: 15000 }).then((h) => h.jsonValue());
     expect(atFold.active, 'the fourth call went live before the first three folded').toBe(0);
 
     const zone = page.getByTestId('activity-live-zone');
-    await expect(zone.locator('.nrow.state-active')).toHaveCount(1, { timeout: 15000 });
+    await expect(zone.locator('.titem.running')).toHaveCount(1, { timeout: 15000 });
     // Let the zone's own animations settle before measuring.
     await page.waitForTimeout(1000);
 
@@ -82,4 +82,101 @@ test.describe('activity live zone', () => {
     expect(rowsHeight).toBeGreaterThan(0);
     expect(zoneHeight).toBeLessThanOrEqual(rowsHeight + 2);
   });
+
+  test('keeps verbose reasoning open when the completed activity accordion is expanded', async ({ page }) => {
+    const prefs = defaultResponses['GET /users/me/preferences'];
+    await mockAPI(page, {
+      ...chatViewOverrides(),
+      'GET /users/me/preferences': { ...prefs, other_preference: { ...prefs.other_preference, turn_display: 'verbose' } },
+    });
+    await configureSSE({ method: 'GET', path: `/api/v1/threads/${TH}/messages/replay`, events: [sseEvents.replayDone()], delay: 10 });
+    await configureSSE({ method: 'POST', path: `/api/v1/threads/${TH}/messages`, events: [
+      sseEvents.toolCalls([{ name: 'bash', args: { command: 'echo ready' }, id: 'toolu_ready' }]),
+      sseEvents.finishToolCalls(),
+      { ...sseEvents.toolCallResult('toolu_ready', 'ready'), delayAfter: MIN_LIVE_EXPOSURE_MS + 300 },
+      sseEvents.messageChunk('start', 'reasoning_signal'),
+      { ...sseEvents.messageChunk('**Comparing inputs**\n\nChecking the supplied evidence.', 'reasoning'), delayAfter: 3500 },
+      sseEvents.messageChunk('complete', 'reasoning_signal'),
+      sseEvents.messageChunk('Comparison complete.'),
+      sseEvents.finishStop(),
+      sseEvents.creditUsage(),
+    ], delay: 30 });
+    await page.goto(`/chat/t/${TH}`);
+    await page.locator('textarea').fill('Compare the inputs');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    const thought = page.getByRole('button', { name: 'Comparing inputs', exact: true });
+    await expect(thought).toHaveAttribute('aria-expanded', 'true');
+    const body = page.locator('[data-activity-state="live"] .titem-reasoning-card');
+    await expect(body).toBeVisible();
+    await page.locator('[id^="activity-summary-"]').click();
+    await expect(thought).toHaveAttribute('aria-expanded', 'true');
+    await expect(body).toBeVisible();
+    await expect(page.locator('[data-turn-fold]')).toHaveAttribute('data-turn-fold', 'collapsed', { timeout: 15000 });
+    await page.locator('[data-turn-fold] button').click();
+    await expect(thought).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  test('keeps progress visible while the first paragraph is withheld', async ({ page }) => {
+    const prefs = defaultResponses['GET /users/me/preferences'];
+    await mockAPI(page, {
+      ...chatViewOverrides(),
+      'GET /users/me/preferences': { ...prefs, other_preference: { ...prefs.other_preference, response_streaming_mode: 'paragraph' } },
+    });
+    await configureSSE({ method: 'GET', path: `/api/v1/threads/${TH}/messages/replay`, events: [sseEvents.replayDone()], delay: 10 });
+    await configureSSE({ method: 'POST', path: `/api/v1/threads/${TH}/messages`, events: [
+      ...Array.from({ length: 40 }, () => sseEvents.messageChunk('Still writing. ')),
+      sseEvents.finishStop(),
+      sseEvents.creditUsage(),
+    ], delay: 100 });
+    await page.goto(`/chat/t/${TH}`);
+    await page.locator('textarea').fill('Write one paragraph');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(page.getByTestId('streaming-indicator')).toBeAttached();
+    // More than the 700ms arrival window, while chunks continue every 100ms.
+    await page.waitForTimeout(1000);
+    await expect(page.locator('[data-message-role="assistant"] .markdown-content')).toHaveCount(0);
+    await expect(page.getByTestId('streaming-indicator')).toHaveCSS('opacity', '1', { timeout: 500 });
+    await expect(page.getByTestId('streaming-indicator')).toHaveCount(0, { timeout: 10000 });
+    await expect(page.locator('[data-message-role="assistant"]')).toContainText('Still writing. '.repeat(40).trim());
+  });
+
+  for (const turnDisplay of ['lean', 'verbose']) {
+    test(`respects ${turnDisplay} reasoning in a live subagent transcript`, async ({ page }) => {
+      const prefs = defaultResponses['GET /users/me/preferences'];
+      await mockAPI(page, {
+        ...chatViewOverrides(),
+        'GET /users/me/preferences': { ...prefs, other_preference: { ...prefs.other_preference, turn_display: turnDisplay } },
+      });
+      await configureSSE({ method: 'GET', path: `/api/v1/threads/${TH}/messages/replay`, events: [sseEvents.replayDone()], delay: 10 });
+      const taskChunk = (content, type) => {
+        const event = sseEvents.messageChunk(content, type);
+        return { ...event, data: { ...event.data, agent: 'task:reasoning-check' } };
+      };
+      await configureSSE({ method: 'POST', path: `/api/v1/threads/${TH}/messages`, events: [
+        sseEvents.toolCalls([{ name: 'Task', args: { description: 'Review the evidence', prompt: 'Review the evidence' }, id: 'toolu_task' }]),
+        sseEvents.finishToolCalls(),
+        { event: 'artifact', data: { thread_id: TH, artifact_type: 'task', tool_call_id: 'toolu_task', payload: { task_id: 'reasoning-check', action: 'spawned', description: 'Review the evidence', type: 'research' } } },
+        taskChunk('start', 'reasoning_signal'),
+        taskChunk('**Inspecting evidence**\n\nThe subagent is comparing source documents.', 'reasoning'),
+        { ...sseEvents.messageChunk('Review underway.'), delayAfter: 8000 },
+        taskChunk('complete', 'reasoning_signal'),
+        sseEvents.messageChunk('Review complete.'),
+        sseEvents.finishStop(),
+      ], delay: 50 });
+      await page.goto(`/chat/t/${TH}`);
+      await page.locator('textarea').fill('Review the evidence');
+      await page.getByRole('button', { name: 'Send message', exact: true }).click();
+      await expect(page.getByText('Review underway.', { exact: true })).toBeVisible();
+      await page.getByRole('button', { name: /general-purpose.*Review the evidence/ }).click();
+      const thought = page.getByRole('button', { name: 'Inspecting evidence', exact: true });
+      await expect(thought).toHaveAttribute('aria-expanded', String(turnDisplay === 'verbose'));
+      const body = page.getByText('The subagent is comparing source documents.', { exact: true });
+      if (turnDisplay === 'lean') {
+        await expect(body).toBeHidden();
+        await thought.click();
+      }
+      await expect(body).toBeVisible();
+    });
+  }
+
 });

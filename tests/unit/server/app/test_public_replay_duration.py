@@ -96,6 +96,19 @@ def _user_message(events: list[dict]) -> dict:
     return next(e for e in events if e["event"] == "user_message")["data"]
 
 
+def test_the_public_query_actually_selects_the_settle_instant():
+    """The mock above can hand the route any shape; production cannot.
+
+    The owner's replay reads ``_SETTLED_ATTEMPTS`` directly and gets the column
+    from its ``*``. The public route goes through ``get_responses_for_thread``,
+    which projects ``_RESPONSE_COLUMNS``, so the preferred branch is only
+    reachable while that list carries the column.
+    """
+    from src.server.database.conversation import _sql
+
+    assert "usage_settled_at" in _sql._RESPONSE_COLUMNS
+
+
 async def test_settled_turn_carries_its_end(client):
     payload = _user_message(await _replay(client, _row()))
     assert payload["run_completed_at"] == _SETTLED.isoformat()

@@ -402,12 +402,18 @@ test.describe('Chat View -- SSE Streaming', () => {
 
     await page.goto('/chat/t/b0000001-0000-4000-8000-000000000001');
 
-    // The tool call card should appear. The accordion header is now
-    // content-aware (skill/memory/memo/code/web/search/file/generic) — for
-    // a single WebSearch call it renders as "made 1 web call".
-    await expect(page.getByText(/made \d+ web call/i)).toBeVisible({ timeout: 10000 });
-    // The final assistant text should appear
+    // The final assistant text is the turn's answer and survives the fold.
     await expect(page.getByText('NVIDIA reported strong Q4 earnings')).toBeVisible({ timeout: 10000 });
+
+    // The tool call card sits behind the summary row once the turn settles, so
+    // open it rather than racing the close: asserting on the live accordion
+    // caught it only while the turn was still replaying.
+    await page.locator('[data-turn-fold="collapsed"] button').click();
+
+    // The accordion header is content-aware (skill/memory/memo/code/web/
+    // search/file/generic) — for a single WebSearch call it reads
+    // "made 1 web call".
+    await expect(page.getByText(/made \d+ web call/i)).toBeVisible({ timeout: 10000 });
   });
 
   test('plan mode interrupt shows approval UI', async ({ page }) => {
@@ -813,10 +819,13 @@ test.describe('Steering -- History Replay', () => {
     // Post-steering assistant content should appear (the agent continued after steering)
     await expect(page.getByText('NVIDIA GTC 2026').first()).toBeVisible({ timeout: 15000 });
 
+    // Lean display hides the pre-steering process until its turn is opened.
+    await page.locator('[data-turn-fold="collapsed"] button').click();
+
     // The turn has 1 steering_delivered → 2 assistant messages (pre + post steering).
-    // Each assistant message renders exactly one img[alt="Assistant"] avatar.
-    const assistantAvatars = page.locator('img[alt="Assistant"]');
-    await expect(assistantAvatars).toHaveCount(2);
+    // Each assistant message renders exactly one bubble root.
+    const assistantBubbles = page.locator('[data-message-role="assistant"]');
+    await expect(assistantBubbles).toHaveCount(2);
   });
 
   test('subagent steering_delivered does not create empty main-chat placeholders', async ({ page }) => {
@@ -828,7 +837,7 @@ test.describe('Steering -- History Replay', () => {
     //
     // Regression: before the fix, each subagent steering_delivered was caught by
     // the main-agent history handler, creating 3 empty assistant placeholders
-    // (inflating the assistant avatar count from 4 to 7).
+    // (inflating the assistant bubble count from 4 to 7).
     const turn0Events = loadFixture('steering-single-turn.json', 0);
     const turn1Events = loadFixture('steering-with-subagents.json', 1);
 
@@ -847,19 +856,24 @@ test.describe('Steering -- History Replay', () => {
 
     await page.goto('/chat/t/b0000001-0000-4000-8000-000000000001');
 
-    // Wait for post-steering content to confirm replay completed
-    await expect(page.getByText('All three subagents updated')).toBeVisible({ timeout: 30000 });
+    // The intermediate update is process content, behind the settled turn fold.
+    await expect(page.getByText('Full report:', { exact: true })).toBeVisible({ timeout: 15000 });
+    // Only collapsed folds, re-queried after each click: the list re-renders on
+    // every open, and clicking an already-open fold would shut it again.
+    const collapsedFolds = page.locator('[data-turn-fold="collapsed"] button');
+    while (await collapsedFolds.count()) await collapsedFolds.first().click();
+    await expect(page.getByText('All three subagents updated')).toBeVisible();
 
     // Main steering user message should be visible (from the steering_delivered event)
     await expect(page.getByText('let subagent group its finding by sector')).toBeVisible();
 
-    // Regression gate: count assistant avatars. Each assistant message renders
-    // exactly one img[alt="Assistant"]. Expected layout:
+    // Regression gate: count assistant bubbles. Each assistant message renders
+    // exactly one [data-message-role="assistant"] root. Expected layout:
     //   Turn 0: 2 assistants (pre-steering + post-steering)
     //   Turn 1: 2 assistants (pre-steering + post-steering)
     //   Total: 4
     // Before fix: 3 subagent steering_delivered events inflated this to 7.
-    const assistantAvatars = page.locator('img[alt="Assistant"]');
-    await expect(assistantAvatars).toHaveCount(4);
+    const assistantBubbles = page.locator('[data-message-role="assistant"]');
+    await expect(assistantBubbles).toHaveCount(4);
   });
 });

@@ -33,6 +33,7 @@ vi.mock('framer-motion', async () => {
       return createEl(Comp, domProps, children);
     };
   return {
+    ...await vi.importActual<typeof import('framer-motion')>('framer-motion'),
     motion: new Proxy({} as Record<string, unknown>, {
       get: (_t, key: string) => (key === 'create' ? make : make(key)),
     }),
@@ -109,6 +110,17 @@ describe('turn deliverables deck', () => {
     expect(names(container)).toEqual(['review.md']);
     fireEvent.click(stripe(container));
     expect(onOpenFile).toHaveBeenCalledWith('results/review.md', 'ws-7', { line: 12 });
+  });
+
+  it('treats a rendered file deck as the answer even without final prose', () => {
+    const { container } = renderList([
+      userMsg('u0'), assistant('a0', '', {
+        contentSegments: [{ type: 'tool_call', toolCallId: 'w', order: 0 }],
+        toolCallProcesses: { w: write(0, 'results/review.md') },
+      }),
+    ], { onOpenFile: vi.fn() });
+    expect(names(container)).toEqual(['review.md']);
+    expect(container.querySelector('[data-turn-fold]')).toHaveAttribute('data-turn-fold', 'collapsed');
   });
 
   it('holds several files behind one card until the deck is fanned', () => {
