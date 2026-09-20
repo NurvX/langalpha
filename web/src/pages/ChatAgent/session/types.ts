@@ -96,6 +96,13 @@ interface SSEEvent {
   can_reconnect?: boolean;
   is_shared?: boolean;
   run_id?: string;
+  /** ISO instant the turn's run settled, on a terminal `user_message` only.
+   *  Live turns carry none — their tail bubble is stamped when it finalizes. */
+  run_completed_at?: string;
+  /** The server's measured thinking time, on a `reasoning_signal` close. Both
+   *  replay paths and the live stream read it, so it is stated rather than
+   *  left to the index signature below. */
+  elapsed_ms?: number;
   [key: string]: unknown;
 }
 

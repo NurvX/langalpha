@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo, memo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import ActivityBlock from '../ActivityBlock';
+import type { ActivityItem } from './activityTypes';
 import { INLINE_ARTIFACT_MAP, openCardTarget } from '../charts/InlineArtifactCards';
 import type { OpenFileHandler } from '../../utils/fileLocation';
-import ReasoningMessageContent from '../ReasoningMessageContent';
 import PlanApprovalCard from '../PlanApprovalCard';
 import UserQuestionCard from '../UserQuestionCard';
 import CreateWorkspaceCard from '../CreateWorkspaceCard';
@@ -15,19 +15,19 @@ import TaskSegmentCard from './TaskSegmentCard';
 import { SubagentStopNotice } from '../SubagentTaskMessageContent';
 import type { CreditPauseState, SubagentTaskRecord, ToolApprovalState } from '@/types/chat';
 import TextMessageContent from '../TextMessageContent';
+import { visibleParagraphPrefix } from '@/lib/paragraphGate';
+import { useTranscriptDisplay } from '@/lib/transcriptDisplay';
 import InlineWidget from '../viewers/InlineWidget';
-import ToolCallMessageContent from '../ToolCallMessageContent';
 import { NotificationDivider } from './NotificationDivider';
 import { normalizeSubagentText } from './normalizeSubagentText';
 import StructuredResultBlock from './StructuredResultBlock';
 import { parseStructuredResult } from '../../utils/structuredResult';
 import { useMessageActions } from './MessageActionsContext';
+import { FoldPanel } from './FoldPanel';
+import { projectContent, blockIsProcess, blockVisible, type ContentProjection } from './contentProjection';
 import { EMPTY_OBJ } from './types';
-import type { ContentSegmentRecord, ToolCallProcessRecord } from './types';
+import type { ContentSegmentRecord, FoldState, ToolCallProcessRecord } from './types';
 import {
-  buildRenderBlocks,
-  groupSegments,
-  type ActivityRenderBlock,
   type CompactArtifactRenderBlock,
   type CreateWorkspaceRenderBlock,
   type CreditPauseRenderBlock,
@@ -35,6 +35,7 @@ import {
   type NotificationRenderBlock,
   type PlanApprovalRenderBlock,
   type PTCAgentRenderBlock,
+  type RenderBlock,
   type SecretaryActionRenderBlock,
   type StartQuestionRenderBlock,
   type SubagentTaskRenderBlock,
@@ -47,6 +48,7 @@ import {
 
 interface MessageContentSegmentsProps {
   segments: ContentSegmentRecord[];
+  contentProjection?: ContentProjection;
   reasoningProcesses: Record<string, Record<string, unknown>>;
   toolCallProcesses: Record<string, ToolCallProcessRecord>;
   todoListProcesses: Record<string, Record<string, unknown>>;
@@ -61,7 +63,10 @@ interface MessageContentSegmentsProps {
   /** Classified error data from the backend, used by TextMessageContent so
    *  inline error cards can render hints without re-parsing the raw text. */
   structuredError?: import('@/utils/rateLimitError').StructuredError;
-  compactToolCalls?: boolean;
+  /** How much of the turn this bubble draws; `unfolded` is the full transcript. */
+  fold?: FoldState;
+  /** The last visible bubble of its backend turn: the only one with an answer. */
+  isTurnTail?: boolean;
   isSubagentView?: boolean;
   readOnly?: boolean;
   ptcAgentProposals?: Record<string, Record<string, unknown>>;
@@ -74,7 +79,6 @@ interface MessageContentSegmentsProps {
 
 interface TextBlockProps {
   block: TextRenderBlock;
-  isFirst: boolean;
   isStreaming: boolean;
   hasError: boolean;
   structuredError?: import('@/utils/rateLimitError').StructuredError;
@@ -82,9 +86,27 @@ interface TextBlockProps {
   /** The message's last prose block: where a turn-end landing puts the viewport top. */
   isReplyStart: boolean;
   onOpenFile?: OpenFileHandler;
+  onRevealed?: (key: string, done: boolean) => void;
 }
 
-function TextBlock({ block, isFirst, isStreaming, hasError, structuredError, isSubagentView, isReplyStart, onOpenFile }: TextBlockProps): React.ReactElement | null {
+/** Blocks that wait for the prose above them to finish typing.
+ *
+ *  Everything here is non-interactive. A HITL card is not, and is deliberately
+ *  absent: an approval the reader is waiting on must not be held behind a
+ *  paragraph. `notification` belongs here even though a fallback is urgent,
+ *  because urgency is already served elsewhere. The `ModelStatus` pill above
+ *  the composer announces a retry or a fallback while it is happening; this
+ *  block is the durable record of it, and a record printed above the sentence
+ *  it follows reads as though the switch happened a sentence earlier than it
+ *  did. Nothing is held past the turn either: the hold only applies while the
+ *  message streams, so a settle or an error releases it. */
+const HOLDS_FOR_PROSE = new Set<RenderBlock['type']>([
+  'activity', 'subagent_task', 'html_widget', 'compact_artifact', 'notification',
+]);
+
+function TextBlock({ block, isStreaming, hasError, structuredError, isSubagentView, isReplyStart, onOpenFile, onRevealed }: TextBlockProps): React.ReactElement | null {
+  const report = useCallback((done: boolean) => onRevealed?.(block.key, done), [onRevealed, block.key]);
+  const { streamingMode } = useTranscriptDisplay();
   const raw = block.segment.content ?? '';
   // A schema-constrained subagent answers with one JSON object, which the
   // transcript would otherwise show as a raw dump. Mid-stream text is excluded
@@ -107,18 +129,23 @@ function TextBlock({ block, isFirst, isStreaming, hasError, structuredError, isS
       hasError={hasError}
       structuredError={structuredError}
       onOpenFile={onOpenFile}
+      onRevealed={report}
     />
   );
-  // First-block pure-text gets a −4px offset so its first-line center matches the
-  // 32px logo center. Reasoning-leading blocks handle their own offset inside
-  // ActivityBlock. Guard on textContent so an empty streaming block doesn't render
-  // an empty wrapper that shifts later siblings.
-  const el = isFirst && textContent ? <div className="-mt-1">{textEl}</div> : textEl;
+  // A structured result lands whole.
+  useEffect(() => { if (structured) report(true); }, [structured, report]);
+  // What will actually be painted, which is not the same as what has arrived:
+  // paragraph mode holds the sentence being written and renders nothing until
+  // the first boundary lands. The wrapper keys on this rather than on the raw
+  // content, so it is never left standing around an empty child.
+  const rendersNow = !!textContent
+    && (!isStreaming || hasError || streamingMode === 'token' || visibleParagraphPrefix(textContent) !== '');
   // An empty block has no line to land on; the landing falls back to the bubble.
-  return isReplyStart && textContent ? <div data-reply-start="">{el}</div> : el;
+  return isReplyStart && rendersNow ? <div data-reply-start="">{textEl}</div> : textEl;
 }
 
-export const MessageContentSegments = memo(function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesses, todoListProcesses: _todoListProcesses, subagentTasks, planApprovals = EMPTY_OBJ, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, hasError, structuredError, compactToolCalls = false, isSubagentView = false, readOnly = false, ptcAgentProposals = EMPTY_OBJ, secretaryActionProposals = EMPTY_OBJ, creditPauses = EMPTY_OBJ, toolApprovals = EMPTY_OBJ, htmlWidgetProcesses = EMPTY_OBJ, flashContext }: MessageContentSegmentsProps): React.ReactElement {
+export const MessageContentSegments = memo(function MessageContentSegments({ segments, contentProjection, reasoningProcesses, toolCallProcesses, todoListProcesses: _todoListProcesses, subagentTasks, planApprovals = EMPTY_OBJ, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, hasError, structuredError, fold = 'unfolded', isTurnTail = false, isSubagentView = false, readOnly = false, ptcAgentProposals = EMPTY_OBJ, secretaryActionProposals = EMPTY_OBJ, creditPauses = EMPTY_OBJ, toolApprovals = EMPTY_OBJ, htmlWidgetProcesses = EMPTY_OBJ, flashContext }: MessageContentSegmentsProps): React.ReactElement {
+  const { turnDisplay } = useTranscriptDisplay();
   const {
     onOpenSubagentTask, onOpenFile, onToolCallDetailClick, onOpenChart,
     onApprovePlan, onRejectPlan, onPlanDetailClick,
@@ -131,6 +158,14 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
     onApproveToolCall, onRejectToolCall,
     onWidgetSendPrompt,
   } = useMessageActions();
+
+  // Stable, because `ActivityBlock` is memoized and its other props survive a
+  // render that only advanced the typewriter. A fresh closure here would hand
+  // it a new identity on every streamed token and re-render every tool row.
+  const onActivityToolClick = useCallback(
+    (item: ActivityItem) => onToolCallDetailClick?.({ ...item }),
+    [onToolCallDetailClick],
+  );
 
   // Force re-render timer for recently-completed tool calls that need minimum exposure
   const [tick, setTick] = useState(0);
@@ -153,30 +188,27 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
     return () => { if (expiryTimerRef.current) clearTimeout(expiryTimerRef.current); };
   });
 
-  // Memoize sorted + grouped segments
-  const groupedSegments = useMemo(() => groupSegments(segments), [segments]);
-
-  // Reset expiry for this render pass (set by memoized renderBlocks below)
-  nextExpiryRef.current = null;
-
-  // Memoize the expensive renderBlocks construction.
-  // tick is included so timer-driven live→completed transitions recompute correctly.
-  const { blocks: renderBlocks, nextExpiry } = useMemo(
-    () => buildRenderBlocks(groupedSegments, { reasoningProcesses, toolCallProcesses, isStreaming, isSubagentView }),
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- tick is a semantic dep: forces recomputation when timer fires for live→completed transitions
-    [groupedSegments, tick, reasoningProcesses, toolCallProcesses, isStreaming, isSubagentView],
-  );
-
-  // Apply side effect: schedule timer for next expiry transition
+  const projection = useMemo(() => {
+    if (contentProjection && (contentProjection.nextExpiry === null || contentProjection.nextExpiry > Date.now())) return contentProjection;
+    return projectContent({ segments, reasoningProcesses, toolCallProcesses, isStreaming, isSubagentView, pendingToolCallChunks });
+    // The timer advances live exposure without waiting for another stream event.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentProjection, segments, reasoningProcesses, toolCallProcesses, isStreaming, isSubagentView, pendingToolCallChunks, tick]);
+  const { blocks: renderBlocks, preparingToolCall, nextExpiry } = projection;
   nextExpiryRef.current = nextExpiry;
 
-  // Derived values
-  const chunkEntries = Object.values(pendingToolCallChunks);
-  const preparingToolCall = chunkEntries.length > 0 ? {
-    toolName: (chunkEntries.find((c) => (c as Record<string, unknown>).toolName)?.toolName as string | undefined) ?? undefined,
-    chunkCount: chunkEntries.reduce((sum, c) => sum + ((c as Record<string, unknown>).chunkCount as number || 0), 0),
-    argsLength: chunkEntries.reduce((sum, c) => sum + ((c as Record<string, unknown>).argsLength as number || 0), 0),
-  } : null;
+  // Which prose blocks are fully on screen. The typewriter trails the stream,
+  // and a tool call lands the moment the model turns to it, right after the
+  // last token of the prose it follows: mounted at once, its row would sit
+  // under a paragraph still being typed, and the reader sees the tools land
+  // before the words. So an activity block waits for the prose above it to
+  // catch up (only `false` holds: a block that has not reported is not
+  // typing), and prose with an activity block after it is finished, so it
+  // types its tail out in the finish window rather than at reading pace.
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+  const onRevealed = useCallback((key: string, done: boolean) => {
+    setRevealed((prev) => (prev[key] === done ? prev : { ...prev, [key]: done }));
+  }, []);
 
   let lastTextBlockIdx = -1;
   let lastActivityBlockIdx = -1;
@@ -187,67 +219,59 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
     const b = renderBlocks[i];
     if (b.type === 'text') lastTextBlockIdx = i;
     if (b.type === 'subagent_task') {
-      const id = (b as SubagentTaskRenderBlock).segment.subagentId;
+      const id = b.segment.subagentId;
       if (id) taskSubagentIds.push(id);
     }
     if (b.type === 'activity') {
       lastActivityBlockIdx = i;
-      if ((b as ActivityRenderBlock).items.some(item => item._liveState === 'active' && item.type === 'tool_call')) {
+      if (b.items.some(item => item._liveState === 'active' && item.type === 'tool_call')) {
         hasAnyTrulyInProgress = true;
       }
     }
   }
 
-  return (
-    <div className="space-y-1">
-      {renderBlocks.map((block, blockIdx) => {
-        if (block.type === 'activity') {
-          if (compactToolCalls) {
-            // Show all items in compact mode (not just completed)
-            const items = (block as ActivityRenderBlock).items;
-            return (
-              <div key={block.key}>
-                {items.map((item) => {
-                  if (item.type === 'tool_call') {
-                    return (
-                      <ToolCallMessageContent
-                        key={`tool-call-${item.toolCallId}`}
-                        toolCallId={item.toolCallId as string}
-                        toolName={item.toolName as string}
-                        toolCall={item.toolCall as any} // TODO: type properly
-                        toolCallResult={item.toolCallResult as any} // TODO: type properly
-                        isInProgress={(item.isInProgress as boolean) || false}
-                        isComplete={(item.isComplete as boolean) || false}
-                        isFailed={(item.isFailed as boolean) || false}
-                        onOpenFile={onOpenFile}
-                      />
-                    );
-                  }
-                  if (item.type === 'reasoning') {
-                    return (
-                      <ReasoningMessageContent
-                        key={`reasoning-${item.id}`}
-                        reasoningContent={(item.content as string) || ''}
-                        isReasoning={item._liveState === 'active'}
-                        reasoningComplete={(item.reasoningComplete as boolean) || item._liveState === 'completed'}
-                        reasoningTitle={(item.reasoningTitle as string) ?? undefined}
-                      />
-                    );
-                  }
-                  return null;
-                })}
-              </div>
-            );
-          }
+  // Blocks that wait for the prose above them to catch up. They all narrate
+  // work the prose introduces, so drawing one over a paragraph the gate is
+  // still holding shows the reader the result before the sentence announcing
+  // it. The wait carries forward until the next text block, so a card between
+  // two of them does not let the row after it through.
+  //
+  // HITL cards are deliberately not in this set. Their turn is interrupted
+  // waiting on the reader, so holding the control they have to answer behind a
+  // typewriter would leave the turn waiting on the reader and the reader
+  // waiting on the turn.
+  const heldForProse: boolean[] = new Array(renderBlocks.length).fill(false);
+  if (isStreaming) {
+    let waiting = false;
+    for (let i = 0; i < renderBlocks.length; i++) {
+      const b = renderBlocks[i];
+      // Unreported holds too. A text block reports from an effect, so on the
+      // commit that first paints it there is no answer yet, and reading that
+      // silence as "revealed" painted the card beneath it for one frame and
+      // then took it away. Every streaming text block reports on its first
+      // effect, so the wait is released a frame later at worst.
+      if (b.type === 'text') waiting = revealed[b.key] !== true;
+      else heldForProse[i] = waiting && HOLDS_FOR_PROSE.has(b.type);
+    }
+  }
 
+  const blockIsVisible = renderBlocks.map((block) => blockVisible(projection, block, fold, isTurnTail));
+  const blockFolds = renderBlocks.map((block) => fold !== 'unfolded' && blockIsProcess(projection, block, isTurnTail));
+
+  const renderBlock = (block: RenderBlock, blockIdx: number): React.ReactElement | null => {
+
+        if (block.type === 'activity') {
           return (
             <ActivityBlock
               key={block.key}
-              items={(block as ActivityRenderBlock).items as any} // TODO: type properly, ActivityItem[] not exported
+              items={block.items}
               preparingToolCall={blockIdx === lastActivityBlockIdx ? preparingToolCall : null}
               isStreaming={isStreaming ?? false}
-              isFirst={blockIdx === 0}
-              onToolCallClick={onToolCallDetailClick as any} // TODO: type properly
+              presentation={fold === 'unfolded' ? 'inline' : fold === 'expanded' ? 'expanded' : 'folded'}
+              /* Verbose: a thought still streaming shows its text; settled, it
+                 folds like any other. The preference reaches no further. */
+              liveReasoningOpen={turnDisplay === 'verbose'}
+              onToolCallClick={onToolCallDetailClick ? onActivityToolClick : undefined}
               onOpenFile={onOpenFile}
               onOpenChart={onOpenChart}
             />
@@ -280,13 +304,13 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
             <TextBlock
               key={block.key}
               block={block as TextRenderBlock}
-              isFirst={blockIdx === 0}
-              isStreaming={!!(isStreaming && blockIdx === lastTextBlockIdx && !hasAnyTrulyInProgress)}
+              isStreaming={!!(isStreaming && blockIdx === lastTextBlockIdx && !hasAnyTrulyInProgress && lastActivityBlockIdx < blockIdx)}
               isReplyStart={blockIdx === lastTextBlockIdx}
               hasError={!!hasError}
               structuredError={structuredError}
               isSubagentView={isSubagentView}
               onOpenFile={onOpenFile}
+              onRevealed={onRevealed}
             />
           );
         }
@@ -456,19 +480,21 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
         }
 
         return null;
+  };
+
+  return (
+    <div className="space-y-1">
+      {renderBlocks.map((block, blockIdx) => {
+        if (heldForProse[blockIdx]) return null;
+        if (blockFolds[blockIdx]) {
+          return (
+            <FoldPanel key={block.key} open={blockIsVisible[blockIdx]}>
+              {renderBlock(block, blockIdx)}
+            </FoldPanel>
+          );
+        }
+        return blockIsVisible[blockIdx] ? renderBlock(block, blockIdx) : null;
       })}
-      {/* Standalone preparingToolCall when no activity blocks exist yet */}
-      {preparingToolCall && lastActivityBlockIdx === -1 && (
-        <ActivityBlock
-          items={[]}
-          preparingToolCall={preparingToolCall}
-          isStreaming={isStreaming ?? false}
-          isFirst={renderBlocks.length === 0}
-          onToolCallClick={onToolCallDetailClick as any} // TODO: type properly
-          onOpenFile={onOpenFile}
-          onOpenChart={onOpenChart}
-        />
-      )}
       {/* At the foot of the message, not beside the card that stopped. The
           agent's closing prose was written before the gate fired and still
           promises a result, so a notice above it is read first and contradicted

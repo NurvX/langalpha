@@ -11,7 +11,7 @@ import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, 
 import type { ProvenanceEvent } from '@/types/sse';
 import type { ProvenanceRecord, SubagentTaskRecord, TextSegment } from '@/types/chat';
 import { provenanceEventToRecord, provenanceRecordKey } from './provenance';
-import { extractLastReasoningTitle, nextArrivalSeq } from '../streamRefs';
+import { nextArrivalSeq } from '../streamRefs';
 import type { StreamRefs, ToolCallChunkRecord } from '../streamRefs';
 
 /**
@@ -23,18 +23,23 @@ import type { StreamRefs, ToolCallChunkRecord } from '../streamRefs';
  * @param {Function} params.setMessages - State setter for messages
  * @returns {boolean} True if event was handled
  */
-export function handleReasoningSignal({ assistantMessageId, signalContent, refs, setMessages, eventId }: {
+export function handleReasoningSignal({ assistantMessageId, signalContent, refs, setMessages, eventId, elapsedMs }: {
   assistantMessageId: string;
   signalContent: string;
   refs: StreamRefs;
   setMessages: SetMessages;
   eventId?: number | null;
+  /** The server's measured duration on a complete signal. */
+  elapsedMs?: number;
 }): boolean {
   const { contentOrderCounterRef, currentReasoningIdRef } = refs;
-  // Stamped on arrival, not inside the updater: React runs the updater after
-  // a reconnect flush has already flipped the bag live, and a completion the
-  // backlog carried must still fold on arrival rather than take a live turn.
-  const completedAt = refs.isReconnect ? 1 : Date.now();
+  // Read on arrival, not inside the updater. React defers the updater to the
+  // render phase, and by then the flush that carried this event has already
+  // flipped the bag live, so a closure over `refs` reads the live value: a
+  // completion the backlog carried would take a live turn rather than fold,
+  // and a replayed thought would start its clock at the reconnect instant.
+  const fromBacklog = refs.isReconnect;
+  const completedAt = fromBacklog ? 1 : Date.now();
 
   if (signalContent === 'start') {
     // Reasoning process has started - create new reasoning process
@@ -62,6 +67,7 @@ export function handleReasoningSignal({ assistantMessageId, signalContent, refs,
             isReasoning: true,
             reasoningComplete: false,
             order: currentOrder,
+            _startedAt: fromBacklog ? undefined : Date.now(),
           },
         };
 
@@ -83,12 +89,13 @@ export function handleReasoningSignal({ assistantMessageId, signalContent, refs,
 
           const reasoningProcesses = { ...((msg.reasoningProcesses as Record<string, Record<string, unknown>>) || {}) };
           if (reasoningProcesses[reasoningId]) {
+            const startedAt = reasoningProcesses[reasoningId]._startedAt as number | undefined;
             reasoningProcesses[reasoningId] = {
               ...reasoningProcesses[reasoningId],
               isReasoning: false,
               reasoningComplete: true,
-              reasoningTitle: null,
               _completedAt: completedAt,
+              elapsedMs: elapsedMs ?? (startedAt && !fromBacklog ? completedAt - startedAt : undefined),
             };
           }
 
@@ -131,12 +138,10 @@ export function handleReasoningContent({ assistantMessageId, content, refs, setM
         const reasoningProcesses = { ...((msg.reasoningProcesses as Record<string, Record<string, unknown>>) || {}) };
         if (reasoningProcesses[reasoningId]) {
           const newContent = ((reasoningProcesses[reasoningId].content as string) || '') + content;
-          const reasoningTitle = extractLastReasoningTitle(newContent) ?? (reasoningProcesses[reasoningId].reasoningTitle as string | null) ?? null;
           reasoningProcesses[reasoningId] = {
             ...reasoningProcesses[reasoningId],
             content: newContent,
             isReasoning: true,
-            reasoningTitle,
           };
         }
 
@@ -357,6 +362,13 @@ export function handleToolCallResult({ assistantMessageId, toolCallId, result, r
     return false;
   }
 
+  // Read on arrival, not inside the updater, for the reason `_startedAt` is:
+  // React defers the updater to the render phase, by which point a backlog
+  // flush has already cleared the flag, so a closure over `refs` would date a
+  // replayed result to the reconnect. A replayed turn is settled anyway and
+  // carries the server's own stamp, so no local one is wanted there.
+  const settledAt = refs.isReconnect ? undefined : Date.now();
+
   setMessages((prev: MessageRecord[]) => {
     // The message that made the call, which is an earlier one whenever a gate
     // stopped it: the resume answers it in the next turn, under a new message.
@@ -383,6 +395,9 @@ export function handleToolCallResult({ assistantMessageId, toolCallId, result, r
           isInProgress: false,
           isComplete: true,
           isFailed,
+          // When this call is one of `ALWAYS_LIVE_TOOLS`, it is what kept the
+          // turn live past the end of the stream, so it is also what ends it.
+          _settledAt: settledAt,
         };
       } else {
         // Orphaned tool_call_result without matching tool_calls (e.g., SubmitPlan

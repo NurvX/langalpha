@@ -4,6 +4,7 @@
  * and streaming updates.
  */
 
+import { finalizeAssistantMessage } from '../session/stream/finalizeMessage';
 import type React from 'react';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -1130,7 +1131,7 @@ export function useChatMessages(
         for (const [id, val] of Object.entries(aMsg.toolCallProcesses || {})) {
           tp[id] = val.isInProgress ? { ...val, isInProgress: false, isComplete: true } : val;
         }
-        return { ...aMsg, isStreaming: false, stopped: true, toolCallProcesses: tp };
+        return { ...finalizeAssistantMessage(aMsg, 'stopped'), toolCallProcesses: tp };
       }),
     );
 
@@ -1150,12 +1151,16 @@ export function useChatMessages(
           const rp = (msgs[i].reasoningProcesses as Record<string, Record<string, unknown>>) || {};
           if (rp[reasoningId]) {
             const next = { ...rp };
+            const completedAt = Date.now();
+            const startedAt = next[reasoningId]._startedAt as number | undefined;
             next[reasoningId] = {
               ...next[reasoningId],
               isReasoning: false,
               reasoningComplete: true,
-              reasoningTitle: null,
-              _completedAt: Date.now(),
+              _completedAt: completedAt,
+              // The main transcript's close stamps a duration on the same click.
+              elapsedMs: (next[reasoningId].elapsedMs as number | undefined)
+                ?? (startedAt ? completedAt - startedAt : undefined),
             };
             msgs[i] = { ...msgs[i], reasoningProcesses: next };
             break;
@@ -1507,10 +1512,7 @@ export function useChatMessages(
         const finalId = currentMessageRef.current || demotedAssistantId;
         if (finalId) {
           setMessages((prev) =>
-            updateMessage(prev, finalId, (msg) => ({
-              ...msg,
-              isStreaming: false,
-            }))
+            updateMessage(prev, finalId, (msg) => finalizeAssistantMessage(msg, demotedInterruptedRef.current ? 'paused' : 'completed'))
           );
           if (!demotedInterruptedRef.current) {
             cleanupAfterStreamEnd(finalId);
@@ -1530,10 +1532,8 @@ export function useChatMessages(
         const finalAssistantId = demotedAssistantId;
         setMessages((prev) =>
           updateMessage(prev, finalAssistantId, (msg) => ({
-            ...msg,
+            ...finalizeAssistantMessage(msg, 'failed'),
             content: msg.content || 'Failed to send message. Please try again.',
-            isStreaming: false,
-            error: true,
           }))
         );
         setMessageError((err as Error).message || 'Failed to send message');
@@ -1794,10 +1794,7 @@ export function useChatMessages(
       {
         const finalId = currentMessageRef.current || assistantMessageId;
         setMessages((prev) =>
-          updateMessage(prev,finalId, (msg) => ({
-            ...msg,
-            isStreaming: false,
-          }))
+          updateMessage(prev, finalId, (msg) => finalizeAssistantMessage(msg, wasInterruptedRef.current ? 'paused' : 'completed'))
         );
         markTranscriptPersisted();
       }
@@ -1856,10 +1853,8 @@ export function useChatMessages(
               setMessageError((err as Error).message || 'Failed to send message');
               setMessages((prev) =>
                 updateMessage(prev, assistantMessageId, (msg) => ({
-                  ...msg,
+                  ...finalizeAssistantMessage(msg, 'failed'),
                   content: msg.content || 'Failed to send message. Please try again.',
-                  isStreaming: false,
-                  error: true,
                 }))
               );
             }
@@ -1887,10 +1882,7 @@ export function useChatMessages(
             // Mark message as complete (use live ref in case steering_delivered switched it)
             const finalId = currentMessageRef.current || assistantMessageId;
             setMessages((prev) =>
-              updateMessage(prev,finalId, (msg) => ({
-                ...msg,
-                isStreaming: false,
-              }))
+              updateMessage(prev, finalId, (msg) => finalizeAssistantMessage(msg, wasInterruptedRef.current ? 'paused' : 'completed'))
             );
 
             cleanupAfterStreamEnd(finalId);
@@ -2034,10 +2026,7 @@ export function useChatMessages(
       {
         const finalId = currentMessageRef.current || assistantMessageId;
         setMessages((prev) =>
-          updateMessage(prev,finalId, (msg) => ({
-            ...msg,
-            isStreaming: false,
-          }))
+          updateMessage(prev, finalId, (msg) => finalizeAssistantMessage(msg, wasInterruptedRef.current ? 'paused' : 'completed'))
         );
         markTranscriptPersisted();
       }
@@ -2071,20 +2060,15 @@ export function useChatMessages(
         const platformUrl = (import.meta.env.VITE_PLATFORM_URL as string | undefined) || '/account';
         setMessageError(buildRateLimitError(info, platformUrl));
         setMessages((prev) =>
-          updateMessage(prev,assistantMessageId, (msg) => ({
-            ...msg,
-            isStreaming: false,
-          }))
+          updateMessage(prev, assistantMessageId, (msg) => finalizeAssistantMessage(msg, wasInterruptedRef.current ? 'paused' : 'completed'))
         );
       } else {
         console.error('[HITL] Error resuming turn:', err);
         setMessageError((err as Error).message || 'Failed to resume this turn');
         setMessages((prev) =>
-          updateMessage(prev,assistantMessageId, (msg) => ({
-            ...msg,
+          updateMessage(prev, assistantMessageId, (msg) => ({
+            ...finalizeAssistantMessage(msg, 'failed'),
             content: msg.content || 'Failed to resume this turn. Please try again.',
-            isStreaming: false,
-            error: true,
           }))
         );
       }
@@ -2511,10 +2495,7 @@ export function useChatMessages(
 
       const finalId = currentMessageRef.current || assistantMessageId;
       setMessages((prev) =>
-        updateMessage(prev,finalId, (msg) => ({
-          ...msg,
-          isStreaming: false,
-        }))
+        updateMessage(prev, finalId, (msg) => finalizeAssistantMessage(msg, wasInterruptedRef.current ? 'paused' : 'completed'))
       );
       markTranscriptPersisted();
     } catch (err: unknown) {
@@ -2530,11 +2511,9 @@ export function useChatMessages(
       console.error('[streamFromCheckpoint] Error:', err);
       setMessageError((err as Error).message || 'Failed to process request');
       setMessages((prev) =>
-        updateMessage(prev,assistantMessageId, (msg) => ({
-          ...msg,
+        updateMessage(prev, assistantMessageId, (msg) => ({
+          ...finalizeAssistantMessage(msg, 'failed'),
           content: msg.content || 'Failed to process request. Please try again.',
-          isStreaming: false,
-          error: true,
         }))
       );
     } finally {
@@ -2544,10 +2523,10 @@ export function useChatMessages(
       if (!wasDisconnected && !wasInterruptedRef.current && !wasStoppedRef.current) {
         const finalId = currentMessageRef.current || assistantMessageId;
         setMessages((prev) =>
-          updateMessage(prev,finalId, (msg) => ({
-            ...msg,
-            isStreaming: false,
-          }))
+          // Literal, not the ref: the guard above already read it, and React
+          // runs this updater later, so a ternary here would answer from a
+          // different moment than the branch it is standing in.
+          updateMessage(prev, finalId, (msg) => finalizeAssistantMessage(msg, 'completed'))
         );
         cleanupAfterStreamEnd(finalId);
       }

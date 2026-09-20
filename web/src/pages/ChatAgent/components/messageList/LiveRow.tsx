@@ -52,10 +52,15 @@ interface LiveRowProps {
    *  here is honoured and counted in the row's height. The outer box is
    *  border-box: padding there would desynchronise it from the measurement. */
   className?: string;
+  /** Vertical breathing room measured with the row, so it unfolds and folds
+   *  with it. `gapBottom` defaults to `gap`; the lean timeline gives its
+   *  first and last rows the list's own padding and the rest none. */
+  gap?: string;
+  gapBottom?: string;
   children: React.ReactNode;
 }
 
-export function LiveRow({ opacity = 1, className, children }: LiveRowProps) {
+export function LiveRow({ opacity = 1, className, gap = ROW_GAP, gapBottom = gap, children }: LiveRowProps) {
   const outerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
   const height = useMotionValue(0);
@@ -142,7 +147,10 @@ export function LiveRow({ opacity = 1, className, children }: LiveRowProps) {
       transition={SPRING_SNAPPY}
       style={{ height, overflow: 'hidden' }}
     >
-      <div ref={innerRef} style={{ paddingTop: ROW_GAP, paddingBottom: ROW_GAP }}>
+      {/* A row whose place in the list changes (the first row leaving makes
+          the next one first) eases into its new padding; the observers above
+          follow the inner box through the transition. */}
+      <div ref={innerRef} style={{ paddingTop: gap, paddingBottom: gapBottom, transition: reduceMotion ? 'none' : `padding ${EXIT_TWEEN.duration}s ease-in` }}>
         <div className={className}>{children}</div>
       </div>
     </motion.div>
