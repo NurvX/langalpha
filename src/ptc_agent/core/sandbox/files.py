@@ -366,6 +366,14 @@ async def _exec_text_write_once(
             timeout=30,
             retry_policy=RetryPolicy.SAFE,
         )
+        exit_code = getattr(result, "exit_code", -1)
+        if exit_code < 0:
+            # The Docker runtime folds a timeout or an exec exception into
+            # exit -1 rather than raising, so this is a transport failure and
+            # belongs to the same classification as a raised one.
+            raise RuntimeError(
+                f"exec did not complete: {getattr(result, 'stderr', '') or exit_code}"
+            )
     except Exception as e:
         await _raise_normalized(sandbox, e, op="write_file", path=normalized_path)
         logger.warning(
@@ -376,7 +384,7 @@ async def _exec_text_write_once(
         )
         return False, None
 
-    if getattr(result, "exit_code", 1) != 0:
+    if exit_code != 0:
         # The sandbox answered, so this is the script failing on the file (a
         # permission, a full disk, a directory in the way), not the runtime
         # failing to reach it. Routing it through the liveness classifier
@@ -385,7 +393,7 @@ async def _exec_text_write_once(
             "Text write script failed",
             filepath=filepath,
             normalized_path=normalized_path,
-            exit_code=getattr(result, "exit_code", None),
+            exit_code=exit_code,
             stderr=(getattr(result, "stderr", "") or "").strip()[:500],
         )
         return False, None
