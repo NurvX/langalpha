@@ -1405,10 +1405,10 @@ class SessionLifecycleMixin:
                 expected_sandbox_id=durable_sandbox_id,
             )
             logger.info(
-                "Computer %s stop backup completed in %.0fms for %d folder(s)",
+                "Computer %s stop backup mirrored %d folder(s) in %.0fms",
                 computer_id,
-                (time.monotonic() - backup_started) * 1000,
                 int(folder_count or 0),
+                (time.monotonic() - backup_started) * 1000,
             )
 
             session = self._cached_session(computer_id)

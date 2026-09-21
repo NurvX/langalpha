@@ -454,3 +454,51 @@ async def test_two_registries_sharing_a_lease_serialise(monkeypatch, _lease):
 
     await run()
     assert order == ["w1:in", "w1:out", "w2:in", "w2:out"]
+
+
+class _ScriptFailingRuntime(_FakeRuntime):
+    """Answers the write script with exit 1, as a directory in the way would."""
+
+    async def exec(self, command: str, timeout: int | None = None) -> ExecResult:
+        if "__LANGALPHA_TEXT_PAYLOAD__" in command:
+            self.exec_calls += 1
+            return ExecResult(
+                stdout="", stderr="mv: cannot overwrite directory", exit_code=1
+            )
+        return await super().exec(command, timeout)
+
+
+@pytest.mark.asyncio
+async def test_a_failing_write_script_is_a_write_failure_not_a_liveness_question():
+    """The sandbox answered, so the failure is the file's; it must not be
+    relabelled "sandbox unreachable" by a liveness probe."""
+    runtime = _ScriptFailingRuntime()
+    runtime.refresh_state = AsyncMock()
+    sandbox = _make_sandbox(runtime)
+
+    assert await sandbox.awrite_file_text("results", "x") is False
+    runtime.refresh_state.assert_not_awaited()
+    sandbox.provider.classify_error.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_write_script_creates_the_parent_and_refuses_a_directory_target():
+    """A fresh thread directory has no parent yet; the upload path used to make it."""
+    runtime = _FakeRuntime()
+    captured: list[str] = []
+    inner = runtime.exec
+
+    async def exec_(command: str, timeout: int | None = None) -> ExecResult:
+        if "__LANGALPHA_TEXT_PAYLOAD__" in command:
+            captured.append(command)
+        return await inner(command, timeout)
+
+    runtime.exec = exec_
+    sandbox = _make_sandbox(runtime)
+
+    assert await sandbox.awrite_file_text("results/new/x.md", "x") is True
+    lines = captured[0].splitlines()
+    mkdir = next(i for i, line in enumerate(lines) if line.startswith("mkdir -p"))
+    mktemp = next(i for i, line in enumerate(lines) if line.startswith("tmp=$(mktemp"))
+    assert mkdir < mktemp
+    assert 'mv -fT -- "$tmp" "$target"' in lines

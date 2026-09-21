@@ -621,8 +621,12 @@ class ProvisioningMixin:
         strict: bool = False,
         expected_sandbox_id: str | None = None,
         session: Session | None = None,
-    ) -> None:
+    ) -> bool:
         """Always fence backups: sync_to_db overwrites the durable file copy.
+
+        Returns whether the mirror is current for this project. A skip, a stale
+        session, or an unsaved file is False, so a caller counting folders
+        never reports a backup that did not run as complete.
 
         A superseded session would destroy the good copy and miss live files.
         strict=True must abort destructive callers on incomplete backup;
@@ -648,7 +652,7 @@ class ProvisioningMixin:
                 f"Skipping file backup for {workspace_id}: no attached session "
                 "on this worker"
             )
-            return
+            return False
 
         if expected_sandbox_id is None:
             identity = await db_get_workspace_identity(workspace_id)
@@ -664,7 +668,7 @@ class ProvisioningMixin:
             if strict:
                 raise RuntimeError(message)
             logger.warning(message)
-            return
+            return False
 
         try:
             result = await FilePersistenceService.sync_to_db(
@@ -682,7 +686,7 @@ class ProvisioningMixin:
                     f"sandbox teardown: {e}"
                 ) from e
             logger.warning(f"File backup failed for {workspace_id}: {e}")
-            return
+            return False
 
         # sync_to_db counts per-file failures without raising. Strict teardown must
         # abort on any unsaved file to prevent data loss.
@@ -697,16 +701,17 @@ class ProvisioningMixin:
             if strict:
                 raise RuntimeError(f"{message}; aborting before sandbox teardown")
             logger.warning(message)
-            return
+            return False
 
         if (result or {}).get("root_missing"):
             logger.info(
                 f"Workspace {workspace_id} has no folder on this sandbox; "
                 f"its mirror is already the record"
             )
-            return
+            return True
 
         logger.debug(f"File backup completed for {workspace_id}: {result}")
+        return True
 
     async def _backup_machine_files_to_db(
         self,
@@ -723,7 +728,8 @@ class ProvisioningMixin:
         shadow column: the session belongs to the computer, so a project row that
         lags behind it must not be able to skip its own last mirror. One project's
         failure never skips its siblings, and the caller's contract is unchanged
-        per project - best effort logs, strict refuses the teardown."""
+        per project - best effort logs, strict refuses the teardown. Returns
+        how many projects were actually mirrored, not how many were asked."""
         ordered: list[str] = [workspace_id] if workspace_id else []
         failures: list[str] = []
         try:
@@ -739,15 +745,17 @@ class ProvisioningMixin:
             failures.append(f"sibling list unavailable: {type(e).__name__}: {e}")
         ordered += [ws for ws in siblings if ws != workspace_id]
 
+        mirrored = 0
         for ws_id in ordered:
             try:
-                await self.backup_project_files(
+                if await self.backup_project_files(
                     ws_id,
                     computer_id=computer_id,
                     strict=strict,
                     expected_sandbox_id=expected_sandbox_id,
                     session=session,
-                )
+                ):
+                    mirrored += 1
             except Exception as e:
                 logger.error(
                     f"File backup failed for {ws_id} on computer {computer_id}: "
@@ -760,7 +768,12 @@ class ProvisioningMixin:
                 f"File backup left {len(failures)} of {len(ordered)} project(s) "
                 f"on computer {computer_id} unmirrored: " + "; ".join(failures)
             )
-        return len(ordered)
+        if mirrored < len(ordered):
+            logger.warning(
+                f"File backup mirrored {mirrored} of {len(ordered)} project(s) "
+                f"on computer {computer_id}; the rest keep their last mirror"
+            )
+        return mirrored
 
     async def _detached_sandbox_teardown(
         self,

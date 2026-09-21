@@ -1184,6 +1184,29 @@ class TestBackupFilesStrict:
 
     @pytest.mark.asyncio
     @patch(f"{_PROVISIONING}.FilePersistenceService")
+    async def test_the_machine_wide_mirror_counts_only_what_it_mirrored(
+        self, mock_file_svc
+    ):
+        """A worker with no attached session skips every project; reporting the
+        asked count as complete is what let a stop log a backup that never ran."""
+        wm = WorkspaceManager(_make_config())
+        asked, sibling = str(uuid.uuid4()), str(uuid.uuid4())
+        mock_file_svc.sync_to_db = AsyncMock(return_value={"synced": 1, "errors": 0})
+
+        with _patch_live_ids(asked, sibling):
+            skipped = await wm._backup_machine_files_to_db(
+                _STUB_COMPUTER_ID, workspace_id=asked, expected_sandbox_id="sandbox-abc"
+            )
+            wm._machine(_STUB_COMPUTER_ID).session = _make_mock_session()
+            mirrored = await wm._backup_machine_files_to_db(
+                _STUB_COMPUTER_ID, workspace_id=asked, expected_sandbox_id="sandbox-abc"
+            )
+
+        assert (skipped, mirrored) == (0, 2)
+        assert mock_file_svc.sync_to_db.await_count == 2
+
+    @pytest.mark.asyncio
+    @patch(f"{_PROVISIONING}.FilePersistenceService")
     async def test_a_lost_sibling_list_refuses_a_strict_teardown(self, mock_file_svc):
         """Without the list the unmirrored set is unknown, so "no failures" is
         not the same as "everything is saved"."""
