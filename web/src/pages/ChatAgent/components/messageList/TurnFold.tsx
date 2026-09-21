@@ -27,7 +27,7 @@ export interface TurnFoldProps {
 const ROW_STYLE: React.CSSProperties = {
   paddingTop: '5px',
   paddingBottom: '5px',
-  marginBottom: '0.25rem',
+  marginBottom: '0.5rem',
   borderBottom: '1px solid var(--color-border-muted)',
   fontSize: '0.8125rem',
   color: 'var(--Labels-Tertiary)',
@@ -58,7 +58,7 @@ export function TurnFold({ state, startedAt, completedAt, onToggle }: TurnFoldPr
           <span className="tabular-nums">
             {completedAt === undefined
               ? t('chat.worked')
-              : t('chat.workedFor', { duration: formatWorkedFor(completedAt - startedAt) })}
+              : t('chat.workedFor', { duration: formatWorkedFor(completedAt - startedAt, t) })}
           </span>
           <motion.span
             animate={{ rotate: state === 'collapsed' ? 0 : 90 }}
@@ -87,7 +87,7 @@ function WorkingLabel({ startedAt }: { startedAt: number }): React.ReactElement 
   useEffect(() => {
     const write = () => {
       const el = ref.current;
-      if (el) el.textContent = t('chat.workingFor', { duration: formatWorkedFor(Date.now() - startedAt) });
+      if (el) el.textContent = t('chat.workingFor', { duration: formatWorkedFor(Date.now() - startedAt, t) });
     };
     write();
     const id = setInterval(write, 1000);
@@ -96,7 +96,7 @@ function WorkingLabel({ startedAt }: { startedAt: number }): React.ReactElement 
 
   return (
     <span ref={ref} className="tabular-nums">
-      {t('chat.workingFor', { duration: formatWorkedFor(Date.now() - startedAt) })}
+      {t('chat.workingFor', { duration: formatWorkedFor(Date.now() - startedAt, t) })}
     </span>
   );
 }

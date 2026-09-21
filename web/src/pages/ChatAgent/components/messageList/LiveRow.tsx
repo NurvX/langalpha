@@ -53,8 +53,9 @@ interface LiveRowProps {
    *  border-box: padding there would desynchronise it from the measurement. */
   className?: string;
   /** Vertical breathing room measured with the row, so it unfolds and folds
-   *  with it. `gapBottom` defaults to `gap`; the lean timeline gives its
-   *  first and last rows the list's own padding and the rest none. */
+   *  with it. `gapBottom` defaults to `gap`, and the two are separate because
+   *  the timeline needs an inset above a summary and none anywhere else: the
+   *  segment spacing around the block owns the gap on the outside. */
   gap?: string;
   gapBottom?: string;
   children: React.ReactNode;
@@ -89,7 +90,7 @@ export function LiveRow({ opacity = 1, className, gap = ROW_GAP, gapBottom = gap
     let mountedAt = skipEnterRef.current ? -Infinity : performance.now();
     let target = 0;
     let running: AnimationPlaybackControls | null = null;
-    const settle = (reenter = false) => {
+    const settle = (reenter = false, animateShrink = false) => {
       if (!presentRef.current) return;
       // No boxes at all: the view holding this row is display:none (a cached
       // background thread that keeps streaming). Its content is still there;
@@ -104,10 +105,10 @@ export function LiveRow({ opacity = 1, className, gap = ROW_GAP, gapBottom = gap
       // A re-entry mid-exit starts from wherever the exit tween stopped, so
       // it unfolds like an entry rather than popping open.
       if (reenter) mountedAt = performance.now();
-      // Entry unfolds and a shrink is a state change (a body collapsing to
-      // its title, a result replacing a spinner): both animate. Growth is
-      // streaming text and lands in the frame the content did.
-      if (!reduceRef.current && (shrink || performance.now() - mountedAt < ENTER_MS)) {
+      // Animate discrete DOM changes, but follow measured resizing directly:
+      // a nested disclosure already animates its height. Starting another
+      // spring on every resize leaves an empty row trailing that collapse.
+      if (!reduceRef.current && ((shrink && animateShrink) || performance.now() - mountedAt < ENTER_MS)) {
         running = animate(height, next, SPRING_SNAPPY);
         return;
       }
@@ -119,7 +120,7 @@ export function LiveRow({ opacity = 1, className, gap = ROW_GAP, gapBottom = gap
     };
     settleRef.current = settle;
     settle();
-    const mo = new MutationObserver(() => settle());
+    const mo = new MutationObserver(() => settle(false, true));
     mo.observe(inner, { childList: true, characterData: true, subtree: true });
     const ro = new ResizeObserver(() => settle());
     ro.observe(inner);

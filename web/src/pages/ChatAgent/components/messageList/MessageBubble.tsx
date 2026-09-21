@@ -265,7 +265,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
     {isUser && onEditMessage && !isSteeringUserMessage(message) && (
       <button
         onClick={handleStartEdit}
-        className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
+        className="p-1 min-h-7 min-w-7 inline-flex items-center justify-center rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
         title={t('chat.actions.editMessage')}
       >
         <Pencil className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
@@ -276,7 +276,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
         Then assistant-only: ThumbUp -> ThumbDown -> Regenerate/Retry */}
     <button
       onClick={handleCopy}
-      className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
+      className="p-1 min-h-7 min-w-7 inline-flex items-center justify-center rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
       title={copied ? t('chat.actions.copied') : t('chat.actions.copyMessage')}
     >
       {copied
@@ -287,7 +287,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
     {isAssistant && !(message.error as boolean) && onThumbUp && (
       <button
         onClick={handleThumbUpClick}
-        className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
+        className="p-1 min-h-7 min-w-7 inline-flex items-center justify-center rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
         title={feedbackRating === 'thumbs_up' ? t('chat.actions.removeRating') : t('chat.actions.goodResponse')}
       >
         <ThumbsUp
@@ -300,7 +300,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
     {isAssistant && !(message.error as boolean) && onThumbDown && (
       <button
         onClick={() => setShowThumbDownModal(true)}
-        className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
+        className="p-1 min-h-7 min-w-7 inline-flex items-center justify-center rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
         title={feedbackRating === 'thumbs_down' ? t('chat.actions.feedbackSubmitted') : t('chat.actions.reportIssue')}
       >
         <ThumbsDown
@@ -317,7 +317,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
     {isAssistant && !(message.error as boolean) && onRegenerate && isTurnTail && (
       <button
         onClick={() => onRegenerate(message.id as string)}
-        className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
+        className="p-1 min-h-7 min-w-7 inline-flex items-center justify-center rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
         title={t('chat.actions.regenerate')}
       >
         <RefreshCw className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
@@ -326,7 +326,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
     {isAssistant && (message.error as boolean) && onRetry && (
       <button
         onClick={onRetry}
-        className="p-1 rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
+        className="p-1 min-h-7 min-w-7 inline-flex items-center justify-center rounded transition-colors hover:bg-[var(--color-bg-elevated)]"
         title={t('chat.actions.retry')}
       >
         <RotateCcw className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
@@ -496,8 +496,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
               the transcript bottom does not hop by a line on every pause. */}
           <AnimatePresence initial={false}>
           {isStreaming && (() => {
-            const contentSegments = message.contentSegments as ContentSegmentRecord[] | undefined;
-            const hasContent = contentSegments?.some(s => s.content?.trim()) || (message.content as string)?.trim();
+            const hasContent = projection.blocks.length > 0 || (message.content as string)?.trim();
             // A tool call being generated shows its own row in the activity
             // block; the spinner fades for it like for any other activity.
             const preparingTool = Object.keys((message.pendingToolCallChunks as Record<string, unknown>) || {}).length > 0;
@@ -522,7 +521,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
               <motion.div
                 key="streaming-indicator"
                 className="transition-opacity duration-200"
-                style={{ opacity: quiet ? 1 : 0, height: size, marginTop: hasContent ? 8 : 0, overflow: 'hidden' }}
+                style={{ opacity: quiet ? 1 : 0, height: size, marginTop: hasContent ? 12 : 0, overflow: 'hidden' }}
                 exit={{ height: 0, marginTop: 0, opacity: 0, transition: EXIT_TWEEN }}
                 aria-hidden={!quiet}
                 data-testid="streaming-indicator"
@@ -579,7 +578,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
             button takes neither a click nor a tab stop. Clicking it opens the
             Sources tab in the right panel. */}
         {isAssistant && ((sourceCount > 0 && !isSubagentView) || actionsRow) && (
-          <div className={`flex items-center gap-2 ${showTurnFiles ? 'mt-2' : 'mt-1'}`}>
+          <div className={`flex items-center gap-2 ${showTurnFiles ? 'mt-3' : 'mt-1'}`}>
             {sourceCount > 0 && !isSubagentView && (
             <div
               className="transition-opacity duration-200"

@@ -1702,6 +1702,12 @@
       "chipShowCount_other": "Show {{count}} annotations on chart",
       "chipShownCount_one": "{{count}} annotation on chart",
       "chipShownCount_other": "{{count}} annotations on chart"
+    },
+    "duration": {
+      "subSecond": "<1s",
+      "seconds": "{{value}}s",
+      "minutesSeconds": "{{minutes}}m {{seconds}}s",
+      "hoursMinutes": "{{hours}}h {{minutes}}m"
     }
   },
   "context": {

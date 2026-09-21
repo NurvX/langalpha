@@ -179,4 +179,159 @@ test.describe('activity live zone', () => {
     });
   }
 
+  test('folds a turn with a retained widget without a final downward step', async ({ page }) => {
+    await mockAPI(page, chatViewOverrides());
+    await configureSSE({ method: 'GET', path: `/api/v1/threads/${TH}/messages/replay`, events: [sseEvents.replayDone()], delay: 10 });
+    await configureSSE({ method: 'POST', path: `/api/v1/threads/${TH}/messages`, events: [
+      sseEvents.toolCalls([{ name: 'show_widget', args: { title: 'Sample table' }, id: 'toolu_widget' }]),
+      sseEvents.finishToolCalls(),
+      { event: 'artifact', data: { thread_id: TH, artifact_type: 'html_widget', artifact_id: 'sample-widget', payload: { title: 'Sample table', html: '<div style="height:180px">Widget result</div>' } } },
+      sseEvents.toolCallResult('toolu_widget', 'Displayed widget'),
+      sseEvents.messageChunk('Here is the result.'),
+      sseEvents.finishStop(),
+      sseEvents.creditUsage(),
+    ], delay: 30 });
+    await page.goto(`/chat/t/${TH}`);
+    await page.locator('textarea').fill('Show a sample table');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    const fold = page.locator('[data-turn-fold="collapsed"] button');
+    await expect(fold).toBeVisible();
+    const frame = page.locator('.inline-widget-container iframe');
+    await expect.poll(() => frame.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThan(170);
+    await fold.click();
+    await page.waitForTimeout(1000);
+    await page.evaluate(() => {
+      const widget = document.querySelector('.inline-widget-container');
+      const iframe = widget.querySelector('iframe');
+      const row = document.querySelector('[data-turn-fold]');
+      window.widgetFoldProbe = { iframe, samples: [], done: false };
+      const start = performance.now();
+      const sample = () => {
+        // Relative to the toggle, so scroll anchoring cannot mask a layout step.
+        window.widgetFoldProbe.samples.push(widget.getBoundingClientRect().top - row.getBoundingClientRect().top);
+        if (performance.now() - start < 1100) requestAnimationFrame(sample);
+        else window.widgetFoldProbe.done = true;
+      };
+      requestAnimationFrame(sample);
+    });
+    await page.locator('[data-turn-fold="expanded"] button').click();
+    await page.waitForFunction(() => window.widgetFoldProbe.done);
+    const result = await page.evaluate(() => {
+      const { samples, iframe } = window.widgetFoldProbe;
+      return {
+        travel: samples[0] - samples.at(-1),
+        maxDownwardStep: Math.max(...samples.slice(1).map((y, i) => y - samples[i])),
+        sameIframe: iframe === document.querySelector('.inline-widget-container iframe'),
+      };
+    });
+    expect(result.travel).toBeGreaterThan(10);
+    expect(result.maxDownwardStep).toBeLessThanOrEqual(0.5);
+    expect(result.sameIframe).toBe(true);
+    await expect(fold).toBeVisible();
+    await expect(frame).toBeVisible();
+  });
+
+  test('tracks a reasoning disclosure without a second trailing height animation', async ({ page }) => {
+    await mockAPI(page, chatViewOverrides());
+    await configureSSE({ method: 'GET', path: `/api/v1/threads/${TH}/messages/replay`, events: [sseEvents.replayDone()], delay: 10 });
+    await configureSSE({ method: 'POST', path: `/api/v1/threads/${TH}/messages`, events: [
+      sseEvents.messageChunk('start', 'reasoning_signal'),
+      sseEvents.messageChunk('**Checking evidence**\n\n' + 'Compare each source and verify the result.\n\n'.repeat(12), 'reasoning'),
+      sseEvents.messageChunk('complete', 'reasoning_signal'),
+      sseEvents.messageChunk('The comparison is complete.'),
+      sseEvents.finishStop(),
+      sseEvents.creditUsage(),
+    ], delay: 30 });
+    await page.goto(`/chat/t/${TH}`);
+    await page.locator('textarea').fill('Compare sources');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await page.locator('[data-turn-fold="collapsed"] button').click();
+    const thought = page.getByRole('button', { name: 'Checking evidence', exact: true });
+    await thought.click();
+    await page.waitForTimeout(1100);
+    await thought.evaluate(button => {
+      const row = button.closest('[data-activity-state]').parentElement.parentElement.parentElement;
+      const inner = row.firstElementChild;
+      const answer = [...document.querySelectorAll('p')].find(p => p.textContent === 'The comparison is complete.');
+      window.reasoningFoldProbe = { done: false, lag: [], positions: [], initialHeight: inner.getBoundingClientRect().height };
+      const start = performance.now();
+      const sample = () => {
+        window.reasoningFoldProbe.lag.push(row.getBoundingClientRect().height - inner.getBoundingClientRect().height);
+        const body = row.querySelector('.titem-reasoning-card')?.parentElement;
+        window.reasoningFoldProbe.positions.push({
+          bodyHeight: body?.getBoundingClientRect().height ?? 0,
+          answerY: answer.getBoundingClientRect().top - button.getBoundingClientRect().top,
+        });
+        if (performance.now() - start < 1200) requestAnimationFrame(sample);
+        else window.reasoningFoldProbe.done = true;
+      };
+      requestAnimationFrame(sample);
+    });
+    await thought.click();
+    await page.waitForFunction(() => window.reasoningFoldProbe.done);
+    const result = await page.evaluate(() => window.reasoningFoldProbe);
+    expect(result.initialHeight).toBeGreaterThan(200);
+    // The body owns its spacing: no trailing spring or gap removal after collapse.
+    expect(Math.max(...result.lag)).toBeLessThan(0.5);
+    const tail = result.positions.filter(sample => sample.bodyHeight < 0.1).map(sample => sample.answerY);
+    expect(tail.length).toBeGreaterThan(5);
+    expect(Math.max(...tail) - Math.min(...tail)).toBeLessThan(0.5);
+    await expect(thought).toHaveAttribute('aria-expanded', 'false');
+  });
+
+
+  for (const width of [1280, 390]) {
+    test(`spaces live cards, reasoning, batched fetches and the waiting indicator at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 1400 });
+      await mockAPI(page, chatViewOverrides());
+      await configureSSE({ method: 'GET', path: `/api/v1/threads/${TH}/messages/replay`, events: [sseEvents.replayDone()], delay: 10 });
+      const quote = { type: 'quote', quotes: [{ symbol: 'AMD', name: 'Advanced Micro Devices', price: 615.52 }] };
+      const call = (id) => sseEvents.toolCalls([{ name: 'get_quote', args: { symbol: 'AMD' }, id }]);
+      await configureSSE({ method: 'POST', path: `/api/v1/threads/${TH}/messages`, events: [
+        call('quote1'), sseEvents.finishToolCalls(),
+        { ...sseEvents.toolCallResult('quote1', 'Quote', quote), delayAfter: 2500 },
+        call('missing1'), sseEvents.finishToolCalls(),
+        sseEvents.toolCallResult('missing1', 'No card', { type: 'unsupported' }),
+        sseEvents.messageChunk('start', 'reasoning_signal'),
+        sseEvents.messageChunk('**Researching AMD valuation drivers**\n\nChecking the evidence.', 'reasoning'),
+        sseEvents.messageChunk('complete', 'reasoning_signal'),
+        call('missing2'), sseEvents.finishToolCalls(),
+        sseEvents.toolCallResult('missing2', 'No card', { type: 'unsupported' }),
+        call('quote2'), sseEvents.finishToolCalls(),
+        sseEvents.toolCallResult('quote2', 'Quote', quote),
+        sseEvents.toolCalls(['one', 'two', 'three'].map(id => ({ name: 'WebFetch', args: { url: `https://${id}.example.com` }, id }))),
+        { ...sseEvents.finishToolCalls(), delayAfter: 8000 },
+        ...['one', 'two', 'three'].map(id => sseEvents.toolCallResult(id, 'Fetched')),
+        sseEvents.finishStop(), sseEvents.creditUsage(),
+      ], delay: 50 });
+      await page.goto(`/chat/t/${TH}`);
+      await page.locator('textarea').fill('Check AMD');
+      await page.getByRole('button', { name: 'Send message', exact: true }).click();
+      const spinner = page.getByTestId('streaming-indicator');
+      await expect(page.getByText('Advanced Micro Devices', { exact: true }).first()).toBeVisible();
+      await expect(spinner).toHaveCSS('margin-top', '12px');
+      await expect(spinner).toHaveAttribute('data-quiet', 'true');
+      await page.waitForTimeout(250);
+      await page.screenshot({ path: `../output/playwright/live-spinner-after-${width}.png` });
+      const fetches = page.locator('.titem.running').filter({ hasText: 'Web Fetch' });
+      await expect(fetches).toHaveCount(3);
+      await page.waitForTimeout(900);
+      const rects = await fetches.evaluateAll(es => es.map(e => ({ y: e.getBoundingClientRect().top, h: e.getBoundingClientRect().height })));
+      expect(Math.abs((rects[1].y - rects[0].y) - (rects[2].y - rects[1].y))).toBeLessThan(0.5);
+      expect(Math.max(...rects.map(r => r.h)) - Math.min(...rects.map(r => r.h))).toBeLessThan(0.5);
+      const reasoning = page.locator('.titem').filter({ hasText: 'Researching AMD valuation drivers' });
+      const gaps = await reasoning.evaluate(el => {
+        let block = el;
+        while (block.parentElement && !block.parentElement.classList.contains('space-y-3')) block = block.parentElement;
+        return { before: block.getBoundingClientRect().top - block.previousElementSibling.getBoundingClientRect().bottom,
+          after: block.nextElementSibling.getBoundingClientRect().top - block.getBoundingClientRect().bottom };
+      });
+      // Subpixel layout: the same tolerance every other geometry check here uses.
+      expect(Math.abs(gaps.before - 12)).toBeLessThan(0.5);
+      expect(Math.abs(gaps.after - 12)).toBeLessThan(0.5);
+      await page.screenshot({ path: `../output/playwright/live-batch-after-${width}.png` });
+    });
+
+  }
+
 });

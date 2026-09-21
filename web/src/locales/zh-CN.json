@@ -1700,6 +1700,12 @@
       "chipShowCount_other": "在图表上显示 {{count}} 个标注",
       "chipShownCount_one": "图表上有 {{count}} 个标注",
       "chipShownCount_other": "图表上有 {{count}} 个标注"
+    },
+    "duration": {
+      "subSecond": "不到 1 秒",
+      "seconds": "{{value}} 秒",
+      "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒",
+      "hoursMinutes": "{{hours}} 小时 {{minutes}} 分"
     }
   },
   "context": {

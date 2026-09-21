@@ -65,6 +65,7 @@ const ActivityBlock = memo(function ActivityBlock({
   const bareReasoning = !inline && completed.length > 0 && !hasLive && !preparingToolCall
     && completed.every((item) => item.type === 'reasoning');
   const showCompleted = expanded || bareReasoning;
+  const showSummary = completed.length > 0 && !bareReasoning;
   const summary = useMemo(() => summarizeCompletedItems(completed, t, { expanded }), [completed, expanded, t]);
   const keys = useActivityRowKeys(timeline, !!preparingToolCall);
 
@@ -97,7 +98,7 @@ const ActivityBlock = memo(function ActivityBlock({
   }
 
   if (timeline.length === 0 && charts.length === 0 && !preparingToolCall) return null;
-  return <div className="mb-1">
+  return <div>
     {charts.map((item) => {
       if (item.type !== 'tool_call') return null;
       const artifact = item.toolCallResult?.artifact;
@@ -105,7 +106,7 @@ const ActivityBlock = memo(function ActivityBlock({
       return Chart ? <div key={item.id} className="mb-1.5"><Chart artifact={artifact} onClick={() => openCardTarget(artifact, onOpenChart, () => onToolCallClick?.(item))} /></div> : null;
     })}
     <AnimatePresence initial={false}>
-      {completed.length > 0 && !bareReasoning && <motion.div key="summary" className="clips-focus-ring"
+      {showSummary && <motion.div key="summary" className="clips-focus-ring"
         initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
         exit={{ opacity: 0, height: 0 }} transition={EXIT_TWEEN} style={{ overflow: 'hidden' }}>
         <button id={summaryId} type="button" aria-expanded={expanded} aria-controls={panelId}
@@ -119,12 +120,14 @@ const ActivityBlock = memo(function ActivityBlock({
         </button>
       </motion.div>}
     </AnimatePresence>
-    <div id={panelId} role="region" aria-labelledby={completed.length > 0 && !bareReasoning ? summaryId : undefined}>
+    <div id={panelId} role="region" aria-labelledby={showSummary ? summaryId : undefined}>
       <div role="list" className="timeline live-zone" data-testid="activity-live-zone">
         <AnimatePresence initial={isStreaming}>
+          {/* Segment spacing owns the outside gap. Only a summary above the
+              timeline needs an inset; standalone rows already have padding. */}
           {rows.map((row, index) => <LiveRow key={row.key}
-            gap={inline && row.live ? '0.25rem' : index === 0 ? '10px' : '0px'}
-            gapBottom={inline && row.live ? '0.25rem' : index === rows.length - 1 ? '4px' : '0px'}>
+            gap={index === 0 && showSummary ? '8px' : '0px'}
+            gapBottom="0px">
             <div role="listitem" data-activity-state={row.live ? 'live' : 'settled'}>{row.content}</div>
           </LiveRow>)}
         </AnimatePresence>

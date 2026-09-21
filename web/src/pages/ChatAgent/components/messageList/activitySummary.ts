@@ -95,7 +95,7 @@ export function thoughtDuration(items: ActivityItem[]): number | undefined {
 function fragmentLabel(f: SummaryFragment, t: TFn): string {
   if (f.slot === 'reasoning') {
     return f.thoughtMs !== undefined
-      ? t('toolArtifact.thoughtFor', { duration: formatThoughtFor(f.thoughtMs) })
+      ? t('toolArtifact.thoughtFor', { duration: formatThoughtFor(f.thoughtMs, t) })
       : t('toolArtifact.nReasoning', { count: f.count });
   }
   if (f.slot === 'skill') return t('toolArtifact.categoryCount.skill', { count: f.count });

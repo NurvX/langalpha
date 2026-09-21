@@ -283,7 +283,7 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
           const ChartComponent = artifact ? INLINE_ARTIFACT_MAP[artifact.type as string] : null;
           if (!ChartComponent) return null;
           return (
-            <div key={block.key} className="mt-1 mb-1">
+            <div key={block.key}>
               <ChartComponent
                 artifact={artifact!}
                 onClick={() => openCardTarget(artifact, onOpenChart, () => onToolCallDetailClick?.((block as CompactArtifactRenderBlock).proc))}
@@ -320,13 +320,17 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
           const widgetData = (htmlWidgetProcesses as Record<string, { html: string; title: string; data?: Record<string, string> }> | undefined)?.[widgetSeg.widgetId!];
           if (!widgetData) return null;
           return (
-            <InlineWidget
-              key={block.key}
-              html={widgetData.html}
-              title={widgetData.title}
-              onSendPrompt={onWidgetSendPrompt}
-              data={widgetData.data}
-            />
+            // Keep the widget's own margins inside a stable transcript block.
+            // Otherwise space-y overrides them until the preceding fold hides,
+            // then restores them in one frame at the end of the animation.
+            <div key={block.key} className="flow-root">
+              <InlineWidget
+                html={widgetData.html}
+                title={widgetData.title}
+                onSendPrompt={onWidgetSendPrompt}
+                data={widgetData.data}
+              />
+            </div>
           );
         }
 
@@ -483,17 +487,21 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
   };
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-3">
       {renderBlocks.map((block, blockIdx) => {
         if (heldForProse[blockIdx]) return null;
+        const content = renderBlock(block, blockIdx);
+        // Missing artifact renderers and pending proposals must not leave a
+        // spaced fold shell behind when they have nothing to display.
+        if (content === null) return null;
         if (blockFolds[blockIdx]) {
           return (
             <FoldPanel key={block.key} open={blockIsVisible[blockIdx]}>
-              {renderBlock(block, blockIdx)}
+              {content}
             </FoldPanel>
           );
         }
-        return blockIsVisible[blockIdx] ? renderBlock(block, blockIdx) : null;
+        return blockIsVisible[blockIdx] ? content : null;
       })}
       {/* At the foot of the message, not beside the card that stopped. The
           agent's closing prose was written before the gate fired and still

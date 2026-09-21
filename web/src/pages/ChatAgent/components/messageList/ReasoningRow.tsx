@@ -24,7 +24,7 @@ function useThinkingClock(startedAt: number | undefined, active: boolean, t: (k:
   }, [active, startedAt]);
   if (!active) return null;
   const raw = startedAt
-    ? t('toolArtifact.thinkingFor', { duration: formatThoughtFor(Date.now() - startedAt) })
+    ? t('toolArtifact.thinkingFor', { duration: formatThoughtFor(Date.now() - startedAt, t) })
     : t('toolArtifact.reasoningPending');
   return capitalizeFirst(raw);
 }
@@ -88,7 +88,11 @@ export const ReasoningRow = memo(function ReasoningRow({ item, defaultExpanded =
   // One header with a body under it: the body alone, since the label already
   // says the header. A run of phases: the whole thought, phases included, so
   // the open row reads as the sequence the label only shows one of.
-  const displayContent = headers.length === 1 && extractedTitle ? extractedBody : item.content;
+  // `headers` counts phases, which need a blank line to separate them, so a
+  // thought written `**Header**\nBody` promotes its header and counts zero.
+  // Reading that as "no header" put the promoted line back at the top of the
+  // body, and the open row showed it twice.
+  const displayContent = headers.length <= 1 && extractedTitle ? extractedBody : item.content;
   const hasContent = !!displayContent;
   // A row with no header of its own is named by its time, not its text: a
   // line of thought copied up as a label is noise down a timeline. Live it
@@ -97,7 +101,7 @@ export const ReasoningRow = memo(function ReasoningRow({ item, defaultExpanded =
   const clock = useThinkingClock(item.reasoningStartedAt, isStreaming && !effectiveTitle, t);
   const elapsed = item.reasoningElapsedMs;
   const durationTitle = !effectiveTitle && !isStreaming && typeof elapsed === 'number'
-    ? capitalizeFirst(t('toolArtifact.thoughtFor', { duration: formatThoughtFor(elapsed) }))
+    ? capitalizeFirst(t('toolArtifact.thoughtFor', { duration: formatThoughtFor(elapsed, t) }))
     : '';
   const title = effectiveTitle || clock || durationTitle || t('toolArtifact.reasoning');
   const titleKey = clock ? 'thinking' : title;
@@ -133,7 +137,7 @@ export const ReasoningRow = memo(function ReasoningRow({ item, defaultExpanded =
       <div className="titem-icon">
         <Brain className="h-4 w-4" />
       </div>
-      <div className="titem-body">
+      <div className="titem-body" style={{ gap: 0 }}>
         <button
           type="button"
           onClick={(e) => { if (!hasContent) return; announceAnchoredToggle(e.currentTarget); setChoice({ phase, expanded: !expanded }); }}

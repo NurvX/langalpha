@@ -269,7 +269,9 @@
 
 .titem-reasoning-card {
   margin-top: 4px;
-  padding: 0;
+  /* The disclosure must collapse its spacing too, rather than drop a flex
+     gap only after the exit animation unmounts the body. */
+  padding: 6px 0 0;
   background: transparent;
   font-size: 0.7813rem;
   line-height: 1.55;
