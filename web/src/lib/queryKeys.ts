@@ -37,9 +37,17 @@ export const queryKeys = {
     all:    ['workspaces'],
     lists:  () => [...queryKeys.workspaces.all, 'list'],
     list:   (params: Record<string, unknown>) => [...queryKeys.workspaces.lists(), params],
-    detail: (id: string) => [...queryKeys.workspaces.all, 'detail', id],
+    details: () => [...queryKeys.workspaces.all, 'detail'],
+    detail: (id: string) => [...queryKeys.workspaces.details(), id],
     flash:  () => [...queryKeys.workspaces.all, 'flash'],
     quota:  () => [...queryKeys.workspaces.all, 'quota'],
+  },
+  // One projection of a machine: the list. A detail entry would be a second
+  // place for a status to disagree with itself, and every surface that shows a
+  // machine already reads the list.
+  computers: {
+    all:   ['computers'],
+    lists: () => [...queryKeys.computers.all, 'list'],
   },
   threads: {
     all:         ['threads'],

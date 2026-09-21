@@ -49,7 +49,7 @@ async def test_refusal_follows_the_guards_and_precedes_the_truncation(
     mock_connection, mock_cursor
 ):
     # No duplicate request_key, no live root run.
-    mock_cursor.fetchone.side_effect = [None, None]
+    mock_cursor.fetchone.side_effect = [{"status": "running"}, None, None]
     calls: list[str] = []
 
     @asynccontextmanager
@@ -111,7 +111,7 @@ async def test_refusal_follows_the_guards_and_precedes_the_truncation(
 async def test_a_refused_fork_refuses_no_order(
     mock_connection, mock_cursor, live_root, live_task, refusal
 ):
-    mock_cursor.fetchone.side_effect = [None, live_root]
+    mock_cursor.fetchone.side_effect = [{"status": "running"}, None, live_root]
     refuse = AsyncMock(return_value=[])
     truncate = AsyncMock(return_value=0)
 

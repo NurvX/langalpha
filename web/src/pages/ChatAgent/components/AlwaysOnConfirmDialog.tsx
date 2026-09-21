@@ -36,11 +36,11 @@ function AlwaysOnConfirmDialog({ target, onClose, onConfirm, busy }: AlwaysOnCon
             {isStopped
               ? t('workspace.alwaysOnConfirmStopped', {
                   name: target?.name ?? '',
-                  defaultValue: 'Start "{{name}}" now and keep it running 24/7? The sandbox starts immediately, skips idle shutdown, and keeps billing until you turn always-on off.',
+                  defaultValue: 'Start the computer used by "{{name}}" and keep it running 24/7? This applies to all workspaces on it. The computer starts immediately and keeps billing until always-on is turned off.',
                 })
               : t('workspace.alwaysOnConfirm', {
                   name: target?.name ?? '',
-                  defaultValue: 'Keep "{{name}}" running 24/7? The sandbox skips idle shutdown and keeps billing until you turn always-on off.',
+                  defaultValue: 'Keep the computer used by "{{name}}" running 24/7? This applies to all workspaces on it. The computer skips idle shutdown and keeps billing until always-on is turned off.',
                 })}
           </DialogDescription>
         </DialogHeader>

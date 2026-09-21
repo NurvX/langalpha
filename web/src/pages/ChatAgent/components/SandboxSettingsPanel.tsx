@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { useBackdropDismiss, useDialogA11y } from '@/hooks/useDialogA11y';
+import { useWorkspace } from '@/hooks/useWorkspace';
+import { queryKeys } from '@/lib/queryKeys';
 import {
   formatApiErrorDetail, getSandboxStats, refreshWorkspace,
+  startComputer, stopComputer,
 } from '../utils/api';
+import { patchComputerStatusInCaches, useComputers } from '../hooks/useComputers';
+import { denialMessage } from '../utils/denialMessage';
 import { ListEmpty, ListSkeleton } from '@/components/mcp/McpPrimitives';
 import { McpTab } from './mcp/McpTab';
 import { SkillsTab } from './SkillsTab';
@@ -39,6 +46,18 @@ export function SandboxSettingsContent({ workspaceId }: { workspaceId: string })
   // Start/stop
   const [actionLoading, setActionLoading] = useState(false);
 
+  const queryClient = useQueryClient();
+  const { t } = useTranslation();
+
+  // The machine this workspace lives on. Start/stop act on it, and its name
+  // is what the panel has to say out loud before the user stops five projects.
+  const { data: workspace } = useWorkspace(workspaceId);
+  const computerId = workspace?.computer_id ?? null;
+  const { data: computerData } = useComputers({ enabled: !!computerId });
+  const computer = computerId
+    ? computerData?.computers.find((c) => c.computer_id === computerId) ?? null
+    : null;
+
   // Only the newest stats request may commit. Refresh is deliberately never
   // disabled, so a slow full-path read (~15s of probes) can still be in flight
   // when a faster post-action read lands — without this the older response wins
@@ -51,16 +70,7 @@ export function SandboxSettingsContent({ workspaceId }: { workspaceId: string })
   const [vaultPrefillSecret, setVaultPrefillSecret] = useState<string | null>(null);
   const consumeVaultPrefill = useCallback(() => setVaultPrefillSecret(null), []);
 
-  useEffect(() => {
-    if (!workspaceId) return;
-    // Drop the outgoing workspace's stats before reading the new one. A refresh
-    // now keeps the panel on screen rather than blanking it, so without this a
-    // workspace switch would render the old sandbox under the new id.
-    setStats(null);
-    loadStats();
-  }, [workspaceId]);
-
-  async function loadStats() {
+  const loadStats = useCallback(async () => {
     const requestId = ++statsRequestRef.current;
     setLoading(true);
     setError(null);
@@ -74,16 +84,35 @@ export function SandboxSettingsContent({ workspaceId }: { workspaceId: string })
     } finally {
       if (requestId === statsRequestRef.current) setLoading(false);
     }
-  }
+  }, [workspaceId]);
 
+  useEffect(() => {
+    if (!workspaceId) return;
+    // Drop the outgoing workspace's stats before reading the new one. A refresh
+    // now keeps the panel on screen rather than blanking it, so without this a
+    // workspace switch would render the old sandbox under the new id.
+    setStats(null);
+    void loadStats();
+  }, [workspaceId, computer?.status, loadStats]);
+
+  // Start and stop belong to the machine: its sandbox is what runs, and every
+  // workspace on it moves together. Archive still goes through the workspace
+  // alias, which resolves to the same machine server-side.
   async function handleStartStop(action: string) {
     setActionLoading(true);
     try {
-      await api.post(`/api/v1/workspaces/${workspaceId}/${action}`);
+      if (computerId && (action === 'start' || action === 'stop')) {
+        const res = action === 'start'
+          ? await startComputer(computerId, { lazy: true })
+          : await stopComputer(computerId);
+        patchComputerStatusInCaches(queryClient, computerId, res.status);
+        void queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.all });
+      } else {
+        await api.post(`/api/v1/workspaces/${workspaceId}/${action}`);
+      }
       await loadStats();
     } catch (err) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(detail || `Failed to ${action} workspace`);
+      setError(denialMessage(err, t));
     } finally {
       setActionLoading(false);
     }
@@ -121,7 +150,8 @@ export function SandboxSettingsContent({ workspaceId }: { workspaceId: string })
 
   // Canonical value only. Provider synonyms are the API's job to translate — see
   // _DISPLAY_STATE_SYNONYMS server-side.
-  const isRunning = stats?.state === 'running';
+  const displayStats = stats && computer ? { ...stats, state: computer.status } : stats;
+  const isRunning = displayStats?.state === 'running';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -156,12 +186,15 @@ export function SandboxSettingsContent({ workspaceId }: { workspaceId: string })
         <>
           {activeTab === 'overview' && (
             <OverviewTab
-              stats={stats!}
+              stats={displayStats!}
               isRunning={isRunning}
               actionLoading={actionLoading}
               refreshing={loading}
               onStartStop={handleStartStop}
               onRefresh={loadStats}
+              computerName={computer?.name ?? null}
+              recoverableCreating={computer?.status === 'creating'}
+              dirName={workspace?.dir_name ?? null}
             />
           )}
           {activeTab === 'vault' && (
@@ -178,7 +211,7 @@ export function SandboxSettingsContent({ workspaceId }: { workspaceId: string })
           {activeTab === 'storage' && (
             isRunning ? (
               <StorageTab
-                stats={stats!}
+                stats={displayStats!}
                 showDirBreakdown={showDirBreakdown}
                 onToggleBreakdown={() => setShowDirBreakdown(!showDirBreakdown)}
               />
@@ -201,7 +234,7 @@ export function SandboxSettingsContent({ workspaceId }: { workspaceId: string })
           {activeTab === 'tools' && (
             isRunning ? (
               <ToolsTab
-                stats={stats!}
+                stats={displayStats!}
                 refreshing={refreshing}
                 refreshResult={refreshResult}
                 onRefresh={handleRefresh}

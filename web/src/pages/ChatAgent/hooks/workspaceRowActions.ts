@@ -20,6 +20,12 @@ interface CachedWorkspaceList {
 
 export type WorkspaceQueriesSnapshot = ReturnType<QueryClient['getQueriesData']>;
 
+/** Refresh both sides of the workspace-to-computer membership projection. */
+export function invalidateWorkspaceMembership(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.all });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.computers.all });
+}
+
 /**
  * Optimistically patch one workspace across every cached list. Returns the
  * snapshot so the caller can roll back on error.

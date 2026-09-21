@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { Pin, Pencil, Cpu, Copy, Trash2, Infinity as InfinityIcon } from 'lucide-react';
 import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/use-toast';
@@ -13,19 +13,21 @@ import {
   setWorkspaceSpec,
   setWorkspaceAlwaysOn,
   duplicateWorkspace,
-  getWorkspaceQuota,
   formatApiErrorDetail,
   apiErrorDetailMessage,
   apiErrorStatus,
 } from '../utils/api';
 import { useWorkspaceMutation } from '../hooks/useWorkspaceMutation';
+import { invalidateWorkspaceMembership } from '../hooks/workspaceRowActions';
+import { useTierQuota } from '../hooks/useTierQuota';
 import { forgetStableNavOrder } from '../hooks/useNavigationData';
 import { forgetSharedWorkspaceThreads } from '@/lib/navThreadsStore';
 import { removeStoredThreadId } from '../hooks/useChatMessages';
 import { clearAllMarketThreadsForWorkspace } from '../../MarketView/utils/threadPersistence';
 import { forgetNavPanelExpansion } from './navExpansionStore';
 import { scrollMemory } from '@/lib/scrollMemory';
-import ChangeSpecDialog, { tierLabel } from './ChangeSpecDialog';
+import ChangeSpecDialog from './ChangeSpecDialog';
+import { tierLabel } from './tierUi';
 import DeleteConfirmModal from './DeleteConfirmModal';
 import DuplicateWorkspaceDialog from './DuplicateWorkspaceDialog';
 import AlwaysOnConfirmDialog from './AlwaysOnConfirmDialog';
@@ -186,6 +188,7 @@ export function useWorkspaceActions({
     mutationFn: (wsId, tier) => setWorkspaceSpec(wsId, tier),
     optimisticPatch: (tier) => ({ resource_tier: tier }),
     invalidateQuota: true,
+    affectsComputer: true,
     errorTitleKey: 'workspace.specFailed',
     mapError: (err, tier) => entitlementErrorMessage(err, t, tier),
   });
@@ -193,25 +196,20 @@ export function useWorkspaceActions({
     mutationFn: (wsId, next) => setWorkspaceAlwaysOn(wsId, next),
     optimisticPatch: (next) => ({ is_always_on: next }),
     invalidateQuota: true,
+    affectsComputer: true,
     errorTitleKey: 'workspace.alwaysOnFailed',
     mapError: (err) => entitlementErrorMessage(err, t),
   });
 
-  // Per-tier count quotas for the change-spec dialog's "N left" hint.
-  // Platform mode only, fetched lazily when the dialog opens; null in OSS mode.
-  const { data: workspaceQuota } = useQuery({
-    queryKey: queryKeys.workspaces.quota(),
-    queryFn: getWorkspaceQuota,
-    enabled: isPlatformMode && !!upgradeTarget,
-    staleTime: 60_000,
-  });
+  // The "N left" hint beside each tier in the change-spec dialog.
+  const { data: workspaceQuota } = useTierQuota({ enabled: !!upgradeTarget });
 
   const handleUpgradeSubmit = async (tier: ResourceTier) => {
     if (!upgradeTarget) return;
     const ok = await upgradeMutation.run(upgradeTarget.workspace_id, tier);
     if (ok) {
       setUpgradeTarget(null);
-      toast({ title: t('workspace.specUpdated', 'Workspace spec updated'), description: tierLabel(t, tier) });
+      toast({ title: t('workspace.specUpdated', 'Computer spec updated'), description: tierLabel(t, tier) });
       onAfterMutate?.('spec');
     }
   };
@@ -238,7 +236,7 @@ export function useWorkspaceActions({
     setDuplicateBusy(true);
     try {
       await duplicateWorkspace(duplicateTarget.workspace_id);
-      queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.lists() });
+      invalidateWorkspaceMembership(queryClient);
       queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.quota() });
       setDuplicateTarget(null);
       toast({ title: t('workspace.duplicated', 'Workspace duplicated') });
@@ -268,7 +266,7 @@ export function useWorkspaceActions({
       forgetSharedWorkspaceThreads(wsId);
       scrollMemory.forget(`threads:${wsId}:active`);
       scrollMemory.forget(`threads:${wsId}:archived`);
-      queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.lists() });
+      invalidateWorkspaceMembership(queryClient);
       onAfterDelete?.(wsId);
       if (currentWorkspaceId === wsId) {
         navigate('/chat');

@@ -13,6 +13,7 @@ export interface UseWorkspaceMutationOptions<A> {
   optimisticPatch?: (args: A) => Record<string, unknown>;
   /** Also invalidate the per-tier quota query on success. */
   invalidateQuota?: boolean;
+  affectsComputer?: boolean;
   /** i18n key for the failure toast title. */
   errorTitleKey: string;
   /** Map an error to the failure toast description (defaults to formatApiErrorDetail). */
@@ -43,7 +44,7 @@ export function useWorkspaceMutation<A>(
 
   const run = useCallback(
     async (wsId: string, args: A): Promise<boolean> => {
-      const { mutationFn, optimisticPatch, invalidateQuota, errorTitleKey, mapError } = optionsRef.current;
+      const { mutationFn, optimisticPatch, invalidateQuota, affectsComputer, errorTitleKey, mapError } = optionsRef.current;
 
       // Dedupe inside the functional update so a fast double-submit (two calls in
       // one render frame, both seeing a stale closure) can't fire twice.
@@ -57,8 +58,13 @@ export function useWorkspaceMutation<A>(
       const previous = optimisticPatch ? patchCachedWorkspace(queryClient, wsId, optimisticPatch(args)) : null;
       try {
         await mutationFn(wsId, args);
-        queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.lists() });
-        queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.detail(wsId) });
+        if (affectsComputer) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.all });
+          queryClient.invalidateQueries({ queryKey: queryKeys.computers.all });
+        } else {
+          queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.lists() });
+          queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.detail(wsId) });
+        }
         if (invalidateQuota) queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.quota() });
         return true;
       } catch (err) {

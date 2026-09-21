@@ -16,6 +16,9 @@ import logging
 import re
 import shlex
 import time
+import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -29,7 +32,10 @@ from src.server.database.workspace import (
     get_preview_command,
     get_workspace as db_get_workspace,
 )
+from src.server.app.workspace_files._shared import work_dir_for
+from src.server.services.workspace_layout import WorkspaceLayoutUnavailable
 from src.server.services.workspace_manager import WorkspaceManager
+from ptc_agent.core.paths import DEFAULT_SANDBOX_ROOT, WorkspaceLayout
 from ptc_agent.core.sandbox import PTCSandbox
 from src.utils.cache.redis_cache import get_cache_client
 
@@ -38,6 +44,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/workspaces", tags=["Workspace Sandbox"])
 
 _SIGNED_URL_TTL = 3000  # 50 min (signed URLs expire in 1h)
+_PREVIEW_LAUNCH_LEASE_TTL_MS = 60_000
+_PREVIEW_LAUNCH_WAIT_S = 45.0
 
 # Provider-native synonyms for "up and usable", canonicalized for the wire.
 # get_metadata() is provider-specific by contract, so daytona reports "started"
@@ -54,8 +62,8 @@ def _configured_provider() -> str | None:
     defeat the disk-quota branch this value exists to drive.
 
     Reads ``config.sandbox`` directly rather than via ``to_core_config()``, which
-    deep-copies the MCP config to hand each workspace its own — wasted work here,
-    since it passes ``sandbox`` straight through.
+    deep-copies every section to hand each workspace its own. That is wasted work
+    for a single field that reads the same in the copy and in the original.
     """
     try:
         config = WorkspaceManager.get_instance().config
@@ -64,6 +72,23 @@ def _configured_provider() -> str | None:
     except Exception as e:
         logger.debug(f"Could not resolve the configured sandbox provider: {e}")
         return None
+
+
+async def _provider_kind(workspace_id: str) -> str | None:
+    """Which provider this workspace's machine runs on.
+
+    The computer row carries the kind it was created with, so one deployment can
+    serve more than one backend and the reported provider has to come from the
+    machine. A workspace with no computer row reports the deployment's.
+    """
+    try:
+        manager = WorkspaceManager.get_instance()
+        kind = await manager.provider_kind_for_workspace(workspace_id)
+        if kind:
+            return kind
+    except Exception as e:
+        logger.debug(f"Could not resolve the machine's sandbox provider: {e}")
+    return _configured_provider()
 
 
 def _display_state(state: Any) -> str | None:
@@ -99,6 +124,61 @@ def _preview_cache_key(sandbox_id: str, port: int) -> str:
     return f"preview:signed_url:{sandbox_id}:{port}"
 
 
+def _preview_owner_key(sandbox_id: str, port: int) -> str:
+    return f"preview:owner:{sandbox_id}:{port}"
+
+
+def _preview_launch_key(sandbox_id: str, port: int) -> str:
+    return f"preview:launch:{sandbox_id}:{port}"
+
+
+@asynccontextmanager
+async def _preview_launch_lease(sandbox_id: str, port: int) -> AsyncIterator[None]:
+    """Serialize one machine port across workers while its owner is decided."""
+    cache = get_cache_client()
+    key = _preview_launch_key(sandbox_id, port)
+    token = uuid.uuid4().hex
+    held = False
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _PREVIEW_LAUNCH_WAIT_S
+    while True:
+        acquired = await cache.acquire_lock(
+            key, token, _PREVIEW_LAUNCH_LEASE_TTL_MS
+        )
+        if acquired is None:
+            raise RuntimeError(
+                "Preview coordination is unavailable. Try again."
+            )
+        if acquired:
+            held = True
+            break
+        if loop.time() >= deadline:
+            raise RuntimeError(f"Port {port} is busy. Try again.")
+        await asyncio.sleep(0.05)
+    try:
+        yield
+    finally:
+        if held:
+            await asyncio.shield(cache.release_lock(key, token))
+
+
+async def _get_preview_owner(sandbox_id: str, port: int) -> str | None:
+    return await get_cache_client().get(_preview_owner_key(sandbox_id, port))
+
+
+async def _set_preview_owner(sandbox_id: str, port: int, workspace_id: str) -> None:
+    # The sandbox id scopes this claim to one machine lifetime. Keep it while
+    # that machine exists so another worker can recognize the running server
+    # after the short signed-URL cache expires.
+    await get_cache_client().set(
+        _preview_owner_key(sandbox_id, port), workspace_id
+    )
+
+
+async def _delete_preview_owner(sandbox_id: str, port: int) -> None:
+    await get_cache_client().delete(_preview_owner_key(sandbox_id, port))
+
+
 async def _get_cached_signed_url(sandbox_id: str, port: int) -> str | None:
     """Get cached signed URL from Redis."""
     cache = get_cache_client()
@@ -106,7 +186,12 @@ async def _get_cached_signed_url(sandbox_id: str, port: int) -> str | None:
 
 
 async def _set_cached_signed_url(
-    sandbox_id: str, port: int, url: str, *, expires_in: int | None = None,
+    sandbox_id: str,
+    port: int,
+    url: str,
+    *,
+    expires_in: int | None = None,
+    owner_workspace_id: str | None = None,
 ) -> None:
     """Cache a signed URL in Redis with TTL.
 
@@ -121,6 +206,8 @@ async def _set_cached_signed_url(
         ttl = _SIGNED_URL_TTL
     cache = get_cache_client()
     await cache.set(_preview_cache_key(sandbox_id, port), url, ttl=ttl)
+    if owner_workspace_id:
+        await _set_preview_owner(sandbox_id, port, owner_workspace_id)
 
 
 async def _delete_cached_signed_url(sandbox_id: str, port: int) -> None:
@@ -274,7 +361,9 @@ def _parse_df_output(stdout: str) -> DiskOverview | None:
     )
 
 
-def _parse_du_output(stdout: str, work_dir: str = "/home/workspace") -> list[DirectorySize]:
+def _parse_du_output(
+    stdout: str, work_dir: str = DEFAULT_SANDBOX_ROOT
+) -> list[DirectorySize]:
     """Parse `du -sh <work_dir>/*/` output into directory sizes."""
     work_dir_prefix = work_dir.rstrip("/") + "/"
     results: list[DirectorySize] = []
@@ -373,28 +462,27 @@ async def _get_offline_sandbox_stats(
 ) -> SandboxStatsResponse:
     """Get sandbox metadata for stopped/archived workspaces via Daytona API (no start)."""
     sandbox_id = workspace.get("sandbox_id")
+    provider_kind = await _provider_kind(workspace_id)
     if not sandbox_id:
         return SandboxStatsResponse(
             workspace_id=workspace_id,
             state=workspace.get("status", "unknown"),
-            provider=_configured_provider(),
+            provider=provider_kind,
             created_at=str(workspace.get("created_at", "")),
             resources=SandboxResources(),
         )
 
-    from ptc_agent.core.sandbox.providers import create_provider
-
     manager = WorkspaceManager.get_instance()
     provider = None
     try:
-        provider = create_provider(manager.config.to_core_config())
+        provider = await manager.provider_for_workspace(workspace_id)
         runtime = await provider.get(sandbox_id)
         meta = await runtime.get_metadata()
         return SandboxStatsResponse(
             workspace_id=workspace_id,
             sandbox_id=sandbox_id,
             state=_offline_display_state(meta.get("state"), workspace.get("status")),
-            provider=_configured_provider(),
+            provider=provider_kind,
             created_at=str(meta["created_at"]) if meta.get("created_at") else None,
             auto_stop_interval=meta.get("auto_stop_interval"),
             resources=SandboxResources(
@@ -410,7 +498,7 @@ async def _get_offline_sandbox_stats(
             workspace_id=workspace_id,
             sandbox_id=sandbox_id,
             state=workspace.get("status", "unknown"),
-            provider=_configured_provider(),
+            provider=provider_kind,
             created_at=str(workspace.get("created_at", "")),
             resources=SandboxResources(),
         )
@@ -426,6 +514,9 @@ async def _get_full_sandbox_stats(
 ) -> SandboxStatsResponse:
     """Get full sandbox stats for running workspaces (disk, packages, MCP, skills)."""
     session, sandbox = await _get_sandbox(workspace_id, x_user_id)
+    view = WorkspaceManager.get_instance().tool_view(session, workspace_id)
+    mcp_servers = list(view.mcp_registry.connectors) if view.mcp_registry else []
+    provider_kind = await _provider_kind(workspace_id)
 
     # --- 1. Static properties from the runtime metadata ---
     resources = SandboxResources()
@@ -495,7 +586,7 @@ async def _get_full_sandbox_stats(
         try:
             # Read SKILL.md frontmatter from each skill directory
             cmd = (
-                f"for d in {work_dir}/.agents/skills/*/; do "
+                f"for d in {shlex.quote(WorkspaceLayout(work_dir, workspace.get("dir_name")).skills)}/*/; do "
                 '  [ -f "$d/SKILL.md" ] && echo "=== $(basename "$d") ===" && head -5 "$d/SKILL.md"; '
                 "done 2>/dev/null || true"
             )
@@ -513,22 +604,13 @@ async def _get_full_sandbox_stats(
         _get_skills(),
     )
 
-    # --- 3. MCP servers ---
-    mcp_servers: list[str] = []
-    try:
-        registry = getattr(session, "mcp_registry", None)
-        if registry is not None:
-            mcp_servers = list(registry.connectors.keys())
-    except Exception:
-        pass
-
     default_packages = list(PTCSandbox.DEFAULT_DEPENDENCIES)
 
     return SandboxStatsResponse(
         workspace_id=workspace_id,
         sandbox_id=sandbox_id,
         state=state,
-        provider=_configured_provider(),
+        provider=provider_kind,
         created_at=created_at,
         auto_stop_interval=auto_stop_interval,
         resources=resources,
@@ -606,6 +688,7 @@ async def _resolve_preview(
     command: str | None | object = _UNSET,
     force: bool = False,
     expires_in: int = 3600,
+    work_dir: str,
 ) -> str:
     """Core preview URL resolution — shared by the POST and redirect endpoints.
 
@@ -627,39 +710,108 @@ async def _resolve_preview(
         cmd = await get_preview_command(workspace_id, port)
 
     if cmd:
-        # Short-lived cache (60s) when a command is stored — covers burst
-        # asset requests (CSS/JS/images) without risking long-lived stale URLs.
+        async with _preview_launch_lease(sandbox.sandbox_id, port):
+            # Read ownership only after winning the cross-worker launch lease.
+            # The owner is reserved before provider work, so a sibling cannot
+            # launch a second command while this one is still becoming ready.
+            owner = await _get_preview_owner(sandbox.sandbox_id, port)
+            # Short-lived cache (60s) when a command is stored — covers burst
+            # asset requests (CSS/JS/images) without risking long-lived stale URLs.
+            if not force:
+                cached_url = await _get_cached_signed_url(sandbox.sandbox_id, port)
+                if cached_url:
+                    healthy = (
+                        await _is_preview_live_confirmed(sandbox.sandbox_id, port)
+                        or await _check_signed_url_healthy(cached_url)
+                    )
+                    if healthy and owner not in (None, workspace_id):
+                        raise RuntimeError(
+                            f"Port {port} is already in use on this computer. "
+                            "Choose another port."
+                        )
+                    if healthy:
+                        await _set_preview_live_confirmed(
+                            sandbox.sandbox_id, port, ttl=10
+                        )
+                        await _set_preview_owner(
+                            sandbox.sandbox_id, port, workspace_id
+                        )
+                        return cached_url
+
+            # A different worker does not have the provider session in its local
+            # map. The durable owner claim lets it reuse the healthy process rather
+            # than treating the workspace's own server as a port collision.
+            if owner == workspace_id and await sandbox._is_preview_reachable(port):
+                preview_info = await sandbox.get_preview_url(port, expires_in)
+                await _set_cached_signed_url(
+                    sandbox.sandbox_id,
+                    port,
+                    preview_info.url,
+                    expires_in=60,
+                    owner_workspace_id=workspace_id,
+                )
+                return preview_info.url
+            if owner not in (None, workspace_id):
+                if await sandbox._is_preview_reachable(port):
+                    raise RuntimeError(
+                        f"Port {port} is already in use on this computer. "
+                        "Choose another port."
+                    )
+                await _delete_preview_owner(sandbox.sandbox_id, port)
+
+            await _set_preview_owner(sandbox.sandbox_id, port, workspace_id)
+            try:
+                preview_info = await sandbox.start_and_get_preview_url(
+                    f"cd {shlex.quote(work_dir)} && {cmd}",
+                    port,
+                    expires_in=expires_in,
+                    owner=workspace_id,
+                )
+                await _set_cached_signed_url(
+                    sandbox.sandbox_id,
+                    port,
+                    preview_info.url,
+                    expires_in=60,
+                    owner_workspace_id=workspace_id,
+                )
+                return preview_info.url
+            except BaseException:
+                await _delete_preview_owner(sandbox.sandbox_id, port)
+                raise
+
+    # A commandless redirect still addresses a shared machine port. Serialize
+    # with launch so it cannot observe half-published ownership, and fail closed
+    # when Redis cannot prove which workspace owns the service.
+    async with _preview_launch_lease(sandbox.sandbox_id, port):
+        owner = await _get_preview_owner(sandbox.sandbox_id, port)
+        if owner not in (None, workspace_id):
+            if await sandbox._is_preview_reachable(port):
+                raise RuntimeError(
+                    f"Port {port} is already in use on this computer. "
+                    "Choose another port."
+                )
+            await _delete_preview_owner(sandbox.sandbox_id, port)
+
+        # No command known — try signed-URL cache, then generate fresh.
         if not force:
             cached_url = await _get_cached_signed_url(sandbox.sandbox_id, port)
             if cached_url:
-                if await _is_preview_live_confirmed(sandbox.sandbox_id, port) \
-                        or await _check_signed_url_healthy(cached_url):
-                    await _set_preview_live_confirmed(sandbox.sandbox_id, port, ttl=10)
+                healthy = (
+                    await _is_preview_live_confirmed(sandbox.sandbox_id, port)
+                    or await _check_signed_url_healthy(cached_url)
+                )
+                if healthy:
+                    await _set_preview_live_confirmed(
+                        sandbox.sandbox_id, port, ttl=10
+                    )
                     return cached_url
 
-        preview_info = await sandbox.start_and_get_preview_url(
-            cmd, port, expires_in=expires_in,
-        )
+        await _delete_cached_signed_url(sandbox.sandbox_id, port)
+        preview_info = await sandbox.get_preview_url(port, expires_in=expires_in)
         await _set_cached_signed_url(
-            sandbox.sandbox_id, port, preview_info.url, expires_in=60,
+            sandbox.sandbox_id, port, preview_info.url, expires_in=expires_in,
         )
         return preview_info.url
-
-    # No command known — try signed-URL cache, then generate fresh.
-    if not force:
-        cached_url = await _get_cached_signed_url(sandbox.sandbox_id, port)
-        if cached_url:
-            if await _is_preview_live_confirmed(sandbox.sandbox_id, port) \
-                    or await _check_signed_url_healthy(cached_url):
-                await _set_preview_live_confirmed(sandbox.sandbox_id, port, ttl=10)
-                return cached_url
-
-    await _delete_cached_signed_url(sandbox.sandbox_id, port)
-    preview_info = await sandbox.get_preview_url(port, expires_in=expires_in)
-    await _set_cached_signed_url(
-        sandbox.sandbox_id, port, preview_info.url, expires_in=expires_in,
-    )
-    return preview_info.url
 
 
 @router.post("/{workspace_id}/sandbox/preview-url")
@@ -673,12 +825,20 @@ async def get_sandbox_preview_url(
     If command is provided, starts the server process in background before generating the URL.
     """
     _session, sandbox = await _get_sandbox(workspace_id, x_user_id)
+    workspace = await db_get_workspace(workspace_id)
+    try:
+        work_dir = work_dir_for(workspace)
+    except WorkspaceLayoutUnavailable as e:
+        raise HTTPException(
+            status_code=503, detail="Workspace files are not available"
+        ) from e
 
     try:
         url = await _resolve_preview(
             sandbox, workspace_id, body.port,
             command=body.command if body.command else _UNSET,
             force=body.force, expires_in=body.expires_in,
+            work_dir=work_dir,
         )
         return PreviewUrlResponse(url=url, port=body.port, expires_in=body.expires_in)
     except HTTPException:
@@ -762,9 +922,34 @@ async def restart_preview_server(
 ) -> PreviewRestartResponse:
     """Restart a preview server process in the workspace sandbox."""
     _session, sandbox = await _get_sandbox(workspace_id, x_user_id)
+    workspace = await db_get_workspace(workspace_id)
+    try:
+        work_dir = work_dir_for(workspace)
+    except WorkspaceLayoutUnavailable as e:
+        raise HTTPException(
+            status_code=503, detail="Workspace files are not available"
+        ) from e
 
     try:
-        await sandbox.start_preview_server(body.command, body.port)
+        async with _preview_launch_lease(sandbox.sandbox_id, body.port):
+            owner = await _get_preview_owner(sandbox.sandbox_id, body.port)
+            if owner not in (None, workspace_id):
+                if await sandbox._is_preview_reachable(body.port):
+                    raise RuntimeError(
+                        f"Port {body.port} is already in use on this computer. "
+                        "Choose another port."
+                    )
+                await _delete_preview_owner(sandbox.sandbox_id, body.port)
+            await _set_preview_owner(sandbox.sandbox_id, body.port, workspace_id)
+            try:
+                await sandbox.start_preview_server(
+                    f"cd {shlex.quote(work_dir)} && {body.command}",
+                    body.port,
+                    owner=workspace_id,
+                )
+            except BaseException:
+                await _delete_preview_owner(sandbox.sandbox_id, body.port)
+                raise
         return PreviewRestartResponse(success=True)
     except Exception:
         logger.exception(
@@ -818,7 +1003,19 @@ async def _preview_redirect(workspace_id: str, port: int, path: str = "") -> Res
             raise HTTPException(status_code=503, detail="Sandbox not available")
 
         try:
-            signed_url = await _resolve_preview(sandbox, workspace_id, port, command=preview_cmd)
+            try:
+                work_dir = work_dir_for(workspace)
+            except WorkspaceLayoutUnavailable:
+                raise HTTPException(
+                    status_code=503, detail="Sandbox not ready"
+                ) from None
+            signed_url = await _resolve_preview(
+                sandbox,
+                workspace_id,
+                port,
+                command=preview_cmd,
+                work_dir=work_dir,
+            )
         except NotImplementedError:
             raise HTTPException(
                 status_code=501,

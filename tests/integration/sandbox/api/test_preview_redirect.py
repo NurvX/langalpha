@@ -22,12 +22,19 @@ from tests.conftest import create_test_app
 from tests.integration.sandbox.conftest import _make_core_config
 from tests.integration.sandbox.memory_provider import MemoryProvider
 
-from .conftest import TEST_USER_ID, TEST_WS_ID, _make_workspace
+from .conftest import TEST_PROJECT, TEST_USER_ID, TEST_WS_ID, _make_workspace
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 PREVIEW_BASE = f"/api/v1/preview/{TEST_WS_ID}"
 FAKE_SIGNED_URL = "https://test-preview.example.com/proxy/8080"
+
+
+def _workspace_for(sandbox, *, status="running"):
+    return _make_workspace(
+        status=status,
+        computer_root_dir=sandbox.config.filesystem.working_directory,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +61,7 @@ async def sandbox(sandbox_base_dir):
         return_value=provider,
     ):
         sb = PTCSandbox(config)
-        await sb.setup_sandbox_workspace()
+        await sb.setup_sandbox_workspace(dir_name=TEST_PROJECT.dir_name)
         actual_work_dir = await sb.runtime.fetch_working_dir()
         sb.config.filesystem.working_directory = actual_work_dir
         sb.config.filesystem.allowed_directories = [actual_work_dir, "/tmp"]
@@ -97,7 +104,7 @@ async def preview_client(mock_session, sandbox):
     with (
         patch(
             "src.server.app.workspace_sandbox.db_get_workspace",
-            AsyncMock(return_value=_make_workspace()),
+            AsyncMock(return_value=_workspace_for(sandbox)),
         ),
         patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
         patch(
@@ -162,7 +169,7 @@ class TestPreviewRedirectStoppedWorkspace:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace(status="stopped")),
+                AsyncMock(return_value=_workspace_for(sandbox, status="stopped")),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
         ):
@@ -216,7 +223,7 @@ class TestPreviewRedirectWithPath:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
             patch(
@@ -249,7 +256,7 @@ class TestPreviewRedirectWithPath:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
             patch(
@@ -291,7 +298,7 @@ class TestPreviewRedirectPathTraversal:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
             patch(
@@ -322,7 +329,7 @@ class TestPreviewRedirectPathTraversal:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
             patch(
@@ -376,7 +383,7 @@ class TestPreviewRedirectTimeout:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
             patch(
@@ -413,7 +420,7 @@ class TestPreviewRedirectNotImplemented:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
             patch(
@@ -472,7 +479,7 @@ class TestPreviewRedirectSessionNotReady:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
         ):
@@ -503,7 +510,7 @@ class TestPreviewRedirectSessionNotReady:
         with (
             patch(
                 "src.server.app.workspace_sandbox.db_get_workspace",
-                AsyncMock(return_value=_make_workspace()),
+                AsyncMock(return_value=_workspace_for(sandbox)),
             ),
             patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,
         ):
@@ -533,7 +540,7 @@ class TestStartPreviewServer:
     """
 
     async def test_creates_per_port_session(self, sandbox):
-        """start_preview_server creates a session named 'preview-{port}'."""
+        """Each start owns a distinct session so another worker cannot replace it."""
         created_sessions = []
 
         async def fake_create_session(session_id):
@@ -550,10 +557,11 @@ class TestStartPreviewServer:
         cmd_id = await sandbox.start_preview_server("python -m http.server 8080", 8080)
 
         assert cmd_id == "cmd-001"
-        assert "preview-8080" in created_sessions
+        assert any(sid.startswith("preview-8080-") for sid in created_sessions)
         assert 8080 in sandbox._preview_sessions
         session_id, stored_cmd_id = sandbox._preview_sessions[8080]
-        assert session_id == "preview-8080"
+        assert session_id in created_sessions
+        assert session_id.startswith("preview-8080-")
         assert stored_cmd_id == "cmd-001"
 
     async def test_replaces_existing_session_on_same_port(self, sandbox):
@@ -587,12 +595,14 @@ class TestStartPreviewServer:
         assert cmd_id_1 == "cmd-001"
         assert 8080 in sandbox._preview_sessions
 
+        first_session = sandbox._preview_sessions[8080][0]
         # Second start on the same port
         cmd_id_2 = await sandbox.start_preview_server("python -m http.server 8080", 8080)
         assert cmd_id_2 == "cmd-002"
 
-        # Old session should have been deleted
-        assert "preview-8080" in deleted_sessions
+        # Old session should have been deleted, and the replacement is distinct.
+        assert first_session in deleted_sessions
+        assert sandbox._preview_sessions[8080][0] != first_session
         # New session entry should replace the old one
         _, stored_cmd_id = sandbox._preview_sessions[8080]
         assert stored_cmd_id == "cmd-002"
@@ -621,12 +631,13 @@ class TestStartPreviewServer:
         await sandbox.start_preview_server("python -m http.server 3000", 3000)
         await sandbox.start_preview_server("python -m http.server 8080", 8080)
 
-        assert "preview-3000" in created_sessions
-        assert "preview-8080" in created_sessions
+        assert any(sid.startswith("preview-3000-") for sid in created_sessions)
+        assert any(sid.startswith("preview-8080-") for sid in created_sessions)
         assert 3000 in sandbox._preview_sessions
         assert 8080 in sandbox._preview_sessions
-        assert sandbox._preview_sessions[3000][0] == "preview-3000"
-        assert sandbox._preview_sessions[8080][0] == "preview-8080"
+        assert sandbox._preview_sessions[3000][0] in created_sessions
+        assert sandbox._preview_sessions[8080][0] in created_sessions
+        assert sandbox._preview_sessions[3000][0] != sandbox._preview_sessions[8080][0]
 
 
 class TestStopPreviewServer:
@@ -654,10 +665,11 @@ class TestStopPreviewServer:
         await sandbox.start_preview_server("python -m http.server 8080", 8080)
         assert 8080 in sandbox._preview_sessions
 
+        session_id = sandbox._preview_sessions[8080][0]
         result = await sandbox.stop_preview_server(8080)
 
         assert result is True
-        assert "preview-8080" in deleted_sessions
+        assert session_id in deleted_sessions
         assert 8080 not in sandbox._preview_sessions
 
     async def test_stop_nonexistent_port_returns_false(self, sandbox):

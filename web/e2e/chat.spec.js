@@ -95,6 +95,7 @@ test.describe('Workspace Gallery', () => {
   test('empty state shows create prompt', async ({ page }) => {
     // Override flash workspace POST to fail so no workspaces exist at all
     await mockAPI(page, {
+      'GET /workspaces': { workspaces: [], total: 0, limit: 20, offset: 0 },
       'POST /workspaces/flash': (route) =>
         route.fulfill({ status: 500, contentType: 'application/json', body: '{"detail":"error"}' }),
     });
@@ -104,6 +105,42 @@ test.describe('Workspace Gallery', () => {
     await expect(page.locator('button', { hasText: 'Create Workspace' })).toBeVisible({ timeout: 10000 });
   });
 
+  test('search loads matches beyond the first hundred workspaces', async ({ page }) => {
+    const rows = Array.from({ length: 101 }, (_, index) => ({
+      workspace_id: `a000${String(index).padStart(4, '0')}-0000-4000-8000-000000000000`,
+      name: index === 100 ? 'Needle Research' : `Workspace ${index}`,
+      status: 'stopped',
+      config: {},
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    }));
+    await mockAPI(page, {
+      'GET /workspaces': (route) => {
+        const url = new URL(route.request().url());
+        const limit = Number(url.searchParams.get('limit') || 20);
+        const offset = Number(url.searchParams.get('offset') || 0);
+        const pageRows = rows.slice(offset, offset + limit);
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            workspaces: pageRows,
+            total: rows.length,
+            limit,
+            offset,
+          }),
+        });
+      },
+    });
+
+    await page.goto('/chat');
+    await page.getByPlaceholder('Search workspaces...').fill('Needle');
+
+    await expect(page.getByText('Needle Research', { exact: true })).toBeVisible({
+      timeout: 10000,
+    });
+  });
+
   test('create workspace via dialog', async ({ page }) => {
     await mockAPI(page, {
       ...workspaceOverrides(),
@@ -111,7 +148,7 @@ test.describe('Workspace Gallery', () => {
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify(sampleWorkspace({ workspace_id: 'ws-new', name: 'New Project' })),
+          body: JSON.stringify(sampleWorkspace({ workspace_id: 'a0000003-0000-4000-8000-000000000003', name: 'New Project' })),
         });
       },
     });
@@ -130,8 +167,10 @@ test.describe('Workspace Gallery', () => {
     await page.locator('div.cwm-modal input').first().fill('New Project');
     await page.locator('button.cwm-btn-create').click();
 
-    // Progress phase: wait for "done" state (open workspace button appears)
-    await expect(page.locator('button.cwm-btn-create', { hasText: /Open Workspace/ })).toBeVisible({ timeout: 10000 });
+    // With no files queued there is no progress phase: the modal closes and
+    // the new workspace opens.
+    await expect(page).toHaveURL(/\/chat\/a0000003-0000-4000-8000-000000000003/, { timeout: 10000 });
+    await expect(page.locator('h2.cwm-title')).toHaveCount(0);
   });
 
   test('delete workspace removes card', async ({ page }) => {
