@@ -51,6 +51,12 @@ interface StockHeaderProps {
   onSwitchSymbol?: (symbol: string, hit?: StockSearchHit) => void;
   /** A host's own buttons, beside Company Overview. */
   headerActions?: React.ReactNode;
+  /**
+   * `full` is the MarketView page header with its metrics grid; `compact` is
+   * a two-line legend (title and price, then O/H/L/Prev/Vol/52W) for a host
+   * that cannot spare a quarter of its height, such as a side panel.
+   */
+  variant?: 'full' | 'compact';
 }
 
 const EXCHANGE_LABELS: Record<string, string> = { HK: 'HK', SS: 'SH', SZ: 'SZ', L: 'LON', T: 'TYO', TO: 'TSX', AX: 'ASX' };
@@ -64,7 +70,7 @@ function getVenueStatusLabel(sym: string | null | undefined, status: 'Delayed' |
   return EXCHANGE_LABELS[suffix] ? `${EXCHANGE_LABELS[suffix]} ${status}` : status;
 }
 
-const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta: _chartMeta, displayOverride, onToggleOverview, onOpenWatchlist, wsStatus, wsHasData = false, wsDataLevel = null, ginlixDataEnabled: _ginlixDataEnabled = true, quoteData, marketStatus, snapshot, marketPhase = null, onSwitchSymbol, headerActions }: StockHeaderProps) => {
+const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta: _chartMeta, displayOverride, onToggleOverview, onOpenWatchlist, wsStatus, wsHasData = false, wsDataLevel = null, ginlixDataEnabled: _ginlixDataEnabled = true, quoteData, marketStatus, snapshot, marketPhase = null, onSwitchSymbol, headerActions, variant = 'full' }: StockHeaderProps) => {
   const { t } = useTranslation();
   const formatNumber = (num: number | null | undefined): string => {
     if (num == null || (num !== 0 && !num)) return '—';
@@ -148,18 +154,13 @@ const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta: _chartMeta, 
     </button>
   ) : null;
 
-  return (
-    <div className={`stock-header${isMobile && metricsCollapsed ? ' stock-header--compact' : ''}`}>
-      <div className="stock-header-top">
-        <div>
-          <div className="stock-title">
-            {onSwitchSymbol ? (
-              <SymbolSwitcher symbol={symbol} onPick={onSwitchSymbol} />
-            ) : (
-              <span className="stock-symbol">{symbol}</span>
-            )}
-            <span className="stock-name">{displayName}</span>
-            {displayExchange && <span className="stock-exchange">{displayExchange}</span>}
+  const symbolNode = onSwitchSymbol ? (
+    <SymbolSwitcher symbol={symbol} onPick={onSwitchSymbol} />
+  ) : (
+    <span className="stock-symbol">{symbol}</span>
+  );
+
+  const statusNode = (
             <span className="stock-data-source stock-data-source--inline">
               {isLive ? (
                 <>
@@ -183,7 +184,9 @@ const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta: _chartMeta, 
                 <span>WebSocket: {wsStatus === 'connected' ? (wsHasData ? `Connected (${wsDataLevel === 'second' ? 'second' : 'minute'}-level)` : 'Connected (no data)') : wsStatus === 'disabled' ? 'Not available' : wsStatus === 'reconnecting' ? 'Reconnecting' : 'Disconnected'}</span>
               </span>
             </span>
-          </div>
+  );
+
+  const actionsNode = (
           <div className="stock-header-actions">
             <HeaderPill onClick={onToggleOverview}>
               <Info size={13} />
@@ -191,7 +194,9 @@ const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta: _chartMeta, 
             </HeaderPill>
             {headerActions}
           </div>
-        </div>
+  );
+
+  const priceNode = (
         <div className="stock-price-section">
           {extType && settledClose != null && extDisplayPrice != null && extDisplayPct != null ? (
             <>
@@ -230,6 +235,57 @@ const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta: _chartMeta, 
             </>
           )}
         </div>
+  );
+
+  if (variant === 'compact') {
+    const fmt = (n: number | null | undefined): string => (n != null ? Number(n).toFixed(2) : '—');
+    const stats: Array<[string, string, string?]> = [
+      ['O', fmt(open)],
+      ['H', fmt(high)],
+      ['L', fmt(low)],
+      ['Prev', fmt(previousClose)],
+      ['Vol', volume != null ? formatNumber(Number(volume)) : averageVolume != null ? formatNumber(Number(averageVolume)) : '—'],
+      ['52W', fiftyTwoWeekLow != null && fiftyTwoWeekHigh != null ? `${fmt(fiftyTwoWeekLow)} – ${fmt(fiftyTwoWeekHigh)}` : '—'],
+      ['Chg', changePct != null ? (changePct >= 0 ? '+' : '') + changePct.toFixed(2) + '%' : '—', (changePct || 0) >= 0 ? 'positive' : 'negative'],
+    ];
+    return (
+      <div className="stock-header stock-header--legend">
+        <div className="stock-legend-row">
+          <div className="stock-title">
+            {symbolNode}
+            <span className="stock-name">{displayName}</span>
+            {statusNode}
+          </div>
+          {priceNode}
+        </div>
+        <div className="stock-legend-foot">
+          <div className="stock-legend-stats">
+            {stats.map(([label, value, tone]) => (
+              <span className="stock-legend-stat" key={label}>
+                <span className="stock-legend-stat-label">{label}</span>
+                <span className={`stock-legend-stat-value${tone ? ` ${tone}` : ''}`}>{value}</span>
+              </span>
+            ))}
+          </div>
+          {actionsNode}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`stock-header${isMobile && metricsCollapsed ? ' stock-header--compact' : ''}`}>
+      <div className="stock-header-top">
+        <div>
+          <div className="stock-title">
+            {symbolNode}
+            <span className="stock-name">{displayName}</span>
+            {displayExchange && <span className="stock-exchange">{displayExchange}</span>}
+            {statusNode}
+          </div>
+          {actionsNode}
+        </div>
+        {priceNode}
       </div>
 
       {isMobile && (

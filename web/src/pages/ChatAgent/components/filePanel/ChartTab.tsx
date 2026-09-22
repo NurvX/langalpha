@@ -88,6 +88,7 @@ export function ChartTab({ tab, tabs, workspaceId, onAddContext, onOpenInMarketV
           onIntervalChange={rememberInterval}
           onSwitchSymbol={onSwitchSymbol}
           headerActions={headerActions}
+          variant="compact"
         />
       </div>
     </Suspense>

@@ -300,3 +300,98 @@
     padding-top: 6px;
   }
 }
+
+/* Compact legend variant: title and price on one line, the day's figures on a
+   second, so a narrow host keeps its height for the chart. */
+.stock-header--legend {
+  padding: 8px 12px 6px;
+}
+
+.stock-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.stock-legend-row .stock-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 8px;
+}
+
+.stock-legend-row .stock-name {
+  font-size: 0.8125rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stock-legend-row .stock-price-section {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.stock-legend-row .stock-price {
+  font-size: 1.125rem;
+  margin-bottom: 0;
+}
+
+.stock-legend-row .stock-change {
+  font-size: 0.75rem;
+}
+
+.stock-legend-row .stock-extended-hours {
+  font-size: 0.75rem !important;
+}
+
+/* The day's figures and the host's pills share the second line: the pills
+   keep their width and the figures wrap around them. */
+.stock-legend-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-top: 4px;
+}
+
+.stock-legend-foot .stock-header-actions {
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.stock-legend-stats {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-width: 0;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+.stock-legend-stat {
+  display: inline-flex;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.stock-legend-stat-label {
+  color: var(--color-text-tertiary);
+}
+
+.stock-legend-stat-value {
+  color: var(--color-text-primary);
+}
+
+.stock-legend-stat-value.positive {
+  color: var(--color-profit);
+}
+
+.stock-legend-stat-value.negative {
+  color: var(--color-loss);
+}

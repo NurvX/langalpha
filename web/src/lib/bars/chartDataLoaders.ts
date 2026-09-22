@@ -93,6 +93,27 @@ export function centerLatestBarView({
 }
 
 /**
+ * Visible logical range that fills the chart with the latest bars, leaving a
+ * small right gutter for the last-value label. A narrow host (a side panel)
+ * wants every pixel showing data; the centered view above spends half of
+ * them on empty future space.
+ */
+export function fillLatestBarsView({
+  chartWidth,
+  barSpacing,
+  dataLen,
+}: {
+  chartWidth: number;
+  barSpacing: number;
+  dataLen: number;
+}): { from: number; to: number } {
+  const bars = Math.floor(chartWidth / barSpacing);
+  const gutter = Math.max(2, Math.floor(bars * 0.06));
+  const from = Math.max(0, dataLen - bars + gutter);
+  return { from, to: from + bars };
+}
+
+/**
  * Merge a set of newly-fetched bars into an existing, time-sorted timeline,
  * de-duplicating by `.time`. On a time collision the INCOMING bar wins — the
  * server (or a fresher delta poll) is authoritative, and the forming head bar

@@ -7,6 +7,7 @@ import './MarketChart.css';
 import { fetchStockData } from '../utils/api';
 import {
   centerLatestBarView,
+  fillLatestBarsView,
   computeInitialLoadRange,
   dedupeMergeByTime,
   rangeBeforeOldest,
@@ -100,6 +101,14 @@ interface MarketChartProps {
    * receives; a host opts in rather than out.
    */
   selectionTools?: boolean;
+  /**
+   * How the chart frames the latest bars after a load: `centered` keeps the
+   * MarketView page's look (last bar mid-chart, room to the right), `fill`
+   * packs bars across the width for a narrow host such as a side panel.
+   */
+  defaultView?: 'centered' | 'fill';
+  /** Offer the Light / Advanced (TradingView) switch. Off forces the light chart. */
+  modeSwitcher?: boolean;
 }
 
 export interface MarketChartHandle {
@@ -150,6 +159,8 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   marketStatus,
   snapshot,
   selectionTools = false,
+  defaultView = 'centered',
+  modeSwitcher = true,
 }, ref) => {
   const { t } = useTranslation();
   const { theme } = useTheme();
@@ -210,7 +221,8 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   // reads so the light chart stays fully live on mobile, while the raw
   // `chartMode` (and its toggle/pref) is preserved for the desktop switcher.
   const isMobile = useIsMobile();
-  const effectiveChartMode = isMobile ? 'custom' : chartMode;
+  const showModeSwitch = !isMobile && modeSwitcher;
+  const effectiveChartMode = showModeSwitch ? chartMode : 'custom';
 
   // Chart feature toggles (persisted)
   const [priceScaleMode, setPriceScaleMode] = useState<number>(() => loadPref('priceScaleMode', PriceScaleMode.Normal));
@@ -277,11 +289,13 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
 
   // Track current interval for use inside stable callbacks (avoids stale closures)
   const intervalRef = useRef(interval);
+  const defaultViewRef = useRef(defaultView);
 
   // Keep refs synced with state
   useEffect(() => { enabledMaPeriodsRef.current = enabledMaPeriods; }, [enabledMaPeriods]);
   useEffect(() => { rsiPeriodRef.current = rsiPeriod; }, [rsiPeriod]);
   useEffect(() => { intervalRef.current = interval; }, [interval]);
+  useEffect(() => { defaultViewRef.current = defaultView; }, [defaultView]);
   useEffect(() => { quoteDataRef.current = quoteData; }, [quoteData]);
   useEffect(() => { snapshotRef.current = snapshot; }, [snapshot]);
   const symbolRef = useRef(symbol);
@@ -1782,7 +1796,8 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     const dataLen = allDataRef.current.length;
     if (dataLen === 0) { ts.scrollToRealTime(); return; }
     const chartWidth = chartRef.current.options().width || chartContainerRef.current?.clientWidth || 800;
-    ts.setVisibleLogicalRange(centerLatestBarView({ chartWidth, barSpacing: target, dataLen }));
+    const frame = defaultViewRef.current === 'fill' ? fillLatestBarsView : centerLatestBarView;
+    ts.setVisibleLogicalRange(frame({ chartWidth, barSpacing: target, dataLen }));
   }, []);
 
   // Fit the visible window to a bottom-bar range preset: from the preset's
@@ -2180,7 +2195,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
                   </button>
                   {viewOpen && (
                     <div className="toolbar-dropdown-panel toolbar-dropdown-panel--right compact-menu-panel">
-                      {toolbarLevel >= 4 && !isMobile && (
+                      {toolbarLevel >= 4 && showModeSwitch && (
                         <>
                           {/* Mode section */}
                           <div className="compact-menu-section-label">{t('marketView.chart.modeLabel')}</div>
@@ -2217,7 +2232,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
               Light chart. On desktop, Light (custom) mode tucks it into the
               overflow menu at tier 4 to save room; Advanced (TV) mode keeps it
               inline so the required TV attribution is never hidden. */}
-          {!isMobile && (
+          {showModeSwitch && (
             <div className={`chart-mode-switcher${!isTV ? ' toolbar-item--mode' : ''}`}>
               {/* TV embed-terms attribution. Sibling of the pill so the pill's
                   own background stays symmetric. Only shown when Advanced is

@@ -39,7 +39,23 @@ interface MarketChartSurfaceProps {
   onSwitchSymbol?: (symbol: string, hit?: StockSearchHit) => void;
   /** A host's own buttons in the header, beside Company Overview. */
   headerActions?: React.ReactNode;
+  /**
+   * `full` reproduces the MarketView page (metrics grid, centered latest bar,
+   * Light / Advanced switch). `compact` is for a narrow host: the two-line
+   * legend header, bars packed across the width, light chart only.
+   */
+  variant?: 'full' | 'compact';
 }
+
+/** The compact chart sits as a card on the canvas, dotted like the Automations
+ *  ground. The grid is shifted so its first row and column land mid-gutter
+ *  (the chart's 8px / 10px inset below), where they show, not under the card edge. */
+const COMPACT_GROUND: React.CSSProperties = {
+  backgroundColor: 'var(--color-bg-canvas)',
+  backgroundImage: 'radial-gradient(circle at center, var(--color-dot-grid) 0.75px, transparent 0.75px)',
+  backgroundSize: '18px 18px',
+  backgroundPosition: '-4px -5px',
+};
 
 function MarketChartSurfaceInner({
   symbol,
@@ -48,7 +64,9 @@ function MarketChartSurfaceInner({
   onIntervalChange,
   onSwitchSymbol,
   headerActions,
+  variant = 'full',
 }: MarketChartSurfaceProps): React.ReactElement {
+  const compact = variant === 'compact';
   const {
     prices: wsPrices,
     connectionStatus: wsStatus,
@@ -133,8 +151,8 @@ function MarketChartSurfaceInner({
         flexDirection: 'column',
         height: '100%',
         minHeight: 0,
-        background: 'var(--color-bg-card)',
         overflow: 'hidden',
+        ...(compact ? COMPACT_GROUND : { background: 'var(--color-bg-card)' }),
       }}
     >
       <StockHeader
@@ -153,6 +171,7 @@ function MarketChartSurfaceInner({
         snapshot={snapshotMatch}
         onSwitchSymbol={handleSwitchSymbol}
         headerActions={headerActions}
+        variant={variant}
       />
       <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>
         {showOverview && (
@@ -178,6 +197,8 @@ function MarketChartSurfaceInner({
           liveTick={wsPrices.get(symbol)?.barData || null}
           wsStatus={wsStatus}
           marketStatus={marketStatus}
+          defaultView={compact ? 'fill' : 'centered'}
+          modeSwitcher={!compact}
         />
       </div>
     </div>
