@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import React from 'react';
 
 const { searchStocks } = vi.hoisted(() => ({ searchStocks: vi.fn() }));
 vi.mock('@/lib/marketUtils', async (importOriginal) => {
@@ -8,46 +9,65 @@ vi.mock('@/lib/marketUtils', async (importOriginal) => {
 });
 
 import StockHeader from '../StockHeader';
+import { deriveStockQuote, type StockQuoteInputs } from '../../hooks/useStockQuoteModel';
 import { SYMBOL_SEARCH_DEBOUNCE_MS } from '@/hooks/useSymbolSearch';
 import type { SnapshotData } from '@/types/market';
-import type { ConnectionStatus } from '../../hooks/useMarketDataWS';
+import type { DataLevel } from '../../hooks/useMarketDataWS';
 
-const baseProps = {
+const baseInputs: StockQuoteInputs = {
   symbol: 'AMD',
   stockInfo: null,
   realTimePrice: null,
-  chartMeta: null,
-  displayOverride: null,
-  onToggleOverview: () => {},
-  wsStatus: 'disconnected' as ConnectionStatus,
   quoteData: null,
-  marketStatus: { providers: ['ginlix-data', 'yfinance', 'fmp'] } as Record<string, unknown>,
   snapshot: null,
+  marketStatus: { providers: ['ginlix-data', 'yfinance', 'fmp'] } as Record<string, unknown>,
+  wsStatus: 'disconnected',
 };
+
+interface HeaderProps {
+  inputs?: Partial<StockQuoteInputs>;
+  wsDataLevel?: DataLevel;
+  onSwitchSymbol?: (symbol: string, hit?: unknown) => void;
+}
+
+// The header prints a model the host derives; the tests build it from the
+// same inputs the host would, so each case still reads as raw quote data.
+function Header({ inputs = {}, wsDataLevel, onSwitchSymbol }: HeaderProps): React.ReactElement {
+  const merged = { ...baseInputs, ...inputs };
+  return (
+    <StockHeader
+      symbol={merged.symbol}
+      quote={deriveStockQuote(merged)}
+      chartMeta={null}
+      onToggleOverview={() => {}}
+      wsStatus={merged.wsStatus}
+      wsHasData={merged.wsHasData}
+      wsDataLevel={wsDataLevel}
+      onSwitchSymbol={onSwitchSymbol}
+    />
+  );
+}
 
 const snap = (source: string | null): SnapshotData => ({ symbol: 'AMD', price: 120.5, source });
 
 describe('StockHeader source tooltip', () => {
   it('shows the snapshot-filling provider when not live', () => {
-    render(<StockHeader {...baseProps} snapshot={snap('fmp')} />);
+    render(<Header inputs={{ snapshot: snap('fmp') }} />);
     expect(screen.getByText('Source: FMP')).toBeInTheDocument();
   });
 
   it('shows the WS feed provider when live', () => {
     render(
-      <StockHeader
-        {...baseProps}
-        wsStatus="connected"
-        wsHasData
+      <Header
+        inputs={{ wsStatus: 'connected', wsHasData: true, snapshot: snap('fmp') }} // live price comes from WS, not this row
         wsDataLevel="second"
-        snapshot={snap('fmp')} // live price comes from WS, not this row
       />,
     );
     expect(screen.getByText('Source: Ginlix Data')).toBeInTheDocument();
   });
 
   it('falls back to the enabled-provider list when the row has no source', () => {
-    render(<StockHeader {...baseProps} snapshot={snap(null)} />);
+    render(<Header inputs={{ snapshot: snap(null) }} />);
     expect(screen.getByText('Source: Ginlix Data, yfinance, FMP')).toBeInTheDocument();
   });
 });
@@ -68,7 +88,7 @@ describe('StockHeader price section (market convention)', () => {
 
   it('after the close, headlines the official close with a coherent change pair', () => {
     const { container } = render(
-      <StockHeader {...baseProps} marketStatus={closedStatus} snapshot={postSnap} realTimePrice={quoteRow} />,
+      <Header inputs={{ marketStatus: closedStatus, snapshot: postSnap, realTimePrice: quoteRow }} />,
     );
     expect(screen.getByText('96.00')).toBeInTheDocument();
     expect(screen.getByText('-4.00 -4.00%')).toBeInTheDocument();
@@ -80,14 +100,14 @@ describe('StockHeader price section (market convention)', () => {
   it('the big close is refresh-stable: a quote-row price never replaces it', () => {
     // The row's own price field (96.5, a different tape moment) must not leak
     // into the big number — that mix was the refresh nondeterminism.
-    render(<StockHeader {...baseProps} marketStatus={closedStatus} snapshot={postSnap} realTimePrice={quoteRow} />);
+    render(<Header inputs={{ marketStatus: closedStatus, snapshot: postSnap, realTimePrice: quoteRow }} />);
     expect(screen.queryByText('96.50')).not.toBeInTheDocument();
   });
 
   it('a live WS tick updates the after-hours line, not the official close', () => {
     const tick = { ...quoteRow, price: 95.5, timestamp: 1700000000000 };
     const { container } = render(
-      <StockHeader {...baseProps} marketStatus={closedStatus} snapshot={postSnap} realTimePrice={tick} />,
+      <Header inputs={{ marketStatus: closedStatus, snapshot: postSnap, realTimePrice: tick }} />,
     );
     expect(screen.getByText('96.00')).toBeInTheDocument();
     const ext = container.querySelector('.stock-extended-hours');
@@ -105,7 +125,7 @@ describe('StockHeader price section (market convention)', () => {
       late_trading_change_percent: -1.1,
     };
     const { container } = render(
-      <StockHeader {...baseProps} marketStatus={closedStatus} snapshot={exactSnap} realTimePrice={quoteRow} />,
+      <Header inputs={{ marketStatus: closedStatus, snapshot: exactSnap, realTimePrice: quoteRow }} />,
     );
     expect(container.querySelector('.stock-price')?.textContent).toBe('96.06');
     expect(screen.getByText('-3.94 -3.94%')).toBeInTheDocument();
@@ -125,7 +145,7 @@ describe('StockHeader price section (market convention)', () => {
       last_minute_close: 95.1,
     };
     const { container } = render(
-      <StockHeader {...baseProps} marketStatus={closedStatus} snapshot={aggSnap} realTimePrice={quoteRow} />,
+      <Header inputs={{ marketStatus: closedStatus, snapshot: aggSnap, realTimePrice: quoteRow }} />,
     );
     expect(container.querySelector('.stock-price')?.textContent).toBe('96.06');
     const ext = container.querySelector('.stock-extended-hours');
@@ -138,7 +158,7 @@ describe('StockHeader price section (market convention)', () => {
     const preStatus = { market: 'open', afterHours: false, earlyHours: true, providers: [] } as Record<string, unknown>;
     const preSnap: SnapshotData = { symbol: 'AMD', price: 102, previous_close: 100, early_trading_change_percent: 2.0, source: 'x' };
     const { container } = render(
-      <StockHeader {...baseProps} marketStatus={preStatus} snapshot={preSnap} realTimePrice={{ ...quoteRow, price: 102 }} />,
+      <Header inputs={{ marketStatus: preStatus, snapshot: preSnap, realTimePrice: { ...quoteRow, price: 102 } }} />,
     );
     expect(container.querySelector('.stock-price')?.textContent).toBe('100.00');
     expect(container.querySelector('.stock-change')).toBeNull();
@@ -150,39 +170,49 @@ describe('StockHeader price section (market convention)', () => {
   it('regular session renders the row price and change pair unchanged', () => {
     const openStatus = { market: 'open', afterHours: false, earlyHours: false, providers: [] } as Record<string, unknown>;
     render(
-      <StockHeader
-        {...baseProps}
-        marketStatus={openStatus}
-        snapshot={{ symbol: 'AMD', price: 101.23, previous_close: 100, source: 'x' }}
-        realTimePrice={{ ...quoteRow, price: 101.23, change: 1.23, changePercent: 1.23 }}
+      <Header
+        inputs={{
+          marketStatus: openStatus,
+          snapshot: { symbol: 'AMD', price: 101.23, previous_close: 100, source: 'x' },
+          realTimePrice: { ...quoteRow, price: 101.23, change: 1.23, changePercent: 1.23 },
+        }}
       />,
     );
     expect(screen.getByText('101.23')).toBeInTheDocument();
     expect(screen.getByText('+1.23 +1.23%')).toBeInTheDocument();
   });
+
+  it('a row without a change pair shows a dash, not a zero move', () => {
+    const { container } = render(
+      <Header inputs={{ stockInfo: { Symbol: 'AMD', Name: 'AMD', Price: 101.23 } as never }} />,
+    );
+    expect(container.querySelector('.stock-price')?.textContent).toBe('101.23');
+    expect(container.querySelector('.stock-change')?.textContent).toBe('—');
+    expect(screen.queryByText('+0.00 +0.00%')).not.toBeInTheDocument();
+  });
 });
 
 describe('StockHeader market status badge', () => {
   it('shows Closed with the venue prefix when the market phase is closed', () => {
-    render(<StockHeader {...baseProps} symbol="0700.HK" marketPhase="closed" />);
+    render(<Header inputs={{ symbol: '0700.HK', marketPhase: 'closed' }} />);
     expect(screen.getByText('HK Closed')).toBeInTheDocument();
   });
 
   it('shows a bare Closed for US symbols', () => {
-    render(<StockHeader {...baseProps} marketPhase="closed" />);
+    render(<Header inputs={{ marketPhase: 'closed' }} />);
     expect(screen.getByText('Closed')).toBeInTheDocument();
   });
 
   it('stays on Delayed during pre/post phases and when the phase is unknown', () => {
-    const { rerender } = render(<StockHeader {...baseProps} symbol="0700.HK" marketPhase="post" />);
+    const { rerender } = render(<Header inputs={{ symbol: '0700.HK', marketPhase: 'post' }} />);
     expect(screen.getByText('HK Delayed')).toBeInTheDocument();
-    rerender(<StockHeader {...baseProps} symbol="0700.HK" marketPhase={null} />);
+    rerender(<Header inputs={{ symbol: '0700.HK', marketPhase: null }} />);
     expect(screen.getByText('HK Delayed')).toBeInTheDocument();
   });
 
   it('a live WS feed wins over a stale closed phase', () => {
     render(
-      <StockHeader {...baseProps} wsStatus="connected" wsHasData wsDataLevel="second" marketPhase="closed" />,
+      <Header inputs={{ wsStatus: 'connected', wsHasData: true, marketPhase: 'closed' }} wsDataLevel="second" />,
     );
     expect(screen.getByText('Live')).toBeInTheDocument();
   });
@@ -190,26 +220,26 @@ describe('StockHeader market status badge', () => {
 
 describe('StockHeader symbol switch', () => {
   it('keeps the ticker a label when nothing can be switched', () => {
-    render(<StockHeader {...baseProps} />);
+    render(<Header />);
     expect(screen.getByText('AMD').tagName).toBe('SPAN');
   });
 
   it('makes the ticker a control that opens the search', async () => {
-    render(<StockHeader {...baseProps} onSwitchSymbol={() => {}} />);
+    render(<Header onSwitchSymbol={() => {}} />);
     const ticker = screen.getByRole('button', { name: /AMD/ });
     fireEvent.click(ticker);
     expect(await screen.findByRole('combobox')).toBeTruthy();
   });
 
   it('names the control by what it does, not just the ticker', () => {
-    render(<StockHeader {...baseProps} onSwitchSymbol={() => {}} />);
+    render(<Header onSwitchSymbol={() => {}} />);
     expect(screen.getByRole('button', { name: 'Change symbol, currently AMD' })).toBeInTheDocument();
   });
 
   it('hands a picked hit to onSwitchSymbol with its name', async () => {
     searchStocks.mockResolvedValue({ query: 'goog', results: [{ symbol: 'GOOGL', name: 'Alphabet Inc.' }], count: 1 });
     const onSwitchSymbol = vi.fn();
-    render(<StockHeader {...baseProps} onSwitchSymbol={onSwitchSymbol} />);
+    render(<Header onSwitchSymbol={onSwitchSymbol} />);
     fireEvent.click(screen.getByRole('button', { name: /AMD/ }));
     // The popover opens on real timers (findBy polls them); only the rest
     // period is faked.

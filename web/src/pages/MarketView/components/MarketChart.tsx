@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState, useImperativeHandle, forwardRef, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useImperativeHandle, forwardRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createChart, createTextWatermark, ColorType, CrosshairMode, PriceScaleMode, LineType, LineStyle, AreaSeries, BaselineSeries, CandlestickSeries, HistogramSeries, LineSeries } from 'lightweight-charts';
-import type { IChartApi, ITextWatermarkPluginApi, LogicalRange, MouseEventParams, Time } from 'lightweight-charts';
+import type { AreaData, IChartApi, ISeriesApi, ITextWatermarkPluginApi, LogicalRange, MouseEventParams, Time, UTCTimestamp } from 'lightweight-charts';
 import html2canvas from 'html2canvas';
 import './MarketChart.css';
 import { fetchStockData } from '../utils/api';
@@ -16,7 +16,7 @@ import { applyQuoteToDailyBar, deriveMarketSession, foldMinuteBar, formatPrice, 
 import { timezoneForSymbol } from '@/lib/bars/exchanges';
 import { RANGE_PRESETS, rangeStartChartSec } from '@/lib/bars/rangePresets';
 import type { RangePreset } from '@/lib/bars/rangePresets';
-import { chartSecToDateStr, dateStrInTz } from '@/lib/utils';
+import { chartSecToDateStr, cn, dateStrInTz } from '@/lib/utils';
 import VenueClock from './VenueClock';
 import { useQuote } from '@/lib/quotes';
 import { calculateMA, calculateRSI, updateRSIIncremental } from '../utils/chartHelpers';
@@ -36,6 +36,7 @@ import {
 import type { ChartDataPoint as ChartConstDataPoint } from '../utils/chartConstants';
 import { ExtendedHoursBgPrimitive } from '../utils/extendedHoursBg';
 import { PaneLabelPrimitive } from '../utils/paneLabelPrimitive';
+import { selectToolbarTier, type ToolbarTier } from '../utils/toolbarTiers';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Loader } from '@/components/ui/loader';
 import { CrosshairTooltipLayer, type CrosshairTooltipState } from './CrosshairTooltip';
@@ -109,6 +110,17 @@ interface MarketChartProps {
   defaultView?: 'centered' | 'fill';
   /** Offer the Light / Advanced (TradingView) switch. Off forces the light chart. */
   modeSwitcher?: boolean;
+  /**
+   * Rendered first in the toolbar row, before the intervals: a host's ticker
+   * legend. Inline content, laid on one line: when the row is short of room
+   * the chart shortens it with an ellipsis rather than let it push the
+   * controls over each other.
+   */
+  toolbarLead?: React.ReactNode;
+  /** Rendered last in the toolbar row, after the chart's tools: a host's own actions. */
+  toolbarTrail?: React.ReactNode;
+  /** A second thin row under the toolbar, above the panes: a host's actions and figures. */
+  toolbarSubrow?: React.ReactNode;
 }
 
 export interface MarketChartHandle {
@@ -135,13 +147,6 @@ const MIN_DRAG_PX = 4;
  */
 const PRICE_LINE_RESET = { priceLineColor: '', title: '' } as const;
 
-/**
- * Container widths (px, descending) at which the toolbar sheds actions into the
- * overflow menu. `toolbarLevel` is the count of breakpoints the width is below:
- * 0 = widest (all inline) … 4 = narrowest. Driven by a ResizeObserver.
- */
-const TOOLBAR_WIDTH_BREAKPOINTS = [1180, 880, 710, 560] as const;
-
 const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>(({
   symbol,
   interval = '1day',
@@ -161,6 +166,9 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   selectionTools = false,
   defaultView = 'centered',
   modeSwitcher = true,
+  toolbarLead,
+  toolbarTrail,
+  toolbarSubrow,
 }, ref) => {
   const { t } = useTranslation();
   const { theme } = useTheme();
@@ -175,7 +183,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   const rsiLabelRef = useRef<PaneLabelPrimitive | null>(null);
   // TODO: type properly — lightweight-charts series types are complex generics
   const candlestickSeriesRef = useRef<any>(null);
-  const rsiSeriesRef = useRef<any>(null);
+  const rsiSeriesRef = useRef<ISeriesApi<'Area'> | null>(null);
   const volumeSeriesRef = useRef<any>(null);
   const maSeriesRefs = useRef<Record<number, any>>({});
   const baselineSeriesRef = useRef<any>(null);
@@ -242,21 +250,48 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   // Toolbar collapse tier by container width. As space shrinks the toolbar
   // sacrifices items in priority order (least → most important): indicator
   // values (1) → scale/view tools (2) → indicators + tools dropdowns (3) →
-  // mode switch into the menu + Clear icon-only (4, phone widths). The interval
-  // selector, Clear and the selection tools always stay inline. Hidden
-  // actionable items move into the overflow menu.
-  const [toolbarLevel, setToolbarLevel] = useState<0 | 1 | 2 | 3 | 4>(0);
+  // mode switch into the menu + Clear icon-only (4, phone widths) → the
+  // primary intervals into their dropdown (5). Clear and the selection tools
+  // always stay inline. Hidden actionable items move into the overflow menu.
+  // A host's lead and trail take room the tiers were sized without, so the
+  // width they see is the container minus those slots. Slots are measured by
+  // scrollWidth: the row clips the lead when it is short of room, and the
+  // tier has to see what the lead asks for rather than what it got, or a
+  // clipped lead reads as spare room and the tier loosens into it.
+  const [toolbarLevel, setToolbarLevel] = useState<ToolbarTier>(0);
+  const toolbarSlotsRef = useRef<{ lead: HTMLDivElement | null; trail: HTMLDivElement | null }>({ lead: null, trail: null });
+  const toolbarObserverRef = useRef<ResizeObserver | null>(null);
+  const measureToolbar = useCallback(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const { lead, trail } = toolbarSlotsRef.current;
+    const w = el.clientWidth - (lead?.scrollWidth ?? 0) - (trail?.scrollWidth ?? 0);
+    setToolbarLevel((cur) => selectToolbarTier(w, cur));
+  }, []);
+  // A slot arrives with the host's content, which may be after the chart has
+  // mounted, so the observer follows the slot element rather than the mount.
+  const slotRef = useCallback((key: 'lead' | 'trail') => (node: HTMLDivElement | null) => {
+    const prev = toolbarSlotsRef.current[key];
+    if (prev && prev !== node) toolbarObserverRef.current?.unobserve(prev);
+    toolbarSlotsRef.current[key] = node;
+    if (node) toolbarObserverRef.current?.observe(node);
+  }, []);
+  const toolbarLeadRef = useMemo(() => slotRef('lead'), [slotRef]);
+  const toolbarTrailRef = useMemo(() => slotRef('trail'), [slotRef]);
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      const w = entry.contentRect.width;
-      const below = TOOLBAR_WIDTH_BREAKPOINTS.findIndex((min) => w >= min);
-      setToolbarLevel((below === -1 ? TOOLBAR_WIDTH_BREAKPOINTS.length : below) as 0 | 1 | 2 | 3 | 4);
-    });
+    const ro = new ResizeObserver(measureToolbar);
+    toolbarObserverRef.current = ro;
     ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+    const { lead, trail } = toolbarSlotsRef.current;
+    if (lead) ro.observe(lead);
+    if (trail) ro.observe(trail);
+    return () => {
+      ro.disconnect();
+      toolbarObserverRef.current = null;
+    };
+  }, [measureToolbar]);
   // Close the overflow menu if the chart widens enough to unmount it.
   useEffect(() => { if (toolbarLevel < 2) setViewOpen(false); }, [toolbarLevel]);
 
@@ -317,7 +352,6 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   // RSI incremental-update refs
   const rsiSmoothingRef = useRef<RSIState | null>(null);          // Wilder state { avgGain, avgLoss, lastClose, period }
   const prevBarSmoothingRef = useRef<RSIState | null>(null);       // State *before* current bar (for same-bar re-updates)
-  const pendingRsiDataRef = useRef<Array<{ time: number; value: number }> | null>(null);         // Buffered rsiData when series isn't ready
   const rsiDataMapRef = useRef<Map<number, number>>(new Map());        // time->rsiValue for O(1) crosshair lookup
 
   // Track when the last WS live tick was applied (for REST polling fallback)
@@ -875,7 +909,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
         if (prevBarSmoothingRef.current) {
           const { value, state } = updateRSIIncremental(prevBarSmoothingRef.current, barClose);
           rsiSmoothingRef.current = state;
-          rsiSeriesRef.current.update({ time: barTime, value });
+          rsiSeriesRef.current.update({ time: barTime as UTCTimestamp, value });
           rsiDataMapRef.current.set(barTime, value);
           setRsiValue(value.toFixed(0));
         }
@@ -884,7 +918,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
         prevBarSmoothingRef.current = rsiSmoothingRef.current;
         const { value, state } = updateRSIIncremental(rsiSmoothingRef.current, barClose);
         rsiSmoothingRef.current = state;
-        rsiSeriesRef.current.update({ time: barTime, value });
+        rsiSeriesRef.current.update({ time: barTime as UTCTimestamp, value });
         rsiDataMapRef.current.set(barTime, value);
         setRsiValue(value.toFixed(0));
       }
@@ -1133,15 +1167,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     if (rsiData.length > 0) {
       const lastRsi = rsiData[rsiData.length - 1]?.value;
       if (lastRsi != null) setRsiValue(lastRsi.toFixed(0));
-
-      if (rsiSeriesRef.current) {
-        // Series ready — apply immediately
-        rsiSeriesRef.current.setData(rsiData);
-        pendingRsiDataRef.current = null;
-      } else {
-        // Series not ready yet (mount race) — stash for flush after creation
-        pendingRsiDataRef.current = rsiData;
-      }
+      rsiSeriesRef.current?.setData(rsiData as AreaData<Time>[]);
     }
 
     // Update chart data state for overlay hooks
@@ -1363,10 +1389,6 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     );
     rsiPane.attachPrimitive(rsiLabel);
     rsiLabelRef.current = rsiLabel;
-    if (pendingRsiDataRef.current) {
-      rsiSeries.setData(pendingRsiDataRef.current as unknown as Parameters<typeof rsiSeries.setData>[0]);
-      pendingRsiDataRef.current = null;
-    }
 
     // Subscribe to crosshair move for tooltip
     chart.subscribeCrosshairMove((param: MouseEventParams) => {
@@ -1506,9 +1528,10 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   }, [ct]);
 
   // --- Effect: RSI pane caption follows the period and the latest value ---
+  const rsiCaption = `RSI (${rsiPeriod}): ${rsiValue ?? '\u2014'}`;
   useEffect(() => {
-    rsiLabelRef.current?.setText(`RSI (${rsiPeriod}): ${rsiValue ?? '\u2014'}`);
-  }, [rsiPeriod, rsiValue]);
+    rsiLabelRef.current?.setText(rsiCaption);
+  }, [rsiCaption]);
 
   // --- Effect: Price scale mode ---
   useEffect(() => {
@@ -1641,7 +1664,6 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
       // Reset RSI incremental state on symbol/interval change
       rsiSmoothingRef.current = null;
       prevBarSmoothingRef.current = null;
-      pendingRsiDataRef.current = null;
       rsiDataMapRef.current = new Map();
       setRsiValue(null);
     };
@@ -1878,6 +1900,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   }, []);
 
   const isTV = effectiveChartMode === 'tradingview';
+  const intervalsCollapsed = toolbarLevel >= 5;
 
   // --- Toolbar render helpers (shared between wide & compact layouts) ---
 
@@ -2037,14 +2060,26 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
 
   return (
     <div
-      className={`market-chart-container${toolbarLevel >= 1 ? ' chart--c1' : ''}${toolbarLevel >= 2 ? ' chart--c2' : ''}${toolbarLevel >= 3 ? ' chart--c3' : ''}${toolbarLevel >= 4 ? ' chart--c4' : ''}`}
+      className={cn(
+        'market-chart-container',
+        toolbarLevel >= 1 && 'chart--c1',
+        toolbarLevel >= 2 && 'chart--c2',
+        toolbarLevel >= 3 && 'chart--c3',
+        toolbarLevel >= 4 && 'chart--c4',
+        toolbarLevel >= 5 && 'chart--c5',
+        !!toolbarLead && 'chart--with-lead',
+      )}
       ref={rootRef}
     >
       {/* ---- Toolbar: intervals, indicator dropdown, values, tools dropdown, mode switcher ---- */}
       <div className="chart-tools">
+        {/* The lead is a sibling of the two groups, not inside the left one,
+            so the row wraps on the groups' own widths and the lead takes
+            whatever is left, down to nothing; see `.chart-toolbar-lead`. */}
+        {toolbarLead && <div className="chart-toolbar-lead" ref={toolbarLeadRef}>{toolbarLead}</div>}
         <div className="chart-tools-left">
-          <div className="interval-selector">
-            {INTERVALS.filter(({ key }) => PRIMARY_INTERVAL_KEYS.has(key)).map(({ key, label }) => {
+          <div className="interval-selector interval-selector--intervals">
+            {!intervalsCollapsed && INTERVALS.filter(({ key }) => PRIMARY_INTERVAL_KEYS.has(key)).map(({ key, label }) => {
               const isDisabled = key === '4hour' && !supports4hInterval;
               return (
               <div key={key} style={{ position: 'relative', display: 'inline-flex' }}>
@@ -2070,21 +2105,22 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
               </div>
               );
             })}
-            {/* "More" dropdown for secondary intervals */}
+            {/* "More" dropdown for secondary intervals; at the tightest tier
+                it is the whole picker and reads the current interval. */}
             <div className="toolbar-dropdown" ref={intervalsDropdownRef} style={{ display: 'inline-flex' }}>
               <button
                 type="button"
-                className={`interval-btn${(!PRIMARY_INTERVAL_KEYS.has(interval) || intervalsOpen) ? ' interval-btn-active' : ''}`}
+                className={`interval-btn${(intervalsCollapsed || !PRIMARY_INTERVAL_KEYS.has(interval) || intervalsOpen) ? ' interval-btn-active' : ''}`}
                 onClick={() => { setIntervalsOpen((v) => !v); setIndicatorsOpen(false); setToolsOpen(false); setViewOpen(false); }}
               >
-                {!PRIMARY_INTERVAL_KEYS.has(interval)
+                {intervalsCollapsed || !PRIMARY_INTERVAL_KEYS.has(interval)
                   ? INTERVALS.find(({ key }) => key === interval)?.label
                   : 'More'}
                 <ChevronDown size={10} style={{ marginLeft: 2, opacity: 0.6 }} />
               </button>
               {intervalsOpen && (
                 <div className="toolbar-dropdown-panel interval-dropdown-panel">
-                  {INTERVALS.filter(({ key }) => !PRIMARY_INTERVAL_KEYS.has(key)).map(({ key, label }) => (
+                  {INTERVALS.filter(({ key }) => intervalsCollapsed || !PRIMARY_INTERVAL_KEYS.has(key)).map(({ key, label }) => (
                     <button
                       key={key}
                       type="button"
@@ -2126,7 +2162,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
                 ))}
                 <span className="indicator-item">
                   <span className="indicator-color" style={{ backgroundColor: 'var(--color-accent-primary)' }} />
-                  RSI ({rsiPeriod}): {rsiValue ?? '\u2014'}
+                  {rsiCaption}
                 </span>
               </div>
             </>
@@ -2242,8 +2278,10 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
               {renderModeButtons()}
             </div>
           )}
+          {toolbarTrail && <div className="chart-toolbar-trail" ref={toolbarTrailRef}>{toolbarTrail}</div>}
         </div>
       </div>
+      {toolbarSubrow && <div className="chart-subrow">{toolbarSubrow}</div>}
 
       {/* ---- Charts area: shared flex container for both modes ---- */}
       <div style={{ flex: 1, position: 'relative', minHeight: 0, display: 'flex', flexDirection: 'column' }}>

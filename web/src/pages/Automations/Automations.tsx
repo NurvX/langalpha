@@ -143,8 +143,9 @@ export default function Automations() {
         </AnimatePresence>
       </div>
 
-      {/* Automations Table */}
-      <div className="automations-card">
+      {/* Automations Table. The dotted ground is for the empty state only;
+          it never sits behind rows (DESIGN.md). */}
+      <div className={`automations-card${!loading && automations.length === 0 ? ' dot-grid' : ''}`}>
         <AutomationsTable
           automations={automations}
           loading={loading}

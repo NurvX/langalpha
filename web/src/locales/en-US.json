@@ -2765,6 +2765,20 @@
   },
   "marketView": {
     "companyOverview": "Company Overview",
+    "quote": {
+      "live": "Live",
+      "closed": "Closed",
+      "delayed": "Delayed",
+      "source": "Source: {{label}}",
+      "open": "O",
+      "high": "H",
+      "low": "L",
+      "close": "C",
+      "volume": "V",
+      "prevClose": "Prev",
+      "range52w": "52W",
+      "change": "Chg"
+    },
     "symbolSearch": {
       "switchSymbol": "Change symbol, currently {{symbol}}",
       "changeSymbol": "Change symbol",

@@ -1,7 +1,7 @@
 import React, { Suspense, useCallback, useMemo } from 'react';
 import { ExternalLink, TextSelect } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { HeaderPill } from '@/pages/MarketView/components/HeaderPill';
+import { ChartToolButton } from '@/pages/MarketView/components/ChartToolButton';
 import type { ChartTabSpec, ContextPayload } from './types';
 import type { FileTab, FileTabsApi } from './useFileTabs';
 import './ChartTab.css';
@@ -64,16 +64,14 @@ export function ChartTab({ tab, tabs, workspaceId, onAddContext, onOpenInMarketV
   const headerActions = useMemo(() => (
     <>
       {onAddContext && (
-        <HeaderPill onClick={addToContext} title={t('filePanel.addChartToContext')}>
-          <TextSelect size={13} />
-          {t('filePanel.addChartToContext')}
-        </HeaderPill>
+        <ChartToolButton onClick={addToContext} title={t('filePanel.addChartToContext')}>
+          <TextSelect size={14} />
+        </ChartToolButton>
       )}
       {onOpenInMarketView && (
-        <HeaderPill onClick={openInMarketView} title={t('filePanel.openInMarketView')}>
-          <ExternalLink size={13} />
-          {t('filePanel.openInMarketView')}
-        </HeaderPill>
+        <ChartToolButton onClick={openInMarketView} title={t('filePanel.openInMarketView')}>
+          <ExternalLink size={14} />
+        </ChartToolButton>
       )}
     </>
   ), [onAddContext, addToContext, onOpenInMarketView, openInMarketView, t]);

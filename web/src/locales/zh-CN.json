@@ -2739,6 +2739,20 @@
   },
   "marketView": {
     "companyOverview": "公司概览",
+    "quote": {
+      "live": "实时",
+      "closed": "已收盘",
+      "delayed": "延迟",
+      "source": "数据源：{{label}}",
+      "open": "开",
+      "high": "高",
+      "low": "低",
+      "close": "收",
+      "volume": "量",
+      "prevClose": "昨收",
+      "range52w": "52 周",
+      "change": "涨跌"
+    },
     "symbolSearch": {
       "switchSymbol": "切换标的，当前为 {{symbol}}",
       "changeSymbol": "更换股票",
