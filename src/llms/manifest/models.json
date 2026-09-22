@@ -5,8 +5,8 @@
     "provider": "openai",
     "display_name": "GPT-5.5",
     "visible": true,
-    "speed": 3,
-    "intelligence": 5,
+    "speed": 4,
+    "intelligence": 3,
     "context": 400000,
     "input_modalities": [
       "text",
@@ -37,7 +37,7 @@
     "display_name": "GPT-5.6 Sol",
     "visible": true,
     "speed": 3,
-    "intelligence": 5,
+    "intelligence": 4,
     "context": 1050000,
     "input_modalities": [
       "text",
@@ -71,8 +71,8 @@
     "provider": "openai",
     "display_name": "GPT-5.6 Terra",
     "visible": true,
-    "speed": 4,
-    "intelligence": 5,
+    "speed": 3,
+    "intelligence": 3,
     "context": 1050000,
     "input_modalities": [
       "text",
@@ -106,7 +106,7 @@
     "display_name": "GPT-5.6 Luna",
     "visible": true,
     "speed": 4,
-    "intelligence": 4,
+    "intelligence": 3,
     "context": 1050000,
     "input_modalities": [
       "text",
@@ -174,8 +174,8 @@
     "provider": "openai",
     "display_name": "GPT-6 Sol",
     "visible": true,
-    "speed": 3,
-    "intelligence": 5,
+    "speed": 4,
+    "intelligence": 4,
     "context": 1050000,
     "input_modalities": [
       "text",
@@ -208,8 +208,8 @@
     "provider": "openai",
     "display_name": "GPT-6 Luna",
     "visible": true,
-    "speed": 4,
-    "intelligence": 4,
+    "speed": 5,
+    "intelligence": 3,
     "context": 1050000,
     "input_modalities": [
       "text",
@@ -242,7 +242,7 @@
     "model_id": "claude-fable-5",
     "provider": "anthropic",
     "visible": true,
-    "speed": 3,
+    "speed": 2,
     "intelligence": 5,
     "context": 1000000,
     "input_modalities": [
@@ -306,7 +306,7 @@
     "model_id": "claude-opus-5-5",
     "provider": "anthropic",
     "visible": true,
-    "speed": 2,
+    "speed": 3,
     "intelligence": 5,
     "context": 1000000,
     "input_modalities": [
@@ -377,7 +377,7 @@
     "provider": "anthropic",
     "visible": true,
     "speed": 3,
-    "intelligence": 5,
+    "intelligence": 3,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -409,7 +409,7 @@
     "provider": "anthropic",
     "visible": true,
     "speed": 2,
-    "intelligence": 5,
+    "intelligence": 3,
     "context": 200000,
     "input_modalities": [
       "text",
@@ -440,7 +440,7 @@
     "provider": "anthropic",
     "visible": true,
     "speed": 2,
-    "intelligence": 3,
+    "intelligence": 2,
     "context": 200000,
     "input_modalities": [
       "text",
@@ -468,7 +468,7 @@
     "model_id": "claude-haiku-4-5-20251001",
     "provider": "anthropic",
     "visible": true,
-    "speed": 3,
+    "speed": 4,
     "intelligence": 1,
     "context": 200000,
     "input_modalities": [
@@ -490,7 +490,7 @@
     "provider": "gemini",
     "visible": true,
     "speed": 4,
-    "intelligence": 3,
+    "intelligence": 2,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -516,7 +516,7 @@
     "provider": "gemini",
     "visible": true,
     "speed": 5,
-    "intelligence": 5,
+    "intelligence": 3,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -542,7 +542,7 @@
     "provider": "gemini",
     "visible": true,
     "speed": 5,
-    "intelligence": 5,
+    "intelligence": 3,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -735,8 +735,8 @@
     "provider": "deepseek",
     "display_name": "DeepSeek-V4.1-Flash",
     "visible": true,
-    "speed": 4,
-    "intelligence": 5,
+    "speed": 5,
+    "intelligence": 3,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -768,7 +768,7 @@
     "provider": "z-ai",
     "visible": true,
     "speed": 3,
-    "intelligence": 4,
+    "intelligence": 2,
     "context": 1000000,
     "parameters": {
       "max_tokens": 128000
@@ -798,8 +798,8 @@
     "model_id": "glm-5.3",
     "provider": "z-ai",
     "visible": true,
-    "speed": 3,
-    "intelligence": 5,
+    "speed": 2,
+    "intelligence": 4,
     "context": 1000000,
     "parameters": {
       "max_tokens": 128000
@@ -828,8 +828,8 @@
     "model_id": "glm-5.3-flash",
     "provider": "z-ai",
     "visible": true,
-    "speed": 1,
-    "intelligence": 5,
+    "speed": 3,
+    "intelligence": 3,
     "context": 1000000,
     "parameters": {
       "max_tokens": 128000
@@ -861,7 +861,7 @@
     "provider": "z-ai-cn",
     "visible": true,
     "speed": 3,
-    "intelligence": 4,
+    "intelligence": 2,
     "context": 1000000,
     "parameters": {
       "max_tokens": 128000
@@ -891,8 +891,8 @@
     "model_id": "glm-5.3",
     "provider": "z-ai-cn",
     "visible": true,
-    "speed": 3,
-    "intelligence": 5,
+    "speed": 2,
+    "intelligence": 4,
     "context": 1000000,
     "parameters": {
       "max_tokens": 128000
@@ -921,8 +921,8 @@
     "model_id": "glm-5.3-flash",
     "provider": "z-ai-cn",
     "visible": true,
-    "speed": 1,
-    "intelligence": 5,
+    "speed": 3,
+    "intelligence": 3,
     "context": 1000000,
     "parameters": {
       "max_tokens": 128000
@@ -953,7 +953,7 @@
     "provider": "minimax",
     "visible": true,
     "speed": 4,
-    "intelligence": 3,
+    "intelligence": 2,
     "context": 512000,
     "parameters": {
       "max_tokens": 128000
@@ -982,7 +982,7 @@
     "provider": "dashscope",
     "visible": true,
     "speed": 1,
-    "intelligence": 5,
+    "intelligence": 4,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -1006,8 +1006,8 @@
     "model_id": "qwen3.8-flash",
     "provider": "dashscope",
     "visible": true,
-    "speed": 3,
-    "intelligence": 5,
+    "speed": 2,
+    "intelligence": 3,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -1031,8 +1031,8 @@
     "model_id": "qwen3.7-plus",
     "provider": "dashscope",
     "visible": true,
-    "speed": 2,
-    "intelligence": 2,
+    "speed": 3,
+    "intelligence": 1,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -1058,7 +1058,7 @@
     "provider": "dashscope-intl",
     "visible": true,
     "speed": 1,
-    "intelligence": 5,
+    "intelligence": 4,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -1082,8 +1082,8 @@
     "model_id": "qwen3.8-flash",
     "provider": "dashscope-intl",
     "visible": true,
-    "speed": 3,
-    "intelligence": 5,
+    "speed": 2,
+    "intelligence": 3,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -1107,8 +1107,8 @@
     "model_id": "qwen3.7-plus",
     "provider": "dashscope-intl",
     "visible": true,
-    "speed": 2,
-    "intelligence": 2,
+    "speed": 3,
+    "intelligence": 1,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -1134,7 +1134,7 @@
     "provider": "moonshot",
     "visible": true,
     "speed": 1,
-    "intelligence": 5,
+    "intelligence": 4,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -1156,7 +1156,7 @@
     "provider": "moonshot-coding",
     "visible": true,
     "speed": 1,
-    "intelligence": 5,
+    "intelligence": 4,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -1209,8 +1209,8 @@
     "model_id": "gpt-5.5",
     "provider": "codex-oauth",
     "visible": true,
-    "speed": 3,
-    "intelligence": 5,
+    "speed": 4,
+    "intelligence": 3,
     "context": 400000,
     "input_modalities": [
       "text",
@@ -1244,7 +1244,7 @@
     "provider": "codex-oauth",
     "visible": true,
     "speed": 3,
-    "intelligence": 5,
+    "intelligence": 4,
     "context": 1050000,
     "input_modalities": [
       "text",
@@ -1278,8 +1278,8 @@
     "model_id": "gpt-5.6-terra",
     "provider": "codex-oauth",
     "visible": true,
-    "speed": 4,
-    "intelligence": 5,
+    "speed": 3,
+    "intelligence": 3,
     "context": 1050000,
     "input_modalities": [
       "text",
@@ -1313,7 +1313,7 @@
     "provider": "codex-oauth",
     "visible": true,
     "speed": 4,
-    "intelligence": 4,
+    "intelligence": 3,
     "context": 1050000,
     "input_modalities": [
       "text",
@@ -1381,8 +1381,8 @@
     "model_id": "gpt-6-sol",
     "provider": "codex-oauth",
     "visible": true,
-    "speed": 3,
-    "intelligence": 5,
+    "speed": 4,
+    "intelligence": 4,
     "context": 1050000,
     "input_modalities": [
       "text",
@@ -1415,8 +1415,8 @@
     "model_id": "gpt-6-luna",
     "provider": "codex-oauth",
     "visible": true,
-    "speed": 4,
-    "intelligence": 4,
+    "speed": 5,
+    "intelligence": 3,
     "context": 1050000,
     "input_modalities": [
       "text",
@@ -1450,7 +1450,7 @@
     "provider": "claude-oauth",
     "visible": true,
     "speed": 2,
-    "intelligence": 3,
+    "intelligence": 2,
     "context": 200000,
     "input_modalities": [
       "text",
@@ -1479,7 +1479,7 @@
     "model_id": "claude-fable-5",
     "provider": "claude-oauth",
     "visible": true,
-    "speed": 3,
+    "speed": 2,
     "intelligence": 5,
     "context": 1000000,
     "input_modalities": [
@@ -1543,7 +1543,7 @@
     "model_id": "claude-opus-5-5",
     "provider": "claude-oauth",
     "visible": true,
-    "speed": 2,
+    "speed": 3,
     "intelligence": 5,
     "context": 1000000,
     "input_modalities": [
@@ -1614,7 +1614,7 @@
     "provider": "claude-oauth",
     "visible": true,
     "speed": 3,
-    "intelligence": 5,
+    "intelligence": 3,
     "context": 1000000,
     "input_modalities": [
       "text",
@@ -1646,7 +1646,7 @@
     "provider": "claude-oauth",
     "visible": true,
     "speed": 2,
-    "intelligence": 5,
+    "intelligence": 3,
     "context": 200000,
     "input_modalities": [
       "text",
@@ -1676,7 +1676,7 @@
     "model_id": "claude-haiku-4-5-20251001",
     "provider": "claude-oauth",
     "visible": true,
-    "speed": 3,
+    "speed": 4,
     "intelligence": 1,
     "context": 200000,
     "input_modalities": [
@@ -1698,7 +1698,7 @@
     "provider": "claude-oauth",
     "visible": true,
     "speed": 2,
-    "intelligence": 5,
+    "intelligence": 3,
     "context": 1000000,
     "input_modalities": [
       "text",
