@@ -1078,8 +1078,12 @@ export const INLINE_ARTIFACT_MAP: Record<
   order_receipt: OrderReceiptCard,
 };
 
-/** The compact cards that are about one listed stock, and so have a chart to open. */
-const CHART_CARD_TYPES = new Set(['quote', 'stock_prices', 'company_overview']);
+/**
+ * The compact cards whose data is a price, and so read better as the live
+ * chart. An overview is prose and fundamentals: the chart is a neighbour of
+ * that, not a bigger view of it, so its card opens the result itself.
+ */
+const CHART_CARD_TYPES = new Set(['quote', 'stock_prices']);
 
 /** The symbol whose live chart a card opens, or null for a card about no one stock. */
 export function chartSymbolOf(artifact: Record<string, unknown> | null | undefined): string | null {

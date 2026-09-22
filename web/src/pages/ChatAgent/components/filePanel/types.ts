@@ -97,10 +97,15 @@ export interface PreviewSpec {
   command?: string;
 }
 
-/** What a chart tab is opened with. The symbol is the identity; the interval is where it starts. */
+/**
+ * What a chart tab is opened with. The symbol is the identity; the interval is
+ * where it starts. `workspaceId` is whose annotations the chart draws, when an
+ * artifact names one other than the panel's; absent, the panel's own.
+ */
 export interface ChartTabSpec {
   symbol: string;
   timeframe?: string;
+  workspaceId?: string;
 }
 
 /**

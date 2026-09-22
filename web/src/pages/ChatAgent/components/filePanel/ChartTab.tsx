@@ -33,6 +33,8 @@ interface ChartTabProps {
 export function ChartTab({ tab, tabs, workspaceId, onAddContext, onOpenInMarketView }: ChartTabProps): React.ReactElement {
   const { t } = useTranslation();
   const { id, symbol, timeframe } = tab;
+  // An artifact from another workspace opens on that workspace's drawings.
+  const chartWorkspaceId = tab.workspaceId ?? workspaceId;
   const { patchTab, retargetChart } = tabs;
 
   // The chart is a live view, so the context it hands over is a pointer to
@@ -53,7 +55,11 @@ export function ChartTab({ tab, tabs, workspaceId, onAddContext, onOpenInMarketV
 
   const onSwitchSymbol = useCallback((next: string) => retargetChart(id, next), [retargetChart, id]);
 
-  const openInMarketView = useCallback(() => onOpenInMarketView?.({ symbol, timeframe }), [onOpenInMarketView, symbol, timeframe]);
+  // The page opens on the same drawings the tab shows.
+  const openInMarketView = useCallback(
+    () => onOpenInMarketView?.({ symbol, timeframe, workspaceId: tab.workspaceId }),
+    [onOpenInMarketView, symbol, timeframe, tab.workspaceId],
+  );
 
   const headerActions = useMemo(() => (
     <>
@@ -78,7 +84,7 @@ export function ChartTab({ tab, tabs, workspaceId, onAddContext, onOpenInMarketV
         <MarketChartSurface
           symbol={symbol}
           timeframe={timeframe}
-          workspaceId={workspaceId}
+          workspaceId={chartWorkspaceId}
           onIntervalChange={rememberInterval}
           onSwitchSymbol={onSwitchSymbol}
           headerActions={headerActions}

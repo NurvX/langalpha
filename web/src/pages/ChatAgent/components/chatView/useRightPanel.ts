@@ -522,7 +522,7 @@ export function useRightPanel({
     navigate(buildMarketViewUrl({
       symbol: spec.symbol,
       timeframe: spec.timeframe,
-      workspaceId,
+      workspaceId: spec.workspaceId ?? workspaceId,
       threadId: threadId && threadId !== '__default__' ? threadId : null,
       returnTo: location.pathname + location.search,
     }));
@@ -538,7 +538,7 @@ export function useRightPanel({
       handleOpenInMarketView(spec);
       return;
     }
-    landInFilePanel({ kind: 'chart', symbol: spec.symbol, timeframe: spec.timeframe }, { maxRatio: PREVIEW_MAX_RATIO });
+    landInFilePanel({ kind: 'chart', ...spec }, { maxRatio: PREVIEW_MAX_RATIO });
   }, [isMobile, handleOpenInMarketView, landInFilePanel]);
 
   /**

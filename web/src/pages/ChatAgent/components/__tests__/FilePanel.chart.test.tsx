@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, within } from '@testing-library/react';
+import { screen, fireEvent, within, waitFor } from '@testing-library/react';
 import { renderWithProviders } from '@/test/utils';
 
 vi.mock('@/pages/ChatAgent/utils/api', async (importOriginal) => {
@@ -75,6 +75,17 @@ describe('FilePanel chart tabs', () => {
     expect(surface).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'ws' }));
   });
 
+  it('draws another workspace\'s chart when the ask names one, and the panel\'s otherwise', async () => {
+    const { rerender } = renderWithProviders(panel({ target: { ...GOOGL, workspaceId: 'ws-art' } }));
+    await screen.findByTestId('chart-surface');
+    expect(surface).toHaveBeenLastCalledWith(expect.objectContaining({ symbol: 'GOOGL', workspaceId: 'ws-art' }));
+
+    // The same symbol asked for from this workspace comes back to the one tab, retargeted.
+    rerender(panel({ target: { ...GOOGL, seq: 2 } }));
+    await waitFor(() => expect(surface).toHaveBeenLastCalledWith(expect.objectContaining({ symbol: 'GOOGL', workspaceId: 'ws' })));
+    expect(within(screen.getByRole('tablist')).getAllByRole('tab')).toHaveLength(1);
+  });
+
   it('hands the chart to the composer as a one-line pointer, not its data', async () => {
     const onAddContext = vi.fn();
     renderWithProviders(panel({ target: GOOGL, onAddContext }));
@@ -135,6 +146,15 @@ describe('FilePanel chart tabs', () => {
 
     fireEvent.click(screen.getByTitle('Open in MarketView'));
     expect(onOpenInMarketView).toHaveBeenCalledWith({ symbol: 'GOOGL', timeframe: '1day' });
+  });
+
+  it('leaves for MarketView on the drawings it is showing, another workspace\'s included', async () => {
+    const onOpenInMarketView = vi.fn();
+    renderWithProviders(panel({ target: { ...GOOGL, workspaceId: 'ws-art' }, onOpenInMarketView }));
+    await screen.findByTestId('chart-surface');
+
+    fireEvent.click(screen.getByTitle('Open in MarketView'));
+    expect(onOpenInMarketView).toHaveBeenCalledWith({ symbol: 'GOOGL', timeframe: '1day', workspaceId: 'ws-art' });
   });
 
   it('turns an empty tab into a chart at once, on the last symbol looked at', async () => {

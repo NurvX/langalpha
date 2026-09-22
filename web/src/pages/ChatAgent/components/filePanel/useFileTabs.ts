@@ -45,7 +45,7 @@ type TabBody =
     /** How the agent started the server, so a restored tab can restart an idle port. */
     command?: string;
   }
-  | { kind: 'chart'; symbol: string; timeframe: string }
+  | { kind: 'chart'; symbol: string; timeframe: string; workspaceId?: string }
   | ({ kind: 'tool'; preview: boolean } & ToolTabSpec)
   | ({ kind: 'plan'; preview: boolean } & PlanTabSpec)
   | { kind: 'sources'; preview: boolean; messageId: string };
@@ -122,6 +122,7 @@ const persistedTabSchemas = {
     // bars endpoint for a bucket it does not serve, so a restored tab would
     // come back blank rather than on the daily view.
     timeframe: z.string().refine((v) => INTERVAL_KEYS.has(v)).catch(DEFAULT_TIMEFRAME),
+    workspaceId: z.string().min(1).optional().catch(undefined),
   }),
 };
 type PersistedTabKind = keyof typeof persistedTabSchemas;
@@ -188,9 +189,12 @@ function rememberChartSymbol(workspaceId: string, symbol: string): void {
   try { localStorage.setItem(lastChartStorageKey(workspaceId), symbol); } catch { /* not worth failing over */ }
 }
 
-/** The ticker as a tab knows it, or null for a blank the header should ignore. */
+/**
+ * The ticker as a tab knows it, or null for anything the persisted schema
+ * would drop on reload, so a tab and its restored copy never disagree.
+ */
 function chartTicker(symbol: string): string | null {
-  return symbol.trim().toUpperCase() || null;
+  return readTypedTicker(symbol);
 }
 
 function emptyTab(): FileTab {
@@ -431,9 +435,11 @@ export function useFileTabs(
   /**
    * One tab per symbol: asking for GOOGL again comes back to the GOOGL tab. A
    * re-open that names an interval moves the chart there; one that does not
-   * leaves the tab on whatever interval it was last looked at on.
+   * leaves the tab on whatever interval it was last looked at on. The
+   * workspace is the ask's each time, so the tab draws the annotations the
+   * card that opened it was about.
    */
-  const openChart = useCallback(({ symbol, timeframe }: ChartTabSpec) => {
+  const openChart = useCallback(({ symbol, timeframe, workspaceId: chartWorkspaceId }: ChartTabSpec) => {
     const ticker = chartTicker(symbol);
     if (!ticker) return;
     if (persist) rememberChartSymbol(workspaceId, ticker);
@@ -441,6 +447,7 @@ export function useFileTabs(
       kind: 'chart',
       symbol: ticker,
       timeframe: timeframe ?? (existing?.kind === 'chart' ? existing.timeframe : DEFAULT_TIMEFRAME),
+      ...(chartWorkspaceId && { workspaceId: chartWorkspaceId }),
     })));
   }, [workspaceId, persist]);
 
