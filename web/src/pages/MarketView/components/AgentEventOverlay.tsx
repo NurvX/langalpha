@@ -36,6 +36,7 @@ import type { ChartDataPoint } from '@/types/market';
 
 import { useAnnotationsForView } from '../stores/chartAnnotationStore';
 import { buildEvents, type EventItem } from '../utils/annotationGeometry';
+import { isOnPricePane, pricePaneHeight } from '../utils/paneBounds';
 import './AgentEventOverlay.css';
 
 // Keep a badge's center this far from the pane edges so it stays readable.
@@ -209,6 +210,8 @@ export const AgentEventOverlay = React.memo(function AgentEventOverlay({
     }
     const host = hostRef.current;
     const w = host?.clientWidth ?? 0;
+    // The host spans the RSI pane too; a price off the price pane has no badge.
+    const paneH = pricePaneHeight(chart, host?.clientHeight ?? 0);
     const next: PlacedEvent[] = [];
     for (const ev of evs) {
       let x: number | null;
@@ -219,7 +222,7 @@ export const AgentEventOverlay = React.memo(function AgentEventOverlay({
       } catch {
         continue;
       }
-      if (x == null || y == null) continue;
+      if (x == null || y == null || !isOnPricePane(y, paneH)) continue;
       const cx = w > 0 ? Math.max(EDGE_X, Math.min(x, w - EDGE_X)) : x;
       next.push({ ...ev, x: cx, y, below: y < FLIP_Y });
     }

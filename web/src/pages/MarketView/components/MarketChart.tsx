@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useImperativeHandle, forwardRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { createChart, ColorType, CrosshairMode, PriceScaleMode, LineType, LineStyle } from 'lightweight-charts';
-import type { IChartApi, LogicalRange, MouseEventParams } from 'lightweight-charts';
+import { createChart, createTextWatermark, ColorType, CrosshairMode, PriceScaleMode, LineType, LineStyle, AreaSeries, BaselineSeries, CandlestickSeries, HistogramSeries, LineSeries } from 'lightweight-charts';
+import type { IChartApi, ITextWatermarkPluginApi, LogicalRange, MouseEventParams, Time } from 'lightweight-charts';
 import html2canvas from 'html2canvas';
 import './MarketChart.css';
 import { fetchStockData } from '../utils/api';
@@ -34,6 +34,7 @@ import {
 } from '../utils/chartConstants';
 import type { ChartDataPoint as ChartConstDataPoint } from '../utils/chartConstants';
 import { ExtendedHoursBgPrimitive } from '../utils/extendedHoursBg';
+import { PaneLabelPrimitive } from '../utils/paneLabelPrimitive';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Loader } from '@/components/ui/loader';
 import { CrosshairTooltipLayer, type CrosshairTooltipState } from './CrosshairTooltip';
@@ -50,6 +51,7 @@ import { SelectionPrimitive, type CommittedSelection } from '../utils/selectionP
 import { SelectionCommentOverlay } from './SelectionCommentOverlay';
 import { snapToNearestBar, toUnixSeconds } from '../utils/annotationGeometry';
 import { downsampleBars } from '../utils/downsampleBars';
+import { clampToPricePane, isOnPricePane, pricePaneHeight } from '../utils/paneBounds';
 import { SlidersHorizontal, Settings2, Maximize2, Minimize2, ChevronDown, Plus, Minus, RotateCcw, Menu, X, SquareDashedMousePointer, Ruler } from 'lucide-react';
 
 import { loadPref, savePref } from '../utils/prefs';
@@ -156,10 +158,10 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   const supports4hInterval = marketStatus == null || providers.some(p => p !== 'yfinance');
   const rootRef = useRef<HTMLDivElement>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
-  const rsiChartContainerRef = useRef<HTMLDivElement>(null);
   const lightWrapperRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const rsiChartRef = useRef<IChartApi | null>(null);
+  const watermarkRef = useRef<ITextWatermarkPluginApi<Time> | null>(null);
+  const rsiLabelRef = useRef<PaneLabelPrimitive | null>(null);
   // TODO: type properly — lightweight-charts series types are complex generics
   const candlestickSeriesRef = useRef<any>(null);
   const rsiSeriesRef = useRef<any>(null);
@@ -519,10 +521,16 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     const container = chartContainerRef.current;
     const prim = selectionPrimitiveRef.current;
     if (!container || !prim) return;
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* unsupported */ }
     const rect = container.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const rawY = e.clientY - rect.top;
+    // The RSI pane shares this container; a gesture there is not a price.
+    // Either tool starts on the price pane, so a selection's bounds are points
+    // the user chose.
+    const paneH = pricePaneHeight(chartRef.current, rect.height);
+    if (!isOnPricePane(rawY, paneH)) return;
+    const y = clampToPricePane(rawY, paneH);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* unsupported */ }
     selectDragRef.current = { startX: x, startY: y };
     prim.setDraft(
       mode === 'price_level'
@@ -539,7 +547,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     if (!container || !prim) return;
     const rect = container.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const y = clampToPricePane(e.clientY - rect.top, pricePaneHeight(chartRef.current, rect.height));
     prim.setDraft(
       selectModeRef.current === 'price_level'
         ? { type: 'price_level', x1: 0, y1: y, x2: rect.width, y2: y }
@@ -558,7 +566,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     if (container && series) {
       const rect = container.getBoundingClientRect();
       const endX = e.clientX - rect.left;
-      const endY = e.clientY - rect.top;
+      const endY = clampToPricePane(e.clientY - rect.top, pricePaneHeight(chartRef.current, rect.height));
       try {
         if (mode === 'price_level') {
           const price = series.coordinateToPrice(endY);
@@ -971,28 +979,12 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
       });
     },
     captureChartAsDataUrl: async () => {
-      // Capture main chart (+ RSI if visible) using native takeScreenshot.
-      // html2canvas can't read lightweight-charts canvas pixels, so we
-      // stitch the native screenshots together on an offscreen canvas.
+      // html2canvas can't read lightweight-charts canvas pixels; the native
+      // screenshot covers every pane (price + RSI) in one image.
       try {
-        const mainCanvas = chartRef.current?.takeScreenshot();
-        const rsiCanvas = rsiChartRef.current?.takeScreenshot();
-        if (!mainCanvas) return null;
-
-        const mainW = mainCanvas.width, mainH = mainCanvas.height;
-        const rsiW = rsiCanvas?.width || 0, rsiH = rsiCanvas?.height || 0;
-        const totalH = mainH + (rsiCanvas ? rsiH : 0);
-
-        const offscreen = document.createElement('canvas');
-        offscreen.width = Math.max(mainW, rsiW);
-        offscreen.height = totalH;
-        const ctx = offscreen.getContext('2d')!;
-        ctx.fillStyle = ct.bg;
-        ctx.fillRect(0, 0, offscreen.width, offscreen.height);
-        ctx.drawImage(mainCanvas, 0, 0);
-        if (rsiCanvas) ctx.drawImage(rsiCanvas, 0, mainH);
-
-        return offscreen.toDataURL('image/jpeg', 0.85);
+        const canvas = chartRef.current?.takeScreenshot();
+        if (!canvas) return null;
+        return canvas.toDataURL('image/jpeg', 0.85);
       } catch (err) {
         console.error('Chart capture failed:', err);
         return null;
@@ -1253,19 +1245,12 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
       layout: {
         background: { type: ColorType.Solid, color: t0.bg },
         textColor: t0.text,
+        panes: { enableResize: true, separatorColor: t0.grid, separatorHoverColor: t0.grid },
       },
       autoSize: true,
       grid: {
         vertLines: { color: t0.grid },
         horzLines: { color: t0.grid },
-      },
-      watermark: {
-        visible: true,
-        text: symbol,
-        fontSize: 48,
-        color: t0.watermark,
-        horzAlign: 'center',
-        vertAlign: 'center',
       },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: {
@@ -1283,10 +1268,16 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
         horzTouchDrag: true,
         vertTouchDrag: false,
       },
-    } as any);
+    });
     chartRef.current = chart;
 
-    candlestickSeriesRef.current = chart.addCandlestickSeries({
+    watermarkRef.current = createTextWatermark(chart.panes()[0], {
+      horzAlign: 'center',
+      vertAlign: 'center',
+      lines: [{ text: symbolRef.current, color: t0.watermark, fontSize: 48 }],
+    });
+
+    candlestickSeriesRef.current = chart.addSeries(CandlestickSeries, {
       upColor: t0.upColor,
       downColor: t0.downColor,
       borderVisible: false,
@@ -1314,7 +1305,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     selectionPrimitiveRef.current.setTheme(theme === 'dark' ? 'dark' : 'light');
 
     // Volume histogram series
-    volumeSeriesRef.current = chart.addHistogramSeries({
+    volumeSeriesRef.current = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
     });
@@ -1324,7 +1315,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
 
     // All MA line series (curved)
     MA_CONFIGS.forEach(({ period, color }) => {
-      maSeriesRefs.current[period] = chart.addLineSeries({
+      maSeriesRefs.current[period] = chart.addSeries(LineSeries, {
         color,
         lineWidth: 1.5 as any,
         lineType: LineType.Curved,
@@ -1334,9 +1325,40 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
       });
     });
 
+    // RSI lives in a second pane of the same chart, so it shares the time
+    // scale (no range sync, no bar-offset arithmetic) and the screenshot.
+    // Pane heights are stretch factors: the default pane weighs 2, so 0.5
+    // gives RSI a fifth of the chart. The pane is user-resizable.
+    const rsiSeries = chart.addSeries(AreaSeries, {
+      lineColor: t0.rsiLine,
+      topColor: t0.rsiTop,
+      bottomColor: t0.rsiBottom,
+      lineWidth: 2,
+      lastValueVisible: true,
+      priceLineVisible: false,
+      priceFormat: { type: 'price', precision: 0, minMove: 1 },
+    }, 1);
+    rsiSeries.priceScale().applyOptions({ scaleMargins: { top: 0.15, bottom: 0.15 } });
+    rsiSeriesRef.current = rsiSeries;
+    const rsiPane = chart.panes()[1];
+    rsiPane.setStretchFactor(0.5);
+    const rsiLabel = new PaneLabelPrimitive(
+      `RSI (${rsiPeriodRef.current})`,
+      t0.text,
+      `12px ${getComputedStyle(chartContainerRef.current).fontFamily || 'sans-serif'}`,
+    );
+    rsiPane.attachPrimitive(rsiLabel);
+    rsiLabelRef.current = rsiLabel;
+    if (pendingRsiDataRef.current) {
+      rsiSeries.setData(pendingRsiDataRef.current as unknown as Parameters<typeof rsiSeries.setData>[0]);
+      pendingRsiDataRef.current = null;
+    }
+
     // Subscribe to crosshair move for tooltip
     chart.subscribeCrosshairMove((param: MouseEventParams) => {
-      if (!param.time || !param.point) {
+      // `point` is pane-local, so a crosshair over the RSI pane would place
+      // the OHLC tooltip at the wrong height; the tooltip is a price-pane thing.
+      if (!param.time || !param.point || (param.paneIndex ?? 0) !== 0) {
         if (tooltipStore.get().visible) tooltipStore.set({ visible: false, x: 0, y: 0, data: null });
         return;
       }
@@ -1378,79 +1400,8 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
       });
     });
 
-    // RSI chart (deferred so DOM is ready)
-    const rsiTimeout = setTimeout(() => {
-      if (!rsiChartContainerRef.current || rsiChartRef.current) return;
-      const t0 = getChartTheme(theme);
-      const rsiChart = createChart(rsiChartContainerRef.current, {
-        layout: {
-          background: { type: ColorType.Solid, color: t0.bg },
-          textColor: t0.text,
-        },
-        autoSize: true,
-        grid: {
-          vertLines: { color: t0.grid },
-          horzLines: { color: t0.grid },
-        },
-        rightPriceScale: {
-          borderColor: t0.grid,
-          visible: true,
-          scaleMargins: { top: 0.1, bottom: 0.1 },
-        },
-        timeScale: {
-          borderColor: t0.grid,
-          timeVisible: true,
-          secondsVisible: false,
-        },
-        handleScroll: {
-          mouseWheel: false,
-          pressedMouseMove: false,
-          horzTouchDrag: false,
-          vertTouchDrag: false,
-        },
-        handleScale: {
-          mouseWheel: false,
-          pinch: false,
-          axisPressedMouseMove: false,
-          axisDoubleClickReset: false,
-        },
-      } as any);
-      rsiChartRef.current = rsiChart;
-      // RSI as area series with gradient
-      rsiSeriesRef.current = rsiChart.addAreaSeries({
-        lineColor: t0.rsiLine,
-        topColor: t0.rsiTop,
-        bottomColor: t0.rsiBottom,
-        lineWidth: 2,
-        priceFormat: { type: 'price', precision: 0, minMove: 1 },
-      });
-
-      // Flush any RSI data that was computed before the series was ready (Bug 1 fix)
-      if (pendingRsiDataRef.current) {
-        rsiSeriesRef.current.setData(pendingRsiDataRef.current);
-        pendingRsiDataRef.current = null;
-        rsiChart.timeScale().fitContent();
-      }
-
-      // One-directional logical-range sync: main chart drives RSI chart.
-      // RSI data starts `period` bars later than main data, so logical
-      // index 0 on RSI = index `period` on main. Subtract the offset
-      // when forwarding the range.
-      // RSI chart has all scroll/scale interactions disabled.
-      const mainTs = chart.timeScale();
-      const rsiTs = rsiChart.timeScale();
-      mainTs.subscribeVisibleLogicalRangeChange((range) => {
-        if (!range) return;
-        const offset = rsiPeriodRef.current;
-        try {
-          rsiTs.setVisibleLogicalRange({ from: range.from - offset, to: range.to - offset });
-        } catch { /* RSI data may not cover the range yet */ }
-      });
-    }, 100);
 
     return () => {
-      clearTimeout(rsiTimeout);
-
       // Unsubscribe scroll-load listener
       if (rangeUnsubRef.current) {
         rangeUnsubRef.current();
@@ -1466,14 +1417,12 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
       baselineSeriesRef.current = null;
       Object.keys(maSeriesRefs.current).forEach(k => { maSeriesRefs.current[Number(k)] = null; });
       rsiSeriesRef.current = null;
+      rsiLabelRef.current = null;
+      watermarkRef.current = null;
 
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;
-      }
-      if (rsiChartRef.current) {
-        rsiChartRef.current.remove();
-        rsiChartRef.current = null;
       }
     };
     // priceFormatRef is a stable ref (from useCurrencyDisplay) — listed so
@@ -1483,31 +1432,24 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
 
   // --- Effect: Update watermark when symbol changes ---
   useEffect(() => {
-    if (chartRef.current) {
-      chartRef.current.applyOptions({
-        watermark: {
-          visible: true,
-          text: symbol,
-          fontSize: 48,
-          color: ct.watermark,
-          horzAlign: 'center',
-          vertAlign: 'center',
-        },
-      });
-    }
+    watermarkRef.current?.applyOptions({
+      lines: [{ text: symbol, color: ct.watermark, fontSize: 48 }],
+    });
   }, [symbol, ct.watermark]);
 
   // --- Effect: Re-apply theme colors when theme changes ---
   useEffect(() => {
     const chart = chartRef.current;
-    const rsiChart = rsiChartRef.current;
     if (chart) {
       chart.applyOptions({
-        layout: { background: { type: ColorType.Solid, color: ct.bg }, textColor: ct.text },
+        layout: {
+          background: { type: ColorType.Solid, color: ct.bg },
+          textColor: ct.text,
+          panes: { separatorColor: ct.grid, separatorHoverColor: ct.grid },
+        },
         grid: { vertLines: { color: ct.grid }, horzLines: { color: ct.grid } },
         rightPriceScale: { borderColor: ct.grid },
         timeScale: { borderColor: ct.grid },
-        watermark: { color: ct.watermark },
       });
       if (candlestickSeriesRef.current) {
         candlestickSeriesRef.current.applyOptions({
@@ -1541,20 +1483,18 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
         extHoursBgRef.current.setColors({ pre: ct.extBgPre, post: ct.extBgPost });
       }
     }
-    if (rsiChart) {
-      rsiChart.applyOptions({
-        layout: { background: { type: ColorType.Solid, color: ct.bg }, textColor: ct.text },
-        grid: { vertLines: { color: ct.grid }, horzLines: { color: ct.grid } },
-        rightPriceScale: { borderColor: ct.grid },
-        timeScale: { borderColor: ct.grid },
+    if (rsiSeriesRef.current) {
+      rsiSeriesRef.current.applyOptions({
+        lineColor: ct.rsiLine, topColor: ct.rsiTop, bottomColor: ct.rsiBottom,
       });
-      if (rsiSeriesRef.current) {
-        rsiSeriesRef.current.applyOptions({
-          lineColor: ct.rsiLine, topColor: ct.rsiTop, bottomColor: ct.rsiBottom,
-        });
-      }
     }
+    rsiLabelRef.current?.setColor(ct.text);
   }, [ct]);
+
+  // --- Effect: RSI pane caption follows the period and the latest value ---
+  useEffect(() => {
+    rsiLabelRef.current?.setText(`RSI (${rsiPeriod}): ${rsiValue ?? '\u2014'}`);
+  }, [rsiPeriod, rsiValue]);
 
   // --- Effect: Price scale mode ---
   useEffect(() => {
@@ -1595,7 +1535,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
       const basePrice: number = prevClose || (allDataRef.current.length > 0 ? allDataRef.current[0].open : 0);
 
       if (!baselineSeriesRef.current) {
-        baselineSeriesRef.current = chart.addBaselineSeries({
+        baselineSeriesRef.current = chart.addSeries(BaselineSeries, {
           baseValue: { type: 'price', price: basePrice },
           topLineColor: ct.baselineUp,
           topFillColor1: ct.baselineUpFill1,
@@ -1694,9 +1634,6 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
 
     // Immediately clear stale data so the price scale resets for the new symbol
     clearChartSeries();
-    if (chartRef.current) {
-      chartRef.current.applyOptions({ watermark: { text: symbol } });
-    }
     const loadData = async () => {
       setLoading(true);
       setError(null);
@@ -1827,7 +1764,6 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     const showSeconds = interval === '1min';
     const opts = { timeVisible: isIntraday, secondsVisible: showSeconds };
     if (chartRef.current) chartRef.current.applyOptions({ timeScale: opts });
-    if (rsiChartRef.current) rsiChartRef.current.applyOptions({ timeScale: opts });
   }, [interval]);
 
   // --- Effect 4: Re-run updateSeriesData when MA/RSI config changes ---
@@ -2363,10 +2299,6 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
                   <Loader size={16} label="Loading history" style={{ color: 'var(--color-text-secondary)' }} />
                 </div>
               )}
-            </div>
-            <div className="rsi-container">
-              <div className="rsi-label">RSI ({rsiPeriod}): {rsiValue ?? '\u2014'}</div>
-              <div className="rsi-chart-wrapper" ref={rsiChartContainerRef}></div>
             </div>
           </div>
           {loading && (

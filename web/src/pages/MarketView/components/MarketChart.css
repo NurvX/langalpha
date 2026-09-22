@@ -242,26 +242,6 @@
   overflow: hidden;
 }
 
-.rsi-container {
-  height: 120px;
-  flex-shrink: 0;
-  border-top: 1px solid var(--color-border-default);
-  padding: 4px 0 0 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.rsi-label {
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-  margin: 0 0 2px 8px;
-}
-
-.rsi-chart-wrapper {
-  flex: 1;
-  min-height: 80px;
-}
-
 .chart-loading,
 .chart-error {
   position: absolute;
@@ -481,7 +461,6 @@
  * The lightweight-charts watermark is an <a> whose href always contains
  * `utm_medium=lwc-link`; the class selector is a secondary safety net. */
 .chart-wrapper a[href*="utm_medium=lwc-link"],
-.rsi-chart-wrapper a[href*="utm_medium=lwc-link"],
 .tv-lightweight-charts__watermark {
   display: none !important;
   visibility: hidden !important;

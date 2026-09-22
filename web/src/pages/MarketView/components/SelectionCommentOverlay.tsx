@@ -28,6 +28,7 @@ import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 
 import { chartSelectionStore, isConfirmedFor, useChartSelections, type ChartSelection } from '../stores/chartSelectionStore';
 import { toUnixSeconds } from '../utils/annotationGeometry';
+import { pricePaneHeight } from '../utils/paneBounds';
 import './SelectionCommentOverlay.css';
 
 const GAP = 8;
@@ -141,7 +142,8 @@ export const SelectionCommentOverlay = React.memo(function SelectionCommentOverl
     }
     const host = hostRef.current;
     const paneW = host?.clientWidth ?? 0;
-    const paneH = host?.clientHeight ?? 0;
+    // The host spans the RSI pane too; pins and the composer stay on the price pane.
+    const paneH = pricePaneHeight(chart, host?.clientHeight ?? 0);
 
     // The selection's right + left (time) edges and top (high price) edge. A
     // price level spans full width, so both edges are the right side.
