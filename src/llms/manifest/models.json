@@ -318,9 +318,15 @@
       "max_tokens": 128000,
       "thinking": {
         "type": "adaptive",
-        "display": "summarized"
+        "display": "summarized",
+        "block_binding": {
+          "prefix_mismatch_behavior": "drop_block"
+        }
       }
     },
+    "additional_betas": [
+      "thinking-binding-controls-2026-08-01"
+    ],
     "reasoning": {
       "efforts": [
         "low",
@@ -1549,9 +1555,15 @@
       "max_tokens": 128000,
       "thinking": {
         "type": "adaptive",
-        "display": "summarized"
+        "display": "summarized",
+        "block_binding": {
+          "prefix_mismatch_behavior": "drop_block"
+        }
       }
     },
+    "additional_betas": [
+      "thinking-binding-controls-2026-08-01"
+    ],
     "reasoning": {
       "efforts": [
         "low",
