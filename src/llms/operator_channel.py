@@ -127,6 +127,7 @@ _OFFICIAL_OPENAI_HOST = "api.openai.com"
 #: 4.6, Haiku, and everything before Opus 4.8 reject it with a 400.
 _ANTHROPIC_MIDTURN_SYSTEM_MODELS = frozenset(
     {
+        "claude-opus-5-5",
         "claude-opus-5",
         "claude-opus-4-8",
         "claude-sonnet-5",
