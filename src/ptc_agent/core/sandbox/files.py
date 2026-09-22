@@ -346,13 +346,14 @@ async def _exec_text_write_once(
         [
             "set -eu",
             f"target={target}",
+            'mkdir -p -- "$(dirname -- "$target")"',
             'tmp=$(mktemp "${target}.tmp.XXXXXX")',
             "trap 'rm -f -- \"$tmp\"' EXIT HUP INT TERM",
             f"base64 -d > \"$tmp\" <<'{_INLINE_TEXT_MARKER}'",
             payload,
             _INLINE_TEXT_MARKER,
             'count=$(wc -c < "$tmp")',
-            'mv -f -- "$tmp" "$target"',
+            'mv -fT -- "$tmp" "$target"',
             "trap - EXIT HUP INT TERM",
             "printf '%s\\n' \"$count\"",
         ]
@@ -365,16 +366,14 @@ async def _exec_text_write_once(
             timeout=30,
             retry_policy=RetryPolicy.SAFE,
         )
-        if getattr(result, "exit_code", 1) != 0:
+        exit_code = getattr(result, "exit_code", -1)
+        if exit_code < 0:
+            # The Docker runtime folds a timeout or an exec exception into
+            # exit -1 rather than raising, so this is a transport failure and
+            # belongs to the same classification as a raised one.
             raise RuntimeError(
-                f"Atomic text write failed with exit code {result.exit_code}: "
-                f"{getattr(result, 'stderr', '')}"
+                f"exec did not complete: {getattr(result, 'stderr', '') or exit_code}"
             )
-        safe_record(workspace_fs_bytes, len(content), {"op": "write"})
-        try:
-            return True, int((getattr(result, "stdout", "") or "").strip())
-        except ValueError:
-            return True, None
     except Exception as e:
         await _raise_normalized(sandbox, e, op="write_file", path=normalized_path)
         logger.warning(
@@ -384,6 +383,25 @@ async def _exec_text_write_once(
             error=str(e),
         )
         return False, None
+
+    if exit_code != 0:
+        # The sandbox answered, so this is the script failing on the file (a
+        # permission, a full disk, a directory in the way), not the runtime
+        # failing to reach it. Routing it through the liveness classifier
+        # relabels every such error "Sandbox is not reachable".
+        logger.warning(
+            "Text write script failed",
+            filepath=filepath,
+            normalized_path=normalized_path,
+            exit_code=exit_code,
+            stderr=(getattr(result, "stderr", "") or "").strip()[:500],
+        )
+        return False, None
+    safe_record(workspace_fs_bytes, len(content), {"op": "write"})
+    try:
+        return True, int((getattr(result, "stdout", "") or "").strip())
+    except ValueError:
+        return True, None
 
 
 async def awrite_file_text(sandbox: "PTCSandbox", filepath: str, content: str) -> bool:
