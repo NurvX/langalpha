@@ -90,6 +90,12 @@ def render() -> str:
         out.append(f"export const {export_name} = '{getattr(owner, attr)}';\n")
     out.append("\n")
 
+    out.append(
+        "/** The agent's own notes file at the workspace root: runtime context\n"
+        " *  the model reads every turn, never a deliverable. */\n"
+    )
+    out.append(f"export const AGENT_MD_FILE = '{WorkspaceLayout.AGENT_MD_FILE}';\n\n")
+
     out.append("export const MEMORY_INDEX_FILENAME = ")
     out.append(f"'{MEMORY_INDEX_FILENAME}';\n")
     out.append(f"export const MEMO_INDEX_FILENAME = '{MEMO_INDEX_FILENAME}';\n\n")

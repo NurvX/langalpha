@@ -137,6 +137,45 @@ describe('collectTurnFiles', () => {
     expect(files.map((f) => f.path)).toEqual(['results/memo.md', 'results/comps.csv']);
   });
 
+  it('leaves the agent\'s notes file out, wherever the workspace keeps it', () => {
+    const files = collectTurnFiles([
+      assistant('Updated [the report](weekly/report.md) and [my notes](/home/workspace/agent.md).', {
+        a: write(0, 'weekly/report.md'),
+        b: write(1, 'agent.md'),
+        c: write(2, '/home/workspace/alpha/agent.md'),
+      }),
+    ], 'alpha');
+    expect(files.map((f) => f.path)).toEqual(['weekly/report.md']);
+  });
+
+  it('keeps an agent.md the user asked for in a subfolder', () => {
+    const files = collectTurnFiles([
+      assistant('Drafted [the spec](reports/agent.md).', {
+        a: write(0, 'docs/agent.md'),
+        b: write(1, './agent.md'),
+        c: write(2, 'reports/agent.md'),
+      }),
+    ]);
+    expect(files.map((f) => f.path)).toEqual(['reports/agent.md', 'docs/agent.md']);
+  });
+
+  it('keeps an agent.md in a folder that is not the workspace\'s own', () => {
+    const files = collectTurnFiles([
+      assistant('Wrote two.', {
+        a: write(0, '/home/workspace/docs/agent.md'),
+        b: write(1, '/tmp/agent.md'),
+        c: write(2, '/home/workspace/alpha/agent.md'),
+      }),
+    ], 'alpha');
+    expect(files.map((f) => f.path)).toEqual(['docs/agent.md', '/tmp/agent.md']);
+  });
+
+  it('keeps a project-folder agent.md until the folder name is known', () => {
+    const turn = [assistant('Wrote it.', { a: write(0, '/home/workspace/alpha/agent.md') })];
+    expect(collectTurnFiles(turn).map((f) => f.path)).toEqual(['alpha/agent.md']);
+    expect(collectTurnFiles(turn, 'alpha')).toEqual([]);
+  });
+
   it('leaves out system paths, section links and folders', () => {
     const files = collectTurnFiles([
       assistant('[skills](.agents/skills/report/SKILL.md), [a section](#findings), [a folder](results/), [a route](/settings)'),
@@ -251,6 +290,13 @@ describe('turnFilesByTurn', () => {
 
     expect(before).toBeUndefined();
     expect(after?.map((f) => f.path)).toEqual(['results/report.md']);
+  });
+
+  it('rebuilds when the workspace folder name arrives', () => {
+    const settled = assistant('Done.', { a: write(0, '/home/workspace/alpha/agent.md') });
+    const projected = [turn(settled as Record<string, unknown>, 0)];
+    expect(turnFilesByTurn(projected).get(0)?.map((f) => f.path)).toEqual(['alpha/agent.md']);
+    expect(turnFilesByTurn(projected, 'alpha').get(0)).toBeUndefined();
   });
 
   it('claims nothing for a turn still streaming', () => {

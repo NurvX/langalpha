@@ -123,6 +123,10 @@ export default function MarketChatPanel(props: MarketChatPanelProps): React.Reac
   const activeWorkspaceId = mode === 'fast'
     ? (flashWs as { workspace_id?: string } | undefined)?.workspace_id ?? null
     : selectedWorkspaceId;
+  // The folder the workspace lives in on a shared computer, which the turn
+  // file deck needs to tell the workspace's own notes file from a deliverable.
+  const activeWorkspace = mode === 'fast' ? flashWs : workspaces.find((w) => w.workspace_id === selectedWorkspaceId);
+  const workspaceDirName = activeWorkspace?.dir_name;
 
   // Initial thread resolution. URL `?thread=` wins, then localStorage keyed by
   // (workspace, symbol), then a new chat. This state determines which thread
@@ -217,6 +221,7 @@ export default function MarketChatPanel(props: MarketChatPanelProps): React.Reac
         key={`${activeWorkspaceId}:${activeThreadInit}`}
         {...props}
         activeWorkspaceId={activeWorkspaceId}
+        workspaceDirName={workspaceDirName}
         initialThreadId={activeThreadInit.split('#')[0]}
         ptcWorkspaces={workspaces}
         onSelectThread={handleSelectThread}
@@ -228,6 +233,7 @@ export default function MarketChatPanel(props: MarketChatPanelProps): React.Reac
 
 interface ChatBodyProps extends MarketChatPanelProps {
   activeWorkspaceId: string;
+  workspaceDirName?: string | null;
   initialThreadId: string;
   ptcWorkspaces: Workspace[];
   onSelectThread: (threadId: string) => void;
@@ -242,6 +248,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     onModeChange,
     ptcWorkspaces,
     selectedWorkspaceId,
+    workspaceDirName,
     onWorkspaceChange,
     chartImage,
     chartImageDesc,
@@ -834,6 +841,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
                     isLoadingHistory={isLoadingHistory}
                     feedbackByTurn={feedbackByTurn}
                     flashContext={flashContext}
+                    workspaceDirName={workspaceDirName}
                   />
                 </MessageActionsProvider>
               </SubagentTelemetryContext.Provider>

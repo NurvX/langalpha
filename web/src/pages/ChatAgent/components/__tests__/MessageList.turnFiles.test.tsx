@@ -208,6 +208,23 @@ describe('turn deliverables deck', () => {
     expect(container.querySelector('[data-testid="turn-files"]')).toBeNull();
   });
 
+  it('keeps the agent notes file out of the deck on a surface that names no workspace folder', () => {
+    // A share and the MarketView panel render this deck without the folder the
+    // workspace lives in; the filter belongs to the deck, not to the one
+    // caller that knows the folder, so the bare and the sandbox-rooted forms
+    // still go without it.
+    const { container } = renderList(
+      [
+        userMsg('u0'),
+        assistant('a0', 'Wrote [the report](results/report.md).', {
+          toolCallProcesses: { a: write(0, 'agent.md'), b: write(1, '/home/workspace/agent.md'), c: write(2, 'results/report.md') },
+        }),
+      ],
+      { onOpenFile: vi.fn() },
+    );
+    expect(names(container)).toEqual(['report.md']);
+  });
+
   it('offers Download beside Open, and only where the host permits saving', async () => {
     const onDownloadFile = vi.fn();
     const { container } = renderList(

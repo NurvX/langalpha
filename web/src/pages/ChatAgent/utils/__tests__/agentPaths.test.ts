@@ -3,9 +3,11 @@ import {
   MEMORY_WORKSPACE_DIR,
   classifyAgentPath,
   computeAgentArtifactRouting,
+  isAgentNotesPath,
   isUserProfileReadmePath,
   normalizeAgentHref,
   normalizeAgentPath,
+  parseAgentHref,
   parseAgentPath,
   topicFromMemoryKey,
   workspaceRelativePath,
@@ -433,5 +435,41 @@ describe('isUserProfileReadmePath', () => {
   it('handles empty / nonsense input safely', () => {
     expect(isUserProfileReadmePath('')).toBe(false);
     expect(isUserProfileReadmePath('not-a-path')).toBe(false);
+  });
+});
+
+describe('isAgentNotesPath', () => {
+  const notes = (raw: string, dir?: string | null) => isAgentNotesPath(parseAgentPath(raw), dir);
+
+  it('matches the notes file at the workspace root', () => {
+    expect(notes('agent.md')).toBe(true);
+    expect(notes('./agent.md')).toBe(true);
+    expect(notes('/home/workspace/agent.md')).toBe(true);
+    expect(notes('file:///home/daytona/agent.md')).toBe(true);
+  });
+
+  it('matches the notes file under the workspace\'s project folder', () => {
+    expect(notes('/home/workspace/alpha/agent.md', 'alpha')).toBe(true);
+    // Relative paths already resolve inside the folder, so this one is nested.
+    expect(notes('alpha/agent.md', 'alpha')).toBe(false);
+  });
+
+  it('keeps an agent.md in any other folder', () => {
+    expect(notes('/home/workspace/docs/agent.md', 'alpha')).toBe(false);
+    expect(notes('/home/workspace/docs/agent.md')).toBe(false);
+    expect(notes('reports/agent.md')).toBe(false);
+    expect(notes('reports/agent.md', 'alpha')).toBe(false);
+  });
+
+  it('keeps an agent.md rooted outside the sandbox', () => {
+    expect(notes('/tmp/agent.md')).toBe(false);
+    expect(notes('/tmp/agent.md', 'tmp')).toBe(false);
+    expect(notes('/alpha/agent.md', 'alpha')).toBe(false);
+  });
+
+  it('reads a link the same way as a tool path', () => {
+    expect(isAgentNotesPath(parseAgentHref('agent.md#notes'))).toBe(true);
+    expect(isAgentNotesPath(parseAgentHref('/home/workspace/alpha/agent.md?v=2'), 'alpha')).toBe(true);
+    expect(isAgentNotesPath(parseAgentHref('agent.md/'))).toBe(false);
   });
 });

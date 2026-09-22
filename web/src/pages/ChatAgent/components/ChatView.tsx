@@ -1528,6 +1528,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                           isLoadingHistory={isLoadingHistory}
                           feedbackByTurn={feedbackByTurn}
                           flashContext={flashContext}
+                          workspaceDirName={workspaceRecord?.dir_name}
                         />
                       </MessageActionsProvider>
                     </div>
@@ -1606,6 +1607,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                               messages={activeAgent.messages as MessageRecord[]}
                               isSubagentView={true}
                               isLoading={subagentTurnLive}
+                              workspaceDirName={workspaceRecord?.dir_name}
                             />
                           </MessageActionsProvider>
                         </div>

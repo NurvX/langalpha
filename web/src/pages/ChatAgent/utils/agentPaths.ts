@@ -1,6 +1,7 @@
 // The sandbox layout is emitted from src/ptc_agent/core/paths.py: see
 // agentPaths.generated.ts. Re-exported here so callers keep one import.
 import {
+  AGENT_MD_FILE,
   MEMO_INDEX_FILENAME,
   MEMO_USER_DIR,
   MEMORY_INDEX_FILENAME,
@@ -13,6 +14,7 @@ import {
 } from './agentPaths.generated';
 
 export {
+  AGENT_MD_FILE,
   MEMO_INDEX_FILENAME,
   MEMO_USER_DIR,
   MEMORY_INDEX_FILENAME,
@@ -38,6 +40,23 @@ export const USER_PROFILE_README_FILENAME = 'README.md';
 export function isUserProfileReadmePath(rawPath: string): boolean {
   if (!rawPath) return false;
   return workspaceRelativePath(rawPath) === `${USER_PROFILE_DIR}/${USER_PROFILE_README_FILENAME}`;
+}
+
+/**
+ * True for the workspace's own notes file, which is runtime context the agent
+ * keeps for itself rather than a deliverable. That file lives at the workspace
+ * root: `agent.md` bare or under the sandbox root, or under the project folder
+ * a workspace on a shared computer lives in, when the caller knows its name.
+ * Only a sandbox-anchored path names that folder: a relative path resolves
+ * against it already, as routing reads it, so `alpha/agent.md` is a nested file.
+ * Any other `agent.md` is a deliverable: `docs/agent.md` was asked for, and
+ * `/tmp/agent.md` keeps its own root after parsing, so it never reads as the
+ * workspace's file.
+ */
+export function isAgentNotesPath(parts: AgentPathParts, workspaceDirName?: string | null): boolean {
+  if (parts.directory) return false;
+  return parts.path === AGENT_MD_FILE
+    || (!!workspaceDirName && parts.absolute && parts.path === `${workspaceDirName}/${AGENT_MD_FILE}`);
 }
 
 // The sandbox roots the agent sometimes emits, bare or `file:///`-wrapped (see
@@ -72,7 +91,7 @@ export interface AgentPathParts {
 
 /**
  * The shared reading of a reference. `url` says the input is a markdown
- * destination rather than a path, which decides one rule: see `normalizeAgentHref`.
+ * destination rather than a path, which decides one rule: see `parseAgentHref`.
  */
 function takeApart(raw: string, url = false): AgentPathParts {
   let p = raw.trim().replace(FILE_PROTO_RE, '');
@@ -146,14 +165,19 @@ export function normalizeAgentPath(raw: string): string {
  * encoded exactly once by the HTTP layer, or Axios re-encodes the leading `%`
  * to `%25` and the backend's single `unquote` looks for a literal `%XX` name.
  */
-export function normalizeAgentHref(raw: string): string {
-  const { path } = takeApart(raw, true);
+export function parseAgentHref(raw: string): AgentPathParts {
+  const parts = takeApart(raw, true);
   try {
-    return decodeURIComponent(path);
+    return { ...parts, path: decodeURIComponent(parts.path) };
   } catch {
     // A lone `%` is a literal here, not a broken escape.
-    return path;
+    return parts;
   }
+}
+
+/** @see parseAgentHref */
+export function normalizeAgentHref(raw: string): string {
+  return parseAgentHref(raw).path;
 }
 
 export type AgentPathKind = 'memory' | 'memo' | 'user-profile' | 'skill' | 'file';
