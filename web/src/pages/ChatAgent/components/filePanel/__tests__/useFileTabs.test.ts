@@ -594,3 +594,106 @@ describe('useFileTabs chart retarget', () => {
     expect(lastChartSymbol('ws')).toBe('AMD');
   });
 });
+
+describe('useFileTabs transcript tabs', () => {
+  const kinds = (tabs: FileTab[]) => tabs.map((t) => t.kind);
+
+  it('retargets the one loaned tool tab as rows are clicked through', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+    act(() => result.current.openTool({ toolCallId: 'b' }));
+
+    expect(kinds(result.current.tabs)).toEqual(['tool']);
+    expect(result.current.activeTab).toMatchObject({ kind: 'tool', toolCallId: 'b', preview: true });
+  });
+
+  it('keeps a pinned tool tab and opens the next row beside it', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+    act(() => result.current.pinTab(result.current.activeId));
+    act(() => result.current.openTool({ toolCallId: 'b' }));
+
+    expect(result.current.tabs.map((t) => (t.kind === 'tool' ? t.toolCallId : null))).toEqual(['a', 'b']);
+    expect(result.current.tabs[0]).toMatchObject({ preview: false });
+    expect(result.current.activeTab).toMatchObject({ toolCallId: 'b', preview: true });
+  });
+
+  it('comes back to the tab a tool call already has', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+    act(() => result.current.pinTab(result.current.activeId));
+    act(() => result.current.openTool({ toolCallId: 'b' }));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+
+    expect(result.current.tabs).toHaveLength(2);
+    expect(result.current.activeTab).toMatchObject({ toolCallId: 'a', preview: false });
+  });
+
+  it('holds a tool call by id only, so the tab reads the live record', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+
+    expect(result.current.activeTab).toEqual({ id: expect.any(String), kind: 'tool', toolCallId: 'a', preview: true });
+  });
+
+  it('never takes the file being browsed for a tool result', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openFile('a.md'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+
+    expect(kinds(result.current.tabs)).toEqual(['file', 'tool']);
+    expect(result.current.tabs[0]).toMatchObject({ path: 'a.md', preview: true });
+  });
+
+  it('shares the tool slot with a plan', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+    act(() => result.current.openPlan({ planId: 'p1', plan: { description: 'do things' } }));
+
+    expect(kinds(result.current.tabs)).toEqual(['plan']);
+  });
+
+  it('keeps one tab per plan, so a second plan never retargets a pinned one', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openPlan({ planId: 'p1', plan: { description: 'first' } }));
+    act(() => result.current.pinTab(result.current.activeId));
+    act(() => result.current.openPlan({ planId: 'p2', plan: { description: 'second' } }));
+    act(() => result.current.openPlan({ planId: 'p1', plan: { description: 'first' } }));
+
+    expect(result.current.tabs.map((t) => (t.kind === 'plan' ? t.planId : null))).toEqual(['p1', 'p2']);
+    expect(result.current.activeTab).toMatchObject({ kind: 'plan', planId: 'p1', preview: false });
+  });
+
+  it('opens one sources tab per turn in a slot of its own', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+    act(() => result.current.openSources('m1'));
+    act(() => result.current.openSources('m2'));
+
+    expect(kinds(result.current.tabs)).toEqual(['tool', 'sources']);
+    expect(result.current.activeTab).toMatchObject({ kind: 'sources', messageId: 'm2', preview: true });
+  });
+
+  it('stores none of them, and comes back on the stored tab before the one that was in front', () => {
+    const { result, unmount } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openFile('a.md', { pin: true }));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+    act(() => result.current.openSources('m1'));
+    expect(stored(tabsStorageKey('ws'))).toEqual({ tabs: [{ kind: 'file', path: 'a.md', preview: false }], active: 0 });
+    unmount();
+
+    const { result: again } = renderHook(() => useFileTabs('ws'));
+    expect(kinds(again.current.tabs)).toEqual(['file']);
+    expect(again.current.activeTab).toMatchObject({ path: 'a.md' });
+  });
+
+  it('drops a stored tool or sources entry, should one turn up', () => {
+    localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({
+      tabs: [{ kind: 'tool', toolCallId: 'a' }, { kind: 'file', path: 'a.md' }, { kind: 'sources', messageId: 'm' }],
+      active: 2,
+    }));
+    const { result } = renderHook(() => useFileTabs('ws'));
+    expect(paths(result.current.tabs)).toEqual(['a.md']);
+    expect(activePath(result.current)).toBe('a.md');
+  });
+});

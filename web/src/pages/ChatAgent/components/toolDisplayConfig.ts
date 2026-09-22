@@ -159,6 +159,11 @@ function entityLabel(entity: 'portfolio' | 'watchlist' | 'preference'): string {
   return 'Preference';
 }
 
+/** A subagent spawn, under either spelling the stream has used for it. */
+export function isTaskTool(toolName: string | undefined): boolean {
+  return toolName === 'Task' || toolName === 'task';
+}
+
 export function getToolIcon(rawToolName: string, args?: ToolCallArgs): LucideIcon {
   const info = classifyFromArgs(rawToolName, args);
   if (info) {

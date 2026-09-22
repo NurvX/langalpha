@@ -43,15 +43,7 @@ export interface LocationState {
   [key: string]: unknown;
 }
 
-export interface ToolCallProcessRecord {
-  toolName?: string;
-  toolCallResult?: { artifact?: { type?: string } };
-  [key: string]: unknown;
-}
-
-export interface PlanData {
-  [key: string]: unknown;
-}
+export type { PlanData } from '../filePanel/types';
 
 /** Subagent message shape (matches useCardState's SubagentMessage) */
 export interface SubagentMessage {

@@ -56,6 +56,11 @@ import { PreviewCrumbs } from './filePanel/PreviewCrumbs';
 import { PreviewPanes } from './filePanel/PreviewPanes';
 import { ChartTab } from './filePanel/ChartTab';
 import { usePreviews } from './filePanel/usePreviews';
+import DetailPanel from './DetailPanel';
+import type { SubagentInfo, ToolCallProcessRecord } from './ToolCallDetailView';
+import { countDedupedSources, type ProvenanceRecord } from '@/types/chat';
+
+const SourcesPanel = React.lazy(() => import('./SourcesPanel'));
 
 /** Below this the tree cannot be a column without starving the viewer. */
 const TREE_OVERLAY_WIDTH = 720;
@@ -72,6 +77,14 @@ interface FilePanelProps {
   onTargetHandled?: () => void;
   /** Leaves the panel for the full MarketView page on this symbol. */
   onOpenInMarketView?: ((spec: ChartTabSpec) => void) | null;
+  /** Leaves for a subagent's own transcript, from a tool tab showing its task. */
+  onOpenSubagentTask?: ((info: SubagentInfo) => void) | null;
+  /** A tool call's live record, for a tool tab; read on every render so a running call's result shows when it lands. */
+  getToolCallProcess?: ((toolCallId: string) => ToolCallProcessRecord | undefined) | null;
+  /** A turn's live provenance, for a sources tab; read on every render so records streaming in show. */
+  getSourcesRecords?: ((messageId: string) => Record<string, ProvenanceRecord> | undefined) | null;
+  /** Every turn's provenance merged, the sources tab's "All sources" scope; read only while that tab is showing. */
+  getAllSourcesRecords?: (() => Record<string, ProvenanceRecord> | undefined) | null;
   /** Opens a reference to another workspace (a `__wsref__` link inside a viewed file). */
   onOpenFile?: OpenFileHandler | null;
   /** This thread's Write/Edit paths, newest first, for resolving a reference by name. */
@@ -114,6 +127,10 @@ function FilePanel({
   target = null,
   onTargetHandled,
   onOpenInMarketView = null,
+  onOpenSubagentTask = null,
+  getToolCallProcess = null,
+  getSourcesRecords = null,
+  getAllSourcesRecords = null,
   onOpenFile = null,
   getRecentWritePaths = null,
   getWriteLog = null,
@@ -183,6 +200,10 @@ function FilePanel({
   const persistStrip = !singleFileMode && persistTabs;
   const tabs = useFileTabs(workspaceId, threadId, { persist: persistStrip });
   const activeTab = tabs.activeTab;
+  // The tree lists the workspace's files, so it sits beside a file or the
+  // empty tab and nothing else: a chart, a tool result or an app is its own
+  // surface, and the listing (and its notices) has no business there.
+  const listingTab = activeTab.kind === 'file' || activeTab.kind === 'empty';
   const selectedFile = activeTab.kind === 'file' ? activeTab.path : null;
 
   const previews = usePreviews(workspaceId);
@@ -293,6 +314,7 @@ function FilePanel({
     workspaceId, rootRef: panelRef, selection, narrow, activePath: selectedFile, openFile: openFromTree,
   });
   const { open: treeOpen, setOpen: setTreeOpen } = tree;
+  const treeShown = treeOpen && !singleFileMode && listingTab;
 
   /** A breadcrumb segment points the tree at that directory. */
   const revealInTree = useCallback((dir: string) => {
@@ -362,10 +384,38 @@ function FilePanel({
         tabs.openChart(target);
         onTargetHandled?.();
         return;
+      case 'tool':
+        cancelPending();
+        tabs.openTool(target);
+        onTargetHandled?.();
+        return;
+      case 'plan':
+        cancelPending();
+        tabs.openPlan(target);
+        onTargetHandled?.();
+        return;
+      case 'sources':
+        cancelPending();
+        tabs.openSources(target.messageId);
+        onTargetHandled?.();
+        return;
       default:
         return;
     }
   }, [target]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const sourceCount = useCallback(
+    (messageId: string) => countDedupedSources(getSourcesRecords?.(messageId)),
+    [getSourcesRecords],
+  );
+
+  // Merged only while a sources tab is showing: the accessor is remade per
+  // transcript change, so a thread streaming with a file in front never pays
+  // for a merge nothing reads.
+  const allSourcesRecords = useMemo(
+    () => (activeTab.kind === 'sources' ? getAllSourcesRecords?.() : undefined),
+    [activeTab.kind, getAllSourcesRecords],
+  );
 
   const retry = useCallback(() => {
     downloads.clearError();
@@ -518,9 +568,9 @@ function FilePanel({
     previews.ensure(port);
   }, [previews, tabs, cancelPending]);
 
-  // Only a folder-like tab takes a drop: a preview is a frame and a chart is a
-  // live view, and settings is a form.
-  const canDropHere = !readOnly && (activeTab.kind === 'empty' || activeTab.kind === 'file');
+  // Only a tab the tree sits beside takes a drop: a preview is a frame and a
+  // chart is a live view, and settings is a form.
+  const canDropHere = !readOnly && listingTab;
 
   /** What fills the viewer slot. Preview panes are rendered beside this, always mounted. */
   const renderActive = (): React.ReactNode => {
@@ -542,6 +592,38 @@ function FilePanel({
           <div className="file-panel-settings">
             <SandboxSettingsContent workspaceId={workspaceId} />
           </div>
+        );
+      case 'tool': {
+        // The tab holds only the id, so a record cleared from the chat (a
+        // subagent card dismissed, say) leaves it nothing to draw.
+        const toolCallProcess = getToolCallProcess?.(activeTab.toolCallId) ?? null;
+        if (!toolCallProcess) {
+          return (
+            <p className="px-6 py-10 text-center text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+              {t('toolArtifact.toolCallGone')}
+            </p>
+          );
+        }
+        return (
+          <DetailPanel
+            key={activeTab.toolCallId}
+            toolCallProcess={toolCallProcess}
+            onOpenFile={onOpenFile ?? undefined}
+            onOpenSubagentTask={onOpenSubagentTask ?? undefined}
+          />
+        );
+      }
+      case 'plan':
+        return <DetailPanel key={activeTab.planId} toolCallProcess={null} planData={activeTab.plan} />;
+      case 'sources':
+        return (
+          <Suspense fallback={null}>
+            <SourcesPanel
+              provenanceRecords={getSourcesRecords?.(activeTab.messageId)}
+              allRecords={allSourcesRecords}
+              onOpenFile={onOpenFile ?? undefined}
+            />
+          </Suspense>
         );
       case 'file': {
         const path = activeTab.path;
@@ -601,10 +683,12 @@ function FilePanel({
         onActivate={activateTab}
         onClose={closeTab}
         onPin={tabs.pinTab}
+        sourceCount={sourceCount}
+        getToolCallProcess={getToolCallProcess ?? undefined}
         onNewTab={singleFileMode || readOnly ? null : newTab}
         hasChanged={changed.hasChanged}
-        treeOpen={treeOpen}
-        onToggleTree={singleFileMode ? null : () => setTreeOpen((v) => !v)}
+        treeOpen={treeShown}
+        onToggleTree={singleFileMode || !listingTab ? null : () => setTreeOpen((v) => !v)}
         onPanelClose={panelClose}
         backArrow={isMobile}
       />
@@ -660,8 +744,9 @@ function FilePanel({
         onDismissError={() => { setUploadError(null); selection.setDeleteError(null); }}
         // The tree shows this itself; the body takes it over while the tree is
         // folded or absent, so a listing that failed is never a silent blank.
-        filesError={treeOpen && !singleFileMode ? null : filesError}
-        filesRestoreIncomplete={treeOpen && !singleFileMode ? false : filesRestoreIncomplete}
+        // A tab that is not a listing carries neither notice.
+        filesError={treeShown || !listingTab ? null : filesError}
+        filesRestoreIncomplete={treeShown || !listingTab ? false : filesRestoreIncomplete}
         onRefreshFiles={onRefreshFiles}
         busy={selection.deleteLoading || backup.backingUp}
         backupResult={backup.backupResult}
@@ -727,7 +812,7 @@ function FilePanel({
           </div>
 
           <AnimatePresence initial={false}>
-          {!singleFileMode && treeOpen && (
+          {treeShown && (
             <TreeColumn
               key="tree"
               filter={filter}
@@ -756,7 +841,6 @@ function FilePanel({
               onUpload={() => fileInputRef.current?.click()}
               previews={previews.previews}
               onOpenPreview={openPreviewTab}
-              activePreviewPort={activeTab.kind === 'preview' ? activeTab.port : null}
               onOpenSettings={!readOnly && !isFlashWorkspace ? openSettings : null}
               workspaceName={wsData?.name}
               filesRestoreIncomplete={filesRestoreIncomplete}

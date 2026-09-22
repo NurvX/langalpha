@@ -228,3 +228,10 @@ describe('FilePanel chart tabs', () => {
     expect(chart.dataset.timeframe).toBe('1hour');
   });
 });
+
+describe('FilePanel tool tabs', () => {
+  it('says the call is gone when its record has left the chat', async () => {
+    renderWithProviders(panel({ target: { kind: 'tool', toolCallId: 'call-1', seq: 1 }, getToolCallProcess: () => undefined }));
+    expect(await screen.findByText(/This tool call is no longer in the chat/)).toBeTruthy();
+  });
+});

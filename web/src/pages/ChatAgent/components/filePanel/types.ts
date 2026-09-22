@@ -104,6 +104,32 @@ export interface ChartTabSpec {
 }
 
 /**
+ * What a tool tab is opened with: the call id alone. A tab holds no record of
+ * its own; it reads the transcript's live one at render, since stream handlers
+ * replace a call's record as its result lands, and a copy taken at click time
+ * would show a running call forever.
+ */
+export interface ToolTabSpec {
+  toolCallId: string;
+}
+
+export interface PlanData {
+  description?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * What a plan tab is opened with. Plans are one per approval interrupt, so a
+ * thread with a rejected plan and its successor has two, and the id keeps a
+ * pinned one from being retargeted. The text itself never changes once
+ * proposed, so it can travel with the ask.
+ */
+export interface PlanTabSpec {
+  planId: string;
+  plan: PlanData;
+}
+
+/**
  * What the right panel is currently pointed at: one discriminated value, so
  * exactly one target is set at a time and the active tab derives from `.kind`.
  *
@@ -127,13 +153,18 @@ export type PanelTarget =
   | ({ kind: 'preview'; seq: number } & PreviewSpec)
   /** A live market chart; it opens as a tab in the Files panel, one per symbol. */
   | ({ kind: 'chart'; seq: number } & ChartTabSpec)
+  /** A tool call's result, opened as a tab in the Files panel. */
+  | ({ kind: 'tool'; seq: number } & ToolTabSpec)
+  /** A plan's text, opened as a tab in the Files panel. */
+  | ({ kind: 'plan'; seq: number } & PlanTabSpec)
+  /** A turn's provenance, opened as a tab in the Files panel. */
+  | { kind: 'sources'; seq: number; messageId: string }
   | { kind: 'memory'; key: string; tier: MemoryTier }
   | { kind: 'memo'; key: string }
-  | { kind: 'sources'; messageId: string }
   | { kind: 'status' };
 
 /** The kinds the Files tab owns: it consumes each and clears it once handled. */
-export const FILES_PANEL_KINDS = ['file', 'preview', 'chart'] as const satisfies readonly PanelTarget['kind'][];
+export const FILES_PANEL_KINDS = ['file', 'preview', 'chart', 'tool', 'plan', 'sources'] as const satisfies readonly PanelTarget['kind'][];
 export type FilesPanelKind = (typeof FILES_PANEL_KINDS)[number];
 
 export function isFilesPanelKind(kind: PanelTarget['kind'] | null | undefined): kind is FilesPanelKind {

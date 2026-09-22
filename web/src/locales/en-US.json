@@ -1756,6 +1756,8 @@
     "add": "Add"
   },
   "filePanel": {
+    "planTab": "Plan",
+    "sourcesTab": "Sources ({{count}})",
     "changedSinceRead": "Changed since you opened it",
     "closeTab": "Close {{name}}",
     "deleteConfirm": "Delete {{count}}?",
@@ -2261,6 +2263,7 @@
     "status": "Status",
     "planDetails": "Plan Details",
     "noPlanDescription": "No plan description.",
+    "toolCallGone": "This tool call is no longer in the chat. Close the tab, or open the call again from the conversation.",
     "subagentTask": "Subagent Task",
     "instructions": "Instructions",
     "goToSubagentTab": "Go to subagent tab",

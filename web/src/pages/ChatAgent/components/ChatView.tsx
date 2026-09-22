@@ -196,6 +196,13 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     clearSubagentCards,
   } = useCardState();
 
+  // Every subagent's own messages, so a tool row clicked in one of their
+  // transcripts resolves to its live record the way a main-thread row does.
+  const subagentTranscripts = useMemo(
+    () => Object.values(cards).flatMap((card) => (card.subagentData?.messages ? [card.subagentData.messages] : [])),
+    [cards],
+  );
+
   // Sync onboarding_completed via PUT when ChatAgent completes onboarding (risk_preference + stocks)
   const handleOnboardingRelatedToolComplete = useCallback(async () => {
     try {
@@ -908,8 +915,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     handleOpenInMarketView,
     detailToolCall,
     detailPlanData,
-    sourcesRecords,
-    allSourcesRecords,
+    getToolCallProcess,
+    getSourcesRecords,
+    getAllSourcesRecords,
     getRecentWritePaths,
     getWriteLog,
   } = useRightPanel({
@@ -921,6 +929,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     containerRef,
     setFilePanelWorkspaceId,
     messages,
+    subagentTranscripts,
   });
 
   // Keep the ref in sync so SSE events (via handleOpenPreviewFromStream) use the latest closure
@@ -1821,7 +1830,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
             <DetailPanel
               toolCallProcess={detailToolCall}
               planData={detailPlanData}
-              onClose={handleCloseDetailPanel}
               onOpenFile={handleOpenFileFromChat}
               onOpenSubagentTask={handleOpenSubagentTask}
             />
@@ -1892,8 +1900,10 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                   onTargetMemoryHandled={handleTargetMemoryHandled}
                   onTargetMemoHandled={handleTargetMemoHandled}
                   onOpenInMarketView={handleOpenInMarketView}
-                  sourcesRecords={sourcesRecords}
-                  allSourcesRecords={allSourcesRecords}
+                  onOpenSubagentTask={handleOpenSubagentTask}
+                  getToolCallProcess={getToolCallProcess}
+                  getSourcesRecords={getSourcesRecords}
+                  getAllSourcesRecords={getAllSourcesRecords}
                   marketWatch={marketWatch}
                   onOpenFile={handleOpenFileFromChat}
                   getRecentWritePaths={getRecentWritePaths}
@@ -1955,8 +1965,10 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       onTargetMemoryHandled={handleTargetMemoryHandled}
                       onTargetMemoHandled={handleTargetMemoHandled}
                       onOpenInMarketView={handleOpenInMarketView}
-                      sourcesRecords={sourcesRecords}
-                      allSourcesRecords={allSourcesRecords}
+                      onOpenSubagentTask={handleOpenSubagentTask}
+                      getToolCallProcess={getToolCallProcess}
+                      getSourcesRecords={getSourcesRecords}
+                      getAllSourcesRecords={getAllSourcesRecords}
                       marketWatch={marketWatch}
                       onOpenFile={handleOpenFileFromChat}
                       getRecentWritePaths={getRecentWritePaths}
@@ -1978,14 +1990,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       onCopyShareLink={isFlashMode ? null : handleCopyShareLink}
                     />
                     </WorkspaceProvider>
-                  ) : rightPanelType === 'detail' && (detailToolCall || detailPlanData) ? (
-                    <DetailPanel
-                      toolCallProcess={detailToolCall}
-                      planData={detailPlanData}
-                      onClose={handleCloseDetailPanel}
-                      onOpenFile={handleOpenFileFromChat}
-                      onOpenSubagentTask={handleOpenSubagentTask}
-                    />
                   ) : null}
                 </Suspense>
               </div>

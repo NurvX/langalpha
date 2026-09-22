@@ -26,9 +26,6 @@ vi.mock('../MemoryPanel', () => ({
 vi.mock('../MemoPanel', () => ({
   default: () => <div data-testid="memo-panel">memo</div>,
 }));
-vi.mock('../SourcesPanel', () => ({
-  default: () => <div data-testid="sources-panel">sources</div>,
-}));
 
 vi.mock('@/components/ui/animated-tabs', () => ({
   AnimatedTabs: ({ tabs, value, onChange }: {
@@ -125,25 +122,21 @@ describe('RightPanel target snapping', () => {
     });
   });
 
-  it('snaps to Sources when a sources target is set and shows the Sources tab', async () => {
+  it('snaps to Files when a sources target is set: a turn\u2019s sources are a Files tab', async () => {
     renderWithProviders(
       <RightPanel
         {...baseProps}
-        initialTab="files"
-        panelTarget={{ kind: 'sources', messageId: 'msg-1' }}
-        sourcesRecords={{}}
+        initialTab="memory"
+        panelTarget={{ kind: 'sources', seq: 1, messageId: 'msg-1' }}
       />,
     );
     await waitFor(() => {
-      expect(screen.getByTestId('tabs').getAttribute('data-active')).toBe('sources');
+      expect(screen.getByTestId('tabs').getAttribute('data-active')).toBe('files');
     });
-    // The Sources tab only appears when a turn's provenance is being shown.
-    expect(screen.getByRole('button', { name: 'rightPanel.tabs.sources' })).toBeInTheDocument();
-    // Body is lazy-loaded — wait for the SourcesPanel stub to resolve.
-    expect(await screen.findByTestId('sources-panel')).toBeInTheDocument();
+    expect(await screen.findByTestId('file-panel')).toBeInTheDocument();
   });
 
-  it('hides the Sources tab when no sources target is set', async () => {
+  it('has no Sources tab of its own', async () => {
     renderWithProviders(<RightPanel {...baseProps} initialTab="files" />);
     await waitFor(() => {
       expect(screen.getByTestId('tabs')).toBeInTheDocument();

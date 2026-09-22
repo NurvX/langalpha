@@ -1,10 +1,12 @@
 import React, { useCallback, useRef } from 'react';
-import { ArrowLeft, CandlestickChart, FolderOpen, Globe, PanelRight, Plus, Settings, X, type LucideIcon } from 'lucide-react';
+import { ArrowLeft, BookOpen, CandlestickChart, FolderOpen, Globe, PanelRight, Plus, Settings, X, Zap, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { fileGlyph } from './fileMeta';
-import type { FileTab } from './useFileTabs';
+import { getCompletedRowTitle, getCompletedSummary, getToolIcon, isTaskTool } from '../toolDisplayConfig';
+import { isOnLoan, type FileTab } from './useFileTabs';
+import type { ToolCallProcessRecord } from '../ToolCallDetailView';
 import './TabStrip.css';
 
 interface TabStripProps {
@@ -17,6 +19,10 @@ interface TabStripProps {
   onNewTab: (() => void) | null;
   /** The file changed under this tab since it last read it: the amber dot. */
   hasChanged: (path: string) => boolean;
+  /** How many distinct sources a turn cites, as its pill counts them. */
+  sourceCount?: (messageId: string) => number;
+  /** The live record behind a tool tab, which names it the way its row is named. */
+  getToolCallProcess?: (toolCallId: string) => ToolCallProcessRecord | undefined;
   treeOpen: boolean;
   /** Null where the panel is locked to one file and has no tree to show. */
   onToggleTree: (() => void) | null;
@@ -26,14 +32,24 @@ interface TabStripProps {
   backArrow?: boolean;
 }
 
+/** The transcript reads a tool or sources tab is named from; the tab itself holds only an id. */
+interface Lookups {
+  sourceCount?: (messageId: string) => number;
+  getToolCallProcess?: (toolCallId: string) => ToolCallProcessRecord | undefined;
+}
+
+/** A tool tab's summary past this is cut with an ellipsis; the hover card carries the whole of it. */
+const TOOL_SUMMARY_MAX = 28;
+
 /**
  * How a tab reads on the strip. `name` is the pill; `detail` is what the pill
  * leaves out and the hover card gives back underneath in a quieter voice:
  * where the file lives, which port the app answers on, which interval the
  * chart is on. A running app with no title is named by its port, the only
- * thing that tells two of them apart; a chart is named by its ticker.
+ * thing that tells two of them apart; a chart is named by its ticker; a tool
+ * tab is named the way its row is, and a sources tab by its count.
  */
-function describe(tab: FileTab, t: TFunction): { name: string; Glyph: LucideIcon; detail: string | null } {
+function describe(tab: FileTab, t: TFunction, { sourceCount, getToolCallProcess }: Lookups): { name: string; Glyph: LucideIcon; detail: string | null } {
   switch (tab.kind) {
     case 'empty':
       return { name: t('filePanel.openFile'), Glyph: FolderOpen, detail: null };
@@ -47,6 +63,23 @@ function describe(tab: FileTab, t: TFunction): { name: string; Glyph: LucideIcon
       return { name: tab.title || `:${tab.port}`, Glyph: Globe, detail: [`:${tab.port}`, tab.previewPath].filter(Boolean).join(' ') };
     case 'chart':
       return { name: tab.symbol, Glyph: CandlestickChart, detail: `${t('filePanel.chartTab')} · ${tab.timeframe}` };
+    case 'tool': {
+      // Named the way its row is, so the tab is found by what was clicked. A
+      // record the transcript no longer holds leaves the tab with a plain name.
+      const proc = getToolCallProcess?.(tab.toolCallId);
+      if (!proc) return { name: t('toolArtifact.toolCall'), Glyph: getToolIcon('', undefined), detail: null };
+      const toolName = proc.toolName || '';
+      const call = proc.toolCall ? { ...proc.toolCall } : undefined;
+      const artifact = proc.toolCallResult?.artifact;
+      const title = isTaskTool(toolName) ? t('toolArtifact.subagentTask') : getCompletedRowTitle(toolName, call, t, artifact);
+      const summary = getCompletedSummary(toolName, call, t);
+      const short = summary && summary.length > TOOL_SUMMARY_MAX ? `${summary.slice(0, TOOL_SUMMARY_MAX - 1)}…` : summary;
+      return { name: short ? `${title} · ${short}` : title, Glyph: getToolIcon(toolName, call?.args), detail: summary && summary !== short ? summary : null };
+    }
+    case 'plan':
+      return { name: t('filePanel.planTab'), Glyph: Zap, detail: null };
+    case 'sources':
+      return { name: t('filePanel.sourcesTab', { count: sourceCount?.(tab.messageId) ?? 0 }), Glyph: BookOpen, detail: null };
   }
 }
 
@@ -65,6 +98,8 @@ export function TabStrip({
   onPin,
   onNewTab,
   hasChanged,
+  sourceCount,
+  getToolCallProcess,
   treeOpen,
   onToggleTree,
   onPanelClose,
@@ -111,10 +146,10 @@ export function TabStrip({
       <TooltipProvider delayDuration={350} skipDelayDuration={600}>
       <div className="file-panel-tabs clips-focus-ring" role="tablist" aria-label={t('filePanel.openFiles')} ref={listRef}>
         {tabs.map((tab) => {
-          const { name, Glyph, detail } = describe(tab, t);
+          const { name, Glyph, detail } = describe(tab, t, { sourceCount, getToolCallProcess });
           const hasHint = detail != null || tab.kind === 'file';
           const active = tab.id === activeId;
-          const onLoan = tab.kind === 'file' && tab.preview;
+          const onLoan = isOnLoan(tab);
           const pill = (
             <div
               key={tab.id}

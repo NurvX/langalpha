@@ -7,22 +7,21 @@ import type { OpenFileHandler } from '../utils/fileLocation';
 import type { WriteEvent } from '../utils/fileRefResolver';
 import type { MarketWatchState } from '../hooks/utils/streamEventHandlers';
 import type { ProvenanceRecord } from '@/types/chat';
+import type { SubagentInfo, ToolCallProcessRecord } from './ToolCallDetailView';
 
 const FilePanel = React.lazy(() => import('./FilePanel'));
 const MemoryPanel = React.lazy(() => import('./MemoryPanel'));
 const MemoPanel = React.lazy(() => import('./MemoPanel'));
-const SourcesPanel = React.lazy(() => import('./SourcesPanel'));
 const StatusPanel = React.lazy(() => import('./StatusPanel'));
 
 export type { PanelTarget };
 
-export type RightPanelTab = 'files' | 'memory' | 'memo' | 'sources' | 'status';
+export type RightPanelTab = 'files' | 'memory' | 'memo' | 'status';
 
 /** The tab that owns each kind the Files panel does not; `FILES_PANEL_KINDS` covers the rest. */
 const OTHER_KIND_TO_TAB: Record<Exclude<PanelTarget['kind'], FilesPanelKind>, RightPanelTab> = {
   memory: 'memory',
   memo: 'memo',
-  sources: 'sources',
   status: 'status',
 };
 
@@ -38,19 +37,23 @@ interface RightPanelProps {
   onClose: () => void;
   /** Mirrors the Files panel's unsaved state up to whoever can unmount this panel. */
   onDirtyChange?: ((dirty: boolean) => void) | null;
-  /** The panel's current target (file/preview/chart/memory/memo/sources/status), or null. */
+  /** The panel's current target (file/preview/chart/tool/plan/sources/memory/memo/status), or null. */
   panelTarget?: PanelTarget | null;
-  /** The Files panel consumed a file, preview or chart target. */
+  /** The Files panel consumed a file, preview, chart, tool, plan or sources target. */
   onTargetHandled?: () => void;
   onTargetMemoryHandled?: () => void;
   onTargetMemoHandled?: () => void;
   /** Leaves the panel for the full MarketView page on a chart tab's symbol. */
   onOpenInMarketView?: ((spec: ChartTabSpec) => void) | null;
-  /** Live provenance records for the targeted message (keyed by record id). */
-  sourcesRecords?: Record<string, ProvenanceRecord>;
+  /** Leaves for a subagent's own transcript, from a tool tab showing its task. */
+  onOpenSubagentTask?: ((info: SubagentInfo) => void) | null;
+  /** A tool call's live record, for its tool tab. */
+  getToolCallProcess?: ((toolCallId: string) => ToolCallProcessRecord | undefined) | null;
+  /** A turn's live provenance records (keyed by record id), for its sources tab. */
+  getSourcesRecords?: ((messageId: string) => Record<string, ProvenanceRecord> | undefined) | null;
   /** Provenance records merged across every turn in the thread (keyed by record
-   * id). Powers the Sources panel's "All sources" scope. */
-  allSourcesRecords?: Record<string, ProvenanceRecord>;
+   * id), read while the sources tab's "All sources" scope is showing. */
+  getAllSourcesRecords?: (() => Record<string, ProvenanceRecord> | undefined) | null;
   /** Live market-watch snapshot rendered by the Status tab. */
   marketWatch?: MarketWatchState | null;
   /** Routes a clicked file/memory/memo path through ChatView's path-aware
@@ -90,8 +93,10 @@ export default function RightPanel({
   onTargetMemoryHandled,
   onTargetMemoHandled,
   onOpenInMarketView = null,
-  sourcesRecords,
-  allSourcesRecords,
+  onOpenSubagentTask = null,
+  getToolCallProcess = null,
+  getSourcesRecords = null,
+  getAllSourcesRecords = null,
   marketWatch,
   onOpenFile,
   getRecentWritePaths,
@@ -158,11 +163,6 @@ export default function RightPanel({
       if (kind === 'status' || watchSymbolCount > 0) {
         base.push({ id: 'status', label: t('rightPanel.tabs.status') });
       }
-      // The Sources tab is per-turn — only surface it when a turn's provenance
-      // is being shown, so the chrome stays unchanged for file/memory/memo flows.
-      if (kind === 'sources') {
-        base.push({ id: 'sources', label: t('rightPanel.tabs.sources') });
-      }
       return base;
     },
     [t, kind, watchSymbolCount],
@@ -183,12 +183,10 @@ export default function RightPanel({
     setTab(next);
   }, [panelTarget, kind]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The Status/Sources tabs are conditional (see `tabs`). If the current tab
-  // disappears — Status when its target clears with no active watch, Sources
-  // when its target clears — fall back to Files so `tab` always resolves.
+  // The Status tab is conditional (see `tabs`). If it disappears — its target
+  // clears with no active watch — fall back to Files so `tab` always resolves.
   React.useEffect(() => {
     if (tab === 'status' && kind !== 'status' && watchSymbolCount === 0) setTab('files');
-    else if (tab === 'sources' && kind !== 'sources') setTab('files');
   }, [tab, kind, watchSymbolCount]);
 
   return (
@@ -231,6 +229,10 @@ export default function RightPanel({
               target={panelTarget}
               onTargetHandled={onTargetHandled}
               onOpenInMarketView={onOpenInMarketView}
+              onOpenSubagentTask={onOpenSubagentTask}
+              getToolCallProcess={getToolCallProcess}
+              getSourcesRecords={getSourcesRecords}
+              getAllSourcesRecords={getAllSourcesRecords}
               onOpenFile={onOpenFile}
               getRecentWritePaths={getRecentWritePaths}
               getWriteLog={getWriteLog}
@@ -266,13 +268,6 @@ export default function RightPanel({
             />
           )}
           {tab === 'status' && <StatusPanel marketWatch={marketWatch} />}
-          {tab === 'sources' && (
-            <SourcesPanel
-              provenanceRecords={sourcesRecords}
-              allRecords={allSourcesRecords}
-              onOpenFile={onOpenFile}
-            />
-          )}
         </Suspense>
       </div>
     </div>

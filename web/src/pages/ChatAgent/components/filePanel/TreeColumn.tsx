@@ -49,7 +49,6 @@ export interface TreeColumnProps {
   previews: PreviewEntry[];
   onOpenPreview: (port: number) => void;
   /** The port on screen, tinted the way the open file is. */
-  activePreviewPort: number | null;
 
   readOnly: boolean;
   uploadDisabled: boolean;
@@ -325,7 +324,7 @@ export function TreeColumn(props: TreeColumnProps): React.ReactElement {
               <button
                 key={app.port}
                 type="button"
-                className={`file-panel-item file-panel-preview-row${app.port === props.activePreviewPort ? ' file-panel-item-active' : ''}`}
+                className="file-panel-item file-panel-preview-row"
                 onClick={() => props.onOpenPreview(app.port)}
                 title={app.title ? `${app.title} :${app.port}` : `:${app.port}`}
               >

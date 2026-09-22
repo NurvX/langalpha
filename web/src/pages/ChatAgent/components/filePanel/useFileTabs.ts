@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { INTERVALS } from '@/lib/bars/chartConstants';
 import { readTypedTicker } from '@/lib/marketUtils';
 import type { FileLocation } from '../../utils/fileLocation';
-import { PREVIEW_PORT_MAX, PREVIEW_PORT_MIN, type ChartTabSpec, type PreviewSpec } from './types';
+import { PREVIEW_PORT_MAX, PREVIEW_PORT_MIN, type ChartTabSpec, type PlanTabSpec, type PreviewSpec, type ToolTabSpec } from './types';
 
 /**
  * What one tab shows. The empty tab is the panel's landing surface and its
@@ -14,6 +14,13 @@ import { PREVIEW_PORT_MAX, PREVIEW_PORT_MIN, type ChartTabSpec, type PreviewSpec
  * says the file is being worked with (a double click, entering edit mode,
  * adding it to the context) pins it. It is unrelated to `kind: 'preview'`,
  * which is a running app served from the sandbox.
+ *
+ * A tool, plan or sources tab is on loan the same way, each kind in a slot of
+ * its own: clicking through a turn's tool rows retargets one tool tab rather
+ * than opening one per row, and never takes the file being browsed. These
+ * three point into the transcript and are never stored: a tool or sources tab
+ * carries an id and reads the live record at render, a plan tab carries the
+ * one text a plan ever has.
  */
 type TabBody =
   | { kind: 'empty' }
@@ -38,9 +45,22 @@ type TabBody =
     /** How the agent started the server, so a restored tab can restart an idle port. */
     command?: string;
   }
-  | { kind: 'chart'; symbol: string; timeframe: string };
+  | { kind: 'chart'; symbol: string; timeframe: string }
+  | ({ kind: 'tool'; preview: boolean } & ToolTabSpec)
+  | ({ kind: 'plan'; preview: boolean } & PlanTabSpec)
+  | { kind: 'sources'; preview: boolean; messageId: string };
 
 export type FileTab = { id: string } & TabBody;
+
+/** The kinds that live only as long as the transcript they point into. */
+const EPHEMERAL_KINDS = ['tool', 'plan', 'sources'] as const satisfies readonly FileTab['kind'][];
+type EphemeralKind = (typeof EPHEMERAL_KINDS)[number];
+type PersistableTab = Exclude<FileTab, { kind: 'empty' | EphemeralKind }>;
+
+/** A tab that the next open of its kind may take over. */
+export function isOnLoan(tab: FileTab): boolean {
+  return (tab.kind === 'file' || tab.kind === 'tool' || tab.kind === 'plan' || tab.kind === 'sources') && tab.preview;
+}
 
 export interface OpenFileOptions {
   /** Open as a kept tab rather than the reused preview one. */
@@ -71,7 +91,9 @@ const INTERVAL_KEYS = new Set(INTERVALS.map(({ key }) => key));
 // The stored strip is names only: a file tab is its path, a preview tab its
 // port (the signed URL it runs on is short-lived and never stored), a chart
 // its symbol. Unknown keys are dropped, so entries written before a field
-// existed still load.
+// existed still load. A kind with no schema here (tool, plan, sources) is
+// never written and, should one turn up, dropped on read: its body is a
+// transcript record that a reload replays under a new identity.
 // One schema per kind, looked up by the entry's own `kind`, rather than a
 // discriminated union: the union is the one zod feature nothing on the first
 // load uses, and pulling it in charges the entry chunk for a lazy panel.
@@ -189,7 +211,7 @@ function revive(t: PersistedTab): FileTab {
   return t.kind === 'file' ? { id: newId(), ...t, location: null, locationSeq: 0 } : { id: newId(), ...t };
 }
 
-function toPersisted({ id: _id, ...body }: Exclude<FileTab, { kind: 'empty' }>): PersistedTab {
+function toPersisted({ id: _id, ...body }: PersistableTab): PersistedTab {
   if (body.kind !== 'file') return body;
   const { location: _location, locationSeq: _seq, ...file } = body;
   return file;
@@ -241,20 +263,20 @@ function patchIn(state: TabsState, id: string, fn: (tab: FileTab) => FileTab): T
 /**
  * Land a tab: the one that already matches is remade in place and brought to
  * the front; else an empty active tab is filled; else a new tab opens beside
- * the active one. With `reusePreview` the active tab is also a target when it
- * is the on-loan file tab, and failing that whichever tab carries the loan,
- * so browsing never piles tabs up.
+ * the active one. With `loan` the active tab is also a target when it is the
+ * on-loan tab of the opener's kind, and failing that whichever tab carries
+ * that loan, so browsing never piles tabs up.
  */
 function place(
   state: TabsState,
   match: (tab: FileTab) => boolean,
   make: (existing: FileTab | null) => TabBody,
-  { reusePreview = false } = {},
+  { loan }: { loan?: (tab: FileTab) => boolean } = {},
 ): TabsState {
   const existing = state.tabs.find(match);
   if (existing) return replaceIn(state, existing.id, make(existing));
 
-  const onLoan = (t: FileTab) => reusePreview && t.kind === 'file' && t.preview;
+  const onLoan = (t: FileTab) => !!loan && isOnLoan(t) && loan(t);
   const active = state.tabs.find((t) => t.id === state.activeId);
   const slot = active && (active.kind === 'empty' || onLoan(active)) ? active : state.tabs.find(onLoan);
   if (slot) return replaceIn(state, slot.id, make(null));
@@ -335,9 +357,15 @@ export function useFileTabs(
   // render between a key change and the switch above still holds the old strip.
   useEffect(() => {
     if (!store || state.key !== key) return;
-    const named = state.tabs.filter((t): t is Exclude<FileTab, { kind: 'empty' }> => t.kind !== 'empty');
+    const named = state.tabs.filter((t): t is PersistableTab => t.kind !== 'empty' && !(EPHEMERAL_KINDS as readonly string[]).includes(t.kind));
     // -1 when the empty tab is active, so the strip comes back parked on it.
-    const active = named.findIndex((t) => t.id === state.activeId);
+    // A tab that is not stored comes back on the stored one before it, else
+    // the first, else parked: what it showed is gone with the transcript.
+    let active = named.findIndex((t) => t.id === state.activeId);
+    if (active < 0 && named.length && !state.tabs.some((t) => t.id === state.activeId && t.kind === 'empty')) {
+      const at = state.tabs.findIndex((t) => t.id === state.activeId);
+      active = Math.max(0, named.filter((t) => state.tabs.indexOf(t) < at).length - 1);
+    }
     const json = JSON.stringify({ tabs: named.map(toPersisted), active });
     try {
       localStorage.setItem(store, json);
@@ -377,7 +405,7 @@ export function useFileTabs(
         location: location ?? kept?.location ?? null,
         locationSeq: (kept?.locationSeq ?? 0) + (location ? 1 : 0),
       };
-    }, { reusePreview: !pin }));
+    }, { loan: pin ? undefined : (t) => t.kind === 'file' }));
   }, []);
 
   /** The settings tab is the singleton of its kind. */
@@ -437,8 +465,40 @@ export function useFileTabs(
     });
   }, [workspaceId, persist]);
 
+  /**
+   * One tab per tool call: the row clicked again comes back to its tab. A
+   * first open lands on the loaned tool or plan tab, so reading through a
+   * turn's rows never piles tabs up.
+   */
+  const openTool = useCallback(({ toolCallId }: ToolTabSpec) => {
+    setState((prev) => place(prev, (t) => t.kind === 'tool' && t.toolCallId === toolCallId, (existing) => ({
+      kind: 'tool',
+      toolCallId,
+      preview: existing?.kind === 'tool' ? existing.preview : true,
+    }), { loan: (t) => t.kind === 'tool' || t.kind === 'plan' }));
+  }, []);
+
+  /** One tab per plan, sharing the tool slot: it is read the same way, between the rows it came from. */
+  const openPlan = useCallback(({ planId, plan }: PlanTabSpec) => {
+    setState((prev) => place(prev, (t) => t.kind === 'plan' && t.planId === planId, (existing) => ({
+      kind: 'plan',
+      planId,
+      plan,
+      preview: existing?.kind === 'plan' ? existing.preview : true,
+    }), { loan: (t) => t.kind === 'tool' || t.kind === 'plan' }));
+  }, []);
+
+  /** One tab per turn; a first open lands on the loaned sources tab. */
+  const openSources = useCallback((messageId: string) => {
+    setState((prev) => place(prev, (t) => t.kind === 'sources' && t.messageId === messageId, (existing) => ({
+      kind: 'sources',
+      messageId,
+      preview: existing?.kind === 'sources' ? existing.preview : true,
+    }), { loan: (t) => t.kind === 'sources' }));
+  }, []);
+
   const pinTab = useCallback((id: string) => {
-    patchTab(id, (t) => (t.kind === 'file' && t.preview ? { ...t, preview: false } : t));
+    patchTab(id, (t) => (isOnLoan(t) ? { ...t, preview: false } as FileTab : t));
   }, [patchTab]);
 
   const closeTab = useCallback((id: string) => setState((prev) => closeIn(prev, id)), []);
@@ -470,11 +530,15 @@ export function useFileTabs(
     openPreview,
     openChart,
     retargetChart,
+    openTool,
+    openPlan,
+    openSources,
     patchTab,
     clearLocation,
   }), [
     state.tabs, activeTab, openPaths,
-    activate, openFile, pinTab, closeTab, newTab, openSettings, openPreview, openChart, retargetChart, patchTab, clearLocation,
+    activate, openFile, pinTab, closeTab, newTab, openSettings, openPreview, openChart, retargetChart,
+    openTool, openPlan, openSources, patchTab, clearLocation,
   ]);
 }
 

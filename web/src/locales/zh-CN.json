@@ -1754,6 +1754,8 @@
     "add": "添加"
   },
   "filePanel": {
+    "planTab": "计划",
+    "sourcesTab": "来源（{{count}}）",
     "changedSinceRead": "打开后文件已变更",
     "closeTab": "关闭 {{name}}",
     "deleteConfirm": "删除 {{count}} 个？",
@@ -2247,6 +2249,7 @@
     "status": "状态",
     "planDetails": "计划详情",
     "noPlanDescription": "暂无计划描述。",
+    "toolCallGone": "此工具调用已不在对话中。请关闭标签页，或从对话中重新打开该调用。",
     "subagentTask": "子 Agent 任务",
     "instructions": "指令",
     "goToSubagentTab": "前往子 Agent 标签",

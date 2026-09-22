@@ -22,7 +22,8 @@ import {
   resolveSubagentTelemetry as resolveSubagentTelemetryPure,
   type SubagentHistoryLike,
 } from '../../ChatAgent/session/subagents/resolveSubagentTelemetry';
-import type { ToolCallProcessRecord, SubagentInfo } from '../../ChatAgent/components/ToolCallDetailView';
+import type { SubagentInfo } from '../../ChatAgent/components/ToolCallDetailView';
+import { findToolCallProcess } from '../../ChatAgent/components/chatView/toolCallLookup';
 import type { PreviewData } from '../../ChatAgent/hooks/utils/types';
 import type { Workspace } from '@/types/api';
 import MarketChatHistoryButton from './MarketChatHistoryButton';
@@ -628,9 +629,10 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     onNavigateSubagent?.(threadId, info.subagentId);
   }, [threadId, onNavigateSubagent]);
 
-  const handleToolCallDetailClick = useCallback((proc: Record<string, unknown>) => {
-    setDialogPayload({ type: 'toolcall', toolCallProcess: proc as ToolCallProcessRecord });
-  }, []);
+  const handleToolCallDetailClick = useCallback((toolCallId: string) => {
+    const proc = findToolCallProcess(messages, toolCallId);
+    if (proc) setDialogPayload({ type: 'toolcall', toolCallProcess: proc });
+  }, [messages]);
 
   // The panel's transcript action surface. Each member is useStableHandler'd
   // so the context value survives every streamed chunk — the chat engine
