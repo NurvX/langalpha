@@ -576,7 +576,11 @@ def role_registry(config, enabled_subagents, subagent_defs, model_pref) -> list[
 
     roles = [
         _role("compaction", config.llm.compaction),
-        _role("fetch", config.llm.fetch),
+        # Blank means "same model as flash" (agent_config.yaml), but a blank
+        # name is falsy and would otherwise be dropped by the model filter
+        # below, leaving web_fetch's LLM extraction with no resolved client
+        # (raw fallback sends an unauthenticated call for OAuth-only models).
+        _role("fetch", config.llm.fetch or config.llm.flash),
     ]
     for name in enabled_subagents:
         defn = subagent_defs.get(name)
