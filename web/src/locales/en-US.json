@@ -179,6 +179,14 @@
     "turnEndScrollDesc": "Where the chat view lands once the assistant finishes replying.",
     "turnEndScrollBottom": "Stay at the end",
     "turnEndScrollReplyStart": "Show the start of the reply",
+    "turnDisplay": "Stream reasoning",
+    "turnDisplayDesc": "Show the model’s reasoning as it streams.",
+    "turnDisplayVerbose": "On",
+    "turnDisplayLean": "Off",
+    "streamingMode": "Response delivery",
+    "streamingModeDesc": "Show text as it arrives, or reveal one paragraph at a time.",
+    "streamingModeToken": "Continuous",
+    "streamingModeParagraph": "By paragraph",
     "emailCannotBeChanged": "Email cannot be changed",
     "changeAvatar": "Change Avatar",
     "uploading": "Uploading...",
@@ -1350,6 +1358,10 @@
     "agentNotFound": "Agent not found",
     "planFeedbackHint": "Type your feedback to revise the plan, then send.",
     "stoppedChip": "Stopped",
+    "workingFor": "Working for {{duration}}",
+    "workedFor": "Worked for {{duration}}",
+    "worked": "Worked",
+    "thinking": "Thinking",
     "stopFailed": "Couldn't stop the run — it may still be running.",
     "errorUpstreamHeadline": "The model provider returned an error",
     "errorUpstreamHeadlineStatus": "The model provider returned an error ({{status}})",
@@ -1690,6 +1702,12 @@
       "chipShowCount_other": "Show {{count}} annotations on chart",
       "chipShownCount_one": "{{count}} annotation on chart",
       "chipShownCount_other": "{{count}} annotations on chart"
+    },
+    "duration": {
+      "subSecond": "<1s",
+      "seconds": "{{value}}s",
+      "minutesSeconds": "{{minutes}}m {{seconds}}s",
+      "hoursMinutes": "{{hours}}h {{minutes}}m"
     }
   },
   "context": {
@@ -2257,6 +2275,8 @@
     "nSearchResults_other": "{{count}} results for \"{{query}}\"",
     "untitled": "Untitled",
     "nReasoning": "{{count}} reasoning",
+    "thoughtFor": "thought for {{duration}}",
+    "thinkingFor": "thinking for {{duration}}",
     "andMore": "and more …",
     "nToolCalls": "{{count}} tool call",
     "nToolCalls_other": "{{count}} tool calls",
@@ -2430,6 +2450,21 @@
       "fileEdit_other": "edited {{count}} files",
       "generic": "ran {{count}} step",
       "generic_other": "ran {{count}} steps"
+    },
+    "fileGroup": {
+      "read": "Read {{count}} files",
+      "readOne": "Read",
+      "edit": "Edit {{count}} files",
+      "editOne": "Edit",
+      "write": "Write {{count}} files",
+      "writeOne": "Write",
+      "edits": "{{count}} edit",
+      "edits_other": "{{count}} edits"
+    },
+    "running": {
+      "read": "Reading",
+      "edit": "Editing",
+      "write": "Writing"
     },
     "a11y": {
       "toolCallFailed": "Tool call failed",

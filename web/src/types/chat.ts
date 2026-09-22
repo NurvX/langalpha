@@ -170,8 +170,12 @@ export interface ReasoningProcess {
   isReasoning: boolean;
   reasoningComplete: boolean;
   order: number;
-  reasoningTitle?: string | null;
   _completedAt?: number;
+  /** Wall clock at the start signal, for the live "thinking for" header. */
+  _startedAt?: number;
+  /** How long the model thought, from the server's complete signal when it
+   *  carries one, else measured here. Absent when neither side knew. */
+  elapsedMs?: number;
 }
 
 export interface ToolCallProcess {
@@ -484,6 +488,11 @@ export interface AssistantMessage {
    *  tool-argument chunk (`nextArrivalSeq`). The streaming indicator reads it
    *  to tell arriving text from a pause. */
   arrivalSeq?: number;
+  /** Server settlement instant supplied by historical replay. */
+  completedAt?: number;
+  /** Local observation of completion, stop, or failure. Not set on transport
+   * loss or a paused turn; replay's completedAt takes precedence. */
+  completionObservedAt?: number;
 }
 
 export type NotificationVariant = 'info' | 'success' | 'warning';

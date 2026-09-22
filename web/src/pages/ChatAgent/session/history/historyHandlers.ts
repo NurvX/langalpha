@@ -203,13 +203,14 @@ export function handleHistoryUserMessage({
 }
 
 /** Handles reasoning signal events ('start' | 'complete') in history replay. */
-export function handleHistoryReasoningSignal({ assistantMessageId, signalContent, pairIndex, pairState, setMessages, eventId }: {
+export function handleHistoryReasoningSignal({ assistantMessageId, signalContent, pairIndex, pairState, setMessages, eventId, elapsedMs }: {
   assistantMessageId: string;
   signalContent: string;
   pairIndex: number;
   pairState: PairState;
   setMessages: SetMessages;
   eventId?: number | null;
+  elapsedMs?: number;
 }): boolean {
   if (signalContent === 'start') {
     const reasoningId = `history-reasoning-${pairIndex}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -262,6 +263,7 @@ export function handleHistoryReasoningSignal({ assistantMessageId, signalContent
               isReasoning: false,
               reasoningComplete: true,
               _completedAt: 1,
+              elapsedMs,
             };
           }
 

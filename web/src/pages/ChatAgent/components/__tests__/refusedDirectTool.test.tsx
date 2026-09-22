@@ -126,7 +126,7 @@ describe('a refused direct MCP tool call', () => {
 
     const activity = blocks.find((b) => b.type === 'activity');
     expect(activity).toBeDefined();
-    const item = (activity as { items: Array<Record<string, unknown>> }).items[0];
+    const item = activity!.items[0];
     expect(item._liveState).toBe('failed');
   });
 
@@ -142,7 +142,7 @@ describe('a refused direct MCP tool call', () => {
       },
     ];
 
-    const { container } = render(<ActivityBlock items={items as never} isStreaming={false} isFirst={false} />);
+    const { container } = render(<ActivityBlock items={items as never} isStreaming={false} />);
     fireEvent.click(screen.getByRole('button', { name: /toolArtifact/i }));
 
     const failedRow = container.querySelector('.titem.failed');

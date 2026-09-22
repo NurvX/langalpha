@@ -6,6 +6,7 @@
  * via RecoveryDeps so this module never sees the full runtime.
  */
 
+import { finalizeAssistantMessage } from './finalizeMessage';
 import {
   reconnectToWorkflowStream, getWorkflowStatus, getReportBackStatus,
   type ReportBackStatusResponse,
@@ -390,10 +391,7 @@ export const reconnectToStream = async (
 
     // Mark message as complete
     rt.setMessages((prev) =>
-      updateMessage(prev,assistantMessageId, (msg) => ({
-        ...msg,
-        isStreaming: false,
-      }))
+      updateMessage(prev, assistantMessageId, (msg) => finalizeAssistantMessage(msg, wasInterruptedRef.current ? 'paused' : 'completed'))
     );
     deps.markTranscriptPersisted();
 
@@ -706,7 +704,7 @@ export const attemptReconnectAfterDisconnect = async (
   rt.setMessages((prev) =>
     prev.map((m) =>
       m.role === 'assistant' && m.id === assistantMessageId && m.isStreaming
-        ? { ...m, isStreaming: false }
+        ? finalizeAssistantMessage(m, 'disconnected')
         : m,
     ),
   );

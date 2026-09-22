@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { isNearBottom } from '../../utils/scrollHelpers';
 import { findMessageElement, resolveScrollContent, resolveScrollViewport } from '../../utils/scrollDom';
 import { scrollMemory } from '@/lib/scrollMemory';
+import { ANCHORED_TOGGLE_EVENT } from '../../utils/anchoredToggle';
 
 // Scroll/pin tuning. Distance from the bottom (px) still counted as "at bottom";
 // settle window the pin re-applies through as async media expands; fallback for
@@ -16,6 +17,9 @@ const SETTLE_HARD_CAP_MS = 8000;
 const SCROLLEND_FALLBACK_MS = 600;
 // Gap left above a bubble the transcript is pinned to.
 const ANCHOR_OFFSET_PX = 16;
+// How long a toggled row is held in place while its disclosure animates open
+// or shut; longer than the fold spring, shorter than the next streamed chunk.
+const TOGGLE_HOLD_MS = 1000;
 // Breathing room left under a deliverables deck brought into view.
 const REVEAL_GAP_PX = 12;
 
@@ -468,10 +472,15 @@ export function useChatScroll({
     // A real user gesture (wheel / touch) reclaims scroll control even mid
     // programmatic smooth-scroll. Without this, those scroll events are flagged
     // programmatic and ignored above, so the pin keeps yanking against the user.
+    // A disclosure toggle: hold the toggled row at the viewport position it had
+    // when clicked, for as long as its animation resizes the transcript. The
+    // bottom pin is released too, since the reader has just chosen a place.
+    let toggleAnchor: { el: HTMLElement; top: number; until: number } | null = null;
     const handleUserIntent = () => {
       if (!isMain) return;
       programmaticScrollRef.current = false;
       pinTargetRef.current = null;
+      toggleAnchor = null;
       clearSettleTimers();
       // Also cancel a pending entry-restore frame — the user has taken over.
       if (entryRestoreRafRef.current != null) {
@@ -481,6 +490,15 @@ export function useChatScroll({
     };
     c.addEventListener('wheel', handleUserIntent, { passive: true });
     c.addEventListener('touchstart', handleUserIntent, { passive: true });
+
+    const handleAnchoredToggle = (e: Event) => {
+      if (!isMain) return;
+      const el = e.target as HTMLElement | null;
+      if (!el) return;
+      toggleAnchor = { el, top: el.getBoundingClientRect().top, until: performance.now() + TOGGLE_HOLD_MS };
+      pinTargetRef.current = null;
+      clearSettleTimers();
+    };    c.addEventListener(ANCHORED_TOGGLE_EVENT, handleAnchoredToggle);
 
     // Content growth, observed after layout and before paint. While a pin
     // target is set, re-apply it (charts/code/images finishing layout, the fix
@@ -499,7 +517,27 @@ export function useChatScroll({
       ro = new ResizeObserver((entries) => {
         const height = entries[0]?.contentRect.height ?? lastHeight;
         const grew = lastHeight >= 0 && height > lastHeight;
+        const growth = grew ? height - lastHeight : 0;
         lastHeight = height;
+        if (toggleAnchor) {
+          if (performance.now() > toggleAnchor.until || !c.contains(toggleAnchor.el)) {
+            toggleAnchor = null;
+            // An unfold grows below the held row, so holding it never scrolls
+            // and the band is never asked again: the reader who opened a row to
+            // read it still counted as following and was carried to the bottom
+            // on the next growth. Ask where the hold actually left them, before
+            // the growth this callback is reporting, or a reader at the end is
+            // read as that growth short of it.
+            nearBottomRef.current = isNearBottom(
+              { scrollTop: c.scrollTop, scrollHeight: c.scrollHeight - growth, clientHeight: c.clientHeight },
+              AT_BOTTOM_PX,
+            );
+          } else {
+            const delta = toggleAnchor.el.getBoundingClientRect().top - toggleAnchor.top;
+            if (Math.abs(delta) >= 1) withProgrammaticScroll(() => c.scrollTo({ top: c.scrollTop + delta }), 'auto');
+            return;
+          }
+        }
         if (pinTargetRef.current) {
           reapplyPin();
           return;
@@ -538,6 +576,7 @@ export function useChatScroll({
       c.removeEventListener('scroll', handleScroll);
       c.removeEventListener('wheel', handleUserIntent);
       c.removeEventListener('touchstart', handleUserIntent);
+      c.removeEventListener(ANCHORED_TOGGLE_EVENT, handleAnchoredToggle);
       document.removeEventListener('visibilitychange', handleVisibility);
       if (visibilityRafRef.current != null) {
         cancelAnimationFrame(visibilityRafRef.current);

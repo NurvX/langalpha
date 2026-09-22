@@ -137,8 +137,6 @@ const baseProps = {
   hasError: false,
 } satisfies Partial<SegmentsProps>;
 
-const SUMMARY_BUTTON_RE = /toolArtifact/i;
-
 function completedToolProc(createdAt: number, over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     toolName: 'Read',
@@ -185,12 +183,12 @@ describe('MessageContentSegments, immediate fold on stream end', () => {
 
     // Both items just completed → inside the exposure window → live zone.
     expect(view.container.querySelector('.nrow')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: SUMMARY_BUTTON_RE })).toBeNull();
+    expect(view.container.querySelector('[id^="activity-summary-"]')).toBeNull();
 
     // Stream ends. No timers advanced, the fold must be immediate.
     view.rerender(<MessageContentSegments {...props} isStreaming={false} />);
 
-    expect(screen.getByRole('button', { name: SUMMARY_BUTTON_RE })).toBeInTheDocument();
+    expect(view.container.querySelector('[id^="activity-summary-"]')).toBeInTheDocument();
     expect(view.container.querySelector('.nrow')).toBeNull();
   });
 });
@@ -225,14 +223,14 @@ describe('MessageContentSegments, always-live in-progress tools', () => {
 
     // Streaming: live row present, no accordion.
     expect(view.container.querySelector('.nrow')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: SUMMARY_BUTTON_RE })).toBeNull();
+    expect(view.container.querySelector('[id^="activity-summary-"]')).toBeNull();
 
     // Main stream ends but the tool is still in progress (subagent running).
     // It must STAY in the live zone, not fold into the accordion.
     view.rerender(<MessageContentSegments {...props} isStreaming={false} />);
 
     expect(view.container.querySelector('.nrow')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: SUMMARY_BUTTON_RE })).toBeNull();
+    expect(view.container.querySelector('[id^="activity-summary-"]')).toBeNull();
 
     // When the subagent finishes, the tool completes → it folds to the accordion.
     const completedProps: SegmentsProps = {
@@ -248,7 +246,7 @@ describe('MessageContentSegments, always-live in-progress tools', () => {
     view.rerender(<MessageContentSegments {...completedProps} />);
 
     expect(view.container.querySelector('.nrow')).toBeNull();
-    expect(screen.getByRole('button', { name: SUMMARY_BUTTON_RE })).toBeInTheDocument();
+    expect(view.container.querySelector('[id^="activity-summary-"]')).toBeInTheDocument();
   });
 });
 
@@ -274,16 +272,16 @@ describe('MessageContentSegments, live-zone cooldown while streaming', () => {
 
     // Inside the window: live row, no accordion.
     expect(view.container.querySelector('.nrow')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: SUMMARY_BUTTON_RE })).toBeNull();
+    expect(view.container.querySelector('[id^="activity-summary-"]')).toBeNull();
 
     // Still inside the window, nothing folds.
     act(() => { vi.advanceTimersByTime(600); });
     expect(view.container.querySelector('.nrow')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: SUMMARY_BUTTON_RE })).toBeNull();
+    expect(view.container.querySelector('[id^="activity-summary-"]')).toBeNull();
 
     // Crossing the boundary fires the tick timer and folds the item.
     act(() => { vi.advanceTimersByTime(1000); });
-    expect(screen.getByRole('button', { name: SUMMARY_BUTTON_RE })).toBeInTheDocument();
+    expect(view.container.querySelector('[id^="activity-summary-"]')).toBeInTheDocument();
     expect(view.container.querySelector('.nrow')).toBeNull();
   });
 });
@@ -314,13 +312,13 @@ describe('MessageContentSegments, inline-artifact tools', () => {
 
     expect(screen.getByTestId('inline-chart')).toBeInTheDocument();
     expect(view.container.querySelector('.nrow')).toBeNull();
-    expect(screen.queryByRole('button', { name: SUMMARY_BUTTON_RE })).toBeNull();
+    expect(view.container.querySelector('[id^="activity-summary-"]')).toBeNull();
 
     // Same invariants after the stream ends.
     view.rerender(<MessageContentSegments {...props} isStreaming={false} />);
 
     expect(screen.getByTestId('inline-chart')).toBeInTheDocument();
     expect(view.container.querySelector('.nrow')).toBeNull();
-    expect(screen.queryByRole('button', { name: SUMMARY_BUTTON_RE })).toBeNull();
+    expect(view.container.querySelector('[id^="activity-summary-"]')).toBeNull();
   });
 });

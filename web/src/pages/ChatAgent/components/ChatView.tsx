@@ -5,10 +5,15 @@ import { ArrowLeft, FolderOpen, ScrollText, TextSelect, Minus, Menu, Info, Clock
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useStableHandler } from '@/hooks/useStableHandler';
-import { useNarrowContainer } from '@/hooks/useNarrowContainer';
 import { ScrollArea } from '../../../components/ui/scroll-area';
 import { usePreferences } from '@/hooks/usePreferences';
 import { readTurnEndScroll } from '@/lib/turnEndScroll';
+import {
+  readStreamingMode,
+  readTurnDisplay,
+  TranscriptDisplayContext,
+  type TranscriptDisplay,
+} from '@/lib/transcriptDisplay';
 import { useUpdatePreferences } from '@/hooks/useUpdatePreferences';
 import { useFeatureEnabled } from '@/hooks/useFeatures';
 import { useQueryClient } from '@tanstack/react-query';
@@ -50,6 +55,7 @@ import { SubagentTelemetryContext } from './SubagentTelemetryContext';
 import { WorkflowRunContext } from './WorkflowRunContext';
 import WorkflowRunDetail from './WorkflowRunDetail';
 import { WORKFLOW_TASK_TYPE } from '../session/subagents/workflowRunState';
+import { deriveSubagentStatus, isTerminalStatus } from '../session/subagents/subagentStatus';
 import Markdown from './Markdown';
 import NavigationPanel from './NavigationPanel';
 import NavDisplayOptions from './NavDisplayOptions';
@@ -397,6 +403,14 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   } = scroll;
   useTurnEndScroll(scroll, { messages, isStreaming, isActiveRef, turnEndScroll: readTurnEndScroll(preferences) });
 
+  // One value for both transcripts below (main thread and subagent tab), so a
+  // flip in Settings reaches them together and neither re-renders on the other's
+  // account.
+  const transcriptDisplay = useMemo<TranscriptDisplay>(
+    () => ({ turnDisplay: readTurnDisplay(preferences), streamingMode: readStreamingMode(preferences) }),
+    [preferences],
+  );
+
   // Subagent tab registry + card refresh (chatView/useSubagentTabs).
   const {
     sidebarAgentRows,
@@ -425,6 +439,16 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     activeAgentIdRef,
     resolvedThreadIdRef,
   });
+
+  // Whether the open subagent's turn is still running. A bubble's own
+  // `isStreaming` goes false between two model calls of one agent loop, so a
+  // transcript that judged liveness by the bubble alone would fold a working
+  // task behind a "Worked for" summary and then unfold it. The task's own
+  // status is the turn-length signal, read through the same derivation the
+  // status indicator above the transcript uses.
+  const subagentTurnLive = activeAgent
+    ? !isTerminalStatus(deriveSubagentStatus({ status: activeAgent.status, messages: activeAgent.messages }))
+    : false;
 
   // Publish this view's subagent registry to the global AppSidebar while it is
   // the visible ChatView. Same thread key as the drawer's `currentThreadId`
@@ -481,6 +505,39 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // desktop the whole data layer is parked: five cached ChatViews would
   // otherwise each run the workspace list, the thread queries and the store
   // subscriptions for a panel that is never shown.
+  // NavigationPanel is memoized, and this node is one of its props: built
+  // inline it was new on every render of this view, which is every streamed
+  // token, and the whole sidebar tree rendered with it.
+  const navHeaderActions = useMemo(() => (
+      <>
+        {/* Sidebar display options (workspace/thread visibility) —
+            pinned to the left edge; margin-right:auto pushes the pin +
+            minimize controls to the right of the header row. */}
+        <div style={{ marginRight: 'auto', display: 'flex', alignItems: 'center' }}>
+          <NavDisplayOptions />
+        </div>
+        {/* Minimize button — closes the drawer */}
+        <button
+          onClick={handleNavMinimize}
+          className="nav-panel-dismiss-btn"
+          style={{
+            padding: 4,
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            borderRadius: 4,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+          title={t('nav.minimize')}
+          aria-label={t('nav.minimize')}
+        >
+          <Minus className="h-4 w-4" style={{ color: 'var(--color-text-tertiary)' }} />
+        </button>
+      </>
+  ), [handleNavMinimize, t]);
+
   const navTreeProps = useNavTreeProps({
     currentWorkspaceId: workspaceId,
     currentThreadId: sidebarAgentsKey,
@@ -978,7 +1035,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // Collapse avatars when the messages column is too narrow to comfortably
   // accommodate them (mobile, side panels, etc.). 640px matches the visual
   // breakpoint where avatar gutters start crowding the message bubble.
-  const isNarrowChat = useNarrowContainer(msgAreaRef, 640);
 
   const handleMessageMouseUp = useCallback(() => {
     // Small delay to let the browser finalize the selection
@@ -1415,35 +1471,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                   style={{ width: '100%', height: '100%', position: 'absolute', left: 0, top: 0 }}
                 >
                   <NavigationPanel
-                    headerActions={
-                      <>
-                        {/* Sidebar display options (workspace/thread visibility) —
-                            pinned to the left edge; margin-right:auto pushes the pin +
-                            minimize controls to the right of the header row. */}
-                        <div style={{ marginRight: 'auto', display: 'flex', alignItems: 'center' }}>
-                          <NavDisplayOptions />
-                        </div>
-                        {/* Minimize button — closes the drawer */}
-                        <button
-                          onClick={handleNavMinimize}
-                          className="nav-panel-dismiss-btn"
-                          style={{
-                            padding: 4,
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            borderRadius: 4,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                          }}
-                          title={t('nav.minimize')}
-                          aria-label={t('nav.minimize')}
-                        >
-                          <Minus className="h-4 w-4" style={{ color: 'var(--color-text-tertiary)' }} />
-                        </button>
-                      </>
-                    }
+                    headerActions={navHeaderActions}
                     isActive={isActive}
                     {...navTreeProps}
                   />
@@ -1461,6 +1489,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                 MessageContentSegments stay React.memo'd. */}
             <SubagentTelemetryContext.Provider value={resolveSubagentTelemetry}>
             <WorkflowRunContext.Provider value={resolveWorkflowRun}>
+            <TranscriptDisplayContext.Provider value={transcriptDisplay}>
             <div
               ref={msgAreaRef}
               className="flex-1 overflow-hidden"
@@ -1497,7 +1526,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                           messages={messages as unknown as MessageRecord[]}
                           isLoading={isLoading}
                           isLoadingHistory={isLoadingHistory}
-                          hideAvatar={isNarrowChat}
                           feedbackByTurn={feedbackByTurn}
                           flashContext={flashContext}
                         />
@@ -1570,10 +1598,14 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       {(activeAgent.messages?.length ?? 0) > 0 && (
                         <div style={{ borderTop: '0.5px solid var(--color-border-muted)', paddingTop: '8px' }}>
                           <MessageActionsProvider actions={subagentMessageActions}>
+                            {/* Keyed per agent: which folds are open is one
+                                transcript's state, and every subagent numbers
+                                its turns from 0. */}
                             <MessageList
+                              key={activeAgentId}
                               messages={activeAgent.messages as MessageRecord[]}
                               isSubagentView={true}
-                              hideAvatar={true}
+                              isLoading={subagentTurnLive}
                             />
                           </MessageActionsProvider>
                         </div>
@@ -1611,6 +1643,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                 />
               )}
             </div>
+            </TranscriptDisplayContext.Provider>
             </WorkflowRunContext.Provider>
             </SubagentTelemetryContext.Provider>
 

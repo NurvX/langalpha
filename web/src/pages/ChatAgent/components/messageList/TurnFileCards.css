@@ -8,12 +8,7 @@
 .turn-files {
   position: relative;
   width: 100%;
-  /* 12px of gap the eye can see. The reply's last line carries 7px of invisible
-     box below its glyphs (3px paragraph padding + 4px half-leading) and the
-     action buttons below the deck carry only their 4px, so a flat 14px here
-     read as 21px above the card against 12px below it. The remainder is what
-     balances them. */
-  margin-top: 5px;
+  margin-top: 12px;
   transition: height 260ms cubic-bezier(0.16, 1, 0.3, 1);
   /* The entrance rides the container, not the cards: a card's own transform is
      what the fan animates, and an animation on that property outranks the

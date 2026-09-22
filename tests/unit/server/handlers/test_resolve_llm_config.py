@@ -842,7 +842,13 @@ class TestCustomModelFallback:
             config = await resolve_llm_config(base_config, "user-1", None, True)
 
         # Custom fallback dropped silently; no crash from create_llm().
-        assert not getattr(config, "fallback_llm_clients", None)
+        assert config.fallback_llm_clients == []
+        assert config.fallback_llm_names == []
+        from ptc_agent.agent.middleware.model_resilience import build_fallback_pairs
+
+        with patch("src.llms.get_llm_by_type") as factory:
+            assert build_fallback_pairs(config) == []
+            factory.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1075,7 +1081,13 @@ class TestResolveOneFallbackGuard:
         # The fallback should be skipped, not crash the whole request
         assert config.llm.name == "system-default-model"
         # No fallback clients resolved (the one model failed)
-        assert not getattr(config, "fallback_llm_clients", None)
+        assert config.fallback_llm_clients == []
+        assert config.fallback_llm_names == []
+        from ptc_agent.agent.middleware.model_resilience import build_fallback_pairs
+
+        with patch("src.llms.get_llm_by_type") as factory:
+            assert build_fallback_pairs(config) == []
+            factory.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_mixed_fallback_valid_and_invalid(self, base_config):

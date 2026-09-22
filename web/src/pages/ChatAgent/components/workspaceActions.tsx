@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
@@ -312,11 +312,17 @@ export function useWorkspaceActions({
     </>
   );
 
-  return {
+  // The handlers close over this render's mutation state, but the sidebar
+  // rows that receive them are memoized on identity: hand out one stable set
+  // that reads the latest implementation through a ref.
+  const latest = useRef({ toggleAlwaysOn });
+  latest.current = { toggleAlwaysOn };
+  const actions = useMemo<Omit<WorkspaceActions, 'dialogs'>>(() => ({
     openUpgrade: setUpgradeTarget,
-    toggleAlwaysOn,
+    toggleAlwaysOn: (ws) => latest.current.toggleAlwaysOn(ws),
     openDuplicate: setDuplicateTarget,
     openDelete: (ws) => { setDeleteTarget(ws); setDeleteError(null); },
-    dialogs,
-  };
+  }), []);
+
+  return { ...actions, dialogs };
 }

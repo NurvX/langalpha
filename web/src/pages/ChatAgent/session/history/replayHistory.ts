@@ -118,6 +118,14 @@ export async function loadConversationHistory(
     // wake-queued id attaches without ever consulting /status.
     const replayedRunIds: string[] = [];
 
+    // When each replayed turn's run settled, keyed by turn. Applied after the
+    // dispatch loop rather than on arrival: the settle time belongs to the
+    // turn's LAST assistant bubble, and a steered turn keeps re-pointing its
+    // pair at a newer one, so only the finished map knows which bubble is the
+    // tail. A live turn's stub carries no stamp — its bubble is settled by the
+    // stream instead.
+    const runSettledAtByPair = new Map<number, number>();
+
     // Track pending HITL interrupts from history to resolve status on next user_message
     const pendingHistoryInterrupts: HistoryInterruptInfo[] = [];
     // What each still-running resume turn answered, kept for the whole replay
@@ -314,6 +322,12 @@ export async function loadConversationHistory(
         if (typeof event.run_id === 'string' && event.run_id) {
           replayedRunIds.push(event.run_id);
         }
+        if (typeof event.run_completed_at === 'string') {
+          const settledAt = Date.parse(event.run_completed_at);
+          if (Number.isFinite(settledAt)) {
+            runSettledAtByPair.set(event.turn_index!, settledAt);
+          }
+        }
         // New-turn boundary: the switch suggestion only reflects the most
         // recent turn, so any earlier turn's fallback suggestion is stale.
         rt.setFallbackSuggestion(null);
@@ -491,6 +505,7 @@ export async function loadConversationHistory(
             pairState,
             setMessages: setMessagesForHandlers,
             eventId: event._eventId as number | undefined,
+            elapsedMs: typeof event.elapsed_ms === 'number' ? event.elapsed_ms : undefined,
           });
           return;
         }
@@ -956,6 +971,25 @@ export async function loadConversationHistory(
     // the watermark the reactivation staleness check compares against.
     rt.lastRenderedTurnIndexRef.current = maxReplayedTurnIndex;
     rt.replayedRunIdsRef.current = replayedRunIds;
+
+    // Post-process: stamp each settled turn's end on the bubble that closes it.
+    // Paired with the initiating user bubble's timestamp (the query's
+    // created_at) this is the turn's duration. A bubble still streaming is the
+    // live turn the replay ran alongside — the stream owns its stamp.
+    if (runSettledAtByPair.size > 0) {
+      const settledAtByMessageId = new Map<string, number>();
+      for (const [pairIndex, settledAt] of runSettledAtByPair) {
+        const tailId = assistantMessagesByPair.get(pairIndex);
+        if (tailId) settledAtByMessageId.set(tailId, settledAt);
+      }
+      if (settledAtByMessageId.size > 0) {
+        rt.setMessages(prev => prev.map(msg => {
+          if (msg.role !== 'assistant' || msg.isStreaming) return msg;
+          const settledAt = settledAtByMessageId.get(msg.id as string);
+          return settledAt === undefined ? msg : { ...msg, completedAt: settledAt };
+        }));
+      }
+    }
 
     // Post-process: update inline cards for steering_accepted actions to show "Updated"
     if (steeredAgentIds.size > 0) {

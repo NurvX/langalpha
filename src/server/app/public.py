@@ -37,6 +37,7 @@ from src.server.database.conversation import (
     get_queries_for_thread,
     get_responses_for_thread,
 )
+from src.server.services.history.replay.items import run_completed_at
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +332,15 @@ async def replay_shared_thread(share_token: str):
             query_type = q.get("type")
             if query_type == "system":
                 payload["query_type"] = "system"
+            # The turn's end, paired with the query timestamp above to give the
+            # fold row its duration. This payload is hand-built rather than
+            # taken from the replay builder, so the field has to be mirrored
+            # here or a shared transcript folds with no duration to show. The
+            # run id the builder also stamps stays out: it exists for the
+            # report-back catch-up, which a public viewer never runs.
+            completed_at = run_completed_at(responses_by_turn.get(turn_index))
+            if completed_at is not None:
+                payload["run_completed_at"] = completed_at
 
             yield (
                 f"id: {seq}\n"

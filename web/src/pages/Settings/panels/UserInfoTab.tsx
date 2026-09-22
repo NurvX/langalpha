@@ -14,6 +14,14 @@ import { queryKeys } from '@/lib/queryKeys';
 import { useTheme } from '@/contexts/ThemeContext';
 import { FONT_SCALES, getFontScale, setFontScale, type FontScale } from '@/lib/fontScale';
 import { turnEndScrollPatch, readTurnEndScroll, type TurnEndScroll } from '@/lib/turnEndScroll';
+import {
+  readStreamingMode,
+  readTurnDisplay,
+  streamingModePatch,
+  turnDisplayPatch,
+  type StreamingMode,
+  type TurnDisplay,
+} from '@/lib/transcriptDisplay';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '@/components/ui/use-toast';
 import ConfirmDialog from '@/pages/Dashboard/components/ConfirmDialog';
@@ -47,6 +55,8 @@ export function UserInfoTab() {
   const themeLabelId = useId();
   const fontSizeLabelId = useId();
   const turnEndLabelId = useId();
+  const turnDisplayLabelId = useId();
+  const streamingModeLabelId = useId();
   const { t, i18n } = useTranslation();
 
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -201,6 +211,34 @@ export function UserInfoTab() {
     if (next === turnEndScroll) return;
     try {
       await updatePrefsMutation.mutateAsync(turnEndScrollPatch(next));
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: t('common.error'),
+        description: t('settings.failedToSaveSettings'),
+      });
+    }
+  };
+
+  const turnDisplay = readTurnDisplay(prefsData);
+  const handleTurnDisplayChange = async (next: TurnDisplay) => {
+    if (next === turnDisplay) return;
+    try {
+      await updatePrefsMutation.mutateAsync(turnDisplayPatch(next));
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: t('common.error'),
+        description: t('settings.failedToSaveSettings'),
+      });
+    }
+  };
+
+  const streamingMode = readStreamingMode(prefsData);
+  const handleStreamingModeChange = async (next: StreamingMode) => {
+    if (next === streamingMode) return;
+    try {
+      await updatePrefsMutation.mutateAsync(streamingModePatch(next));
     } catch {
       toast({
         variant: 'destructive',
@@ -376,6 +414,44 @@ export function UserInfoTab() {
             { value: 'reply_start', label: t('settings.turnEndScrollReplyStart') },
           ]}
         />
+      </div>
+
+      {/* Whether reasoning is shown as it streams */}
+      <div className="settings-row flex-wrap">
+        <div className="flex-1 basis-64 space-y-0.5">
+          <label id={turnDisplayLabelId} className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.turnDisplay')}</label>
+          <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>{t('settings.turnDisplayDesc')}</p>
+        </div>
+        <div className="flex shrink-0">
+          <SegmentedControl
+            labelledBy={turnDisplayLabelId}
+            value={turnDisplay}
+            onChange={(v) => { void handleTurnDisplayChange(v); }}
+            options={[
+              { value: 'lean', label: t('settings.turnDisplayLean') },
+              { value: 'verbose', label: t('settings.turnDisplayVerbose') },
+            ]}
+          />
+        </div>
+      </div>
+
+      {/* How response text appears while it streams */}
+      <div className="settings-row flex-wrap">
+        <div className="flex-1 basis-64 space-y-0.5">
+          <label id={streamingModeLabelId} className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.streamingMode')}</label>
+          <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>{t('settings.streamingModeDesc')}</p>
+        </div>
+        <div className="flex shrink-0">
+          <SegmentedControl
+            labelledBy={streamingModeLabelId}
+            value={streamingMode}
+            onChange={(v) => { void handleStreamingModeChange(v); }}
+            options={[
+              { value: 'token', label: t('settings.streamingModeToken') },
+              { value: 'paragraph', label: t('settings.streamingModeParagraph') },
+            ]}
+          />
+        </div>
       </div>
       </div>
 

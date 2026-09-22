@@ -8,7 +8,6 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { Loader } from '@/components/ui/loader';
 import LogoLoading from '@/components/ui/logo-loading';
 import ChatInput, { type ChatInputHandle } from '@/components/ui/chat-input';
-import { useNarrowContainer } from '@/hooks/useNarrowContainer';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import MessageList from '../../ChatAgent/components/MessageList';
 import { MessageActionsProvider, type MessageActions } from '../../ChatAgent/components/messageList/MessageActionsContext';
@@ -277,7 +276,6 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   const [wasStopped, setWasStopped] = useState(false);
 
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
-  const isNarrowChat = useNarrowContainer(messagesContainerRef, 640);
 
   // The user's confirmed chart selections (region / price level). Render a chip
   // per selection that still matches the live chart instance — selections drawn
@@ -834,7 +832,6 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
                     messages={messages as never[]}
                     isLoading={isLoading}
                     isLoadingHistory={isLoadingHistory}
-                    hideAvatar={isNarrowChat}
                     feedbackByTurn={feedbackByTurn}
                     flashContext={flashContext}
                   />
