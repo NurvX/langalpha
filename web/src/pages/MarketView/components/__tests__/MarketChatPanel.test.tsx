@@ -376,4 +376,13 @@ describe('MarketChatPanel', () => {
     expect(screen.queryByText('Open in Chat')).not.toBeInTheDocument();
     expect(screen.queryByText('Return to Chat')).not.toBeInTheDocument();
   });
+
+  it('opens the gone dialog for a tool row whose record the transcript no longer holds', () => {
+    // The click used to be swallowed when the lookup missed, which reads as a
+    // dead row; the dialog itself already says the call is gone.
+    renderPanel();
+    const open = ml.actions!.onToolCallDetailClick as (toolCallId: string) => void;
+    act(() => open('tc-missing'));
+    expect(screen.getByText(/no longer in the chat/i)).toBeInTheDocument();
+  });
 });

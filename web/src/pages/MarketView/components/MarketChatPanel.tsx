@@ -23,7 +23,7 @@ import {
   type SubagentHistoryLike,
 } from '../../ChatAgent/session/subagents/resolveSubagentTelemetry';
 import type { SubagentInfo } from '../../ChatAgent/components/ToolCallDetailView';
-import { findToolCallProcess } from '../../ChatAgent/components/chatView/toolCallLookup';
+import { useToolCallLookup } from '../../ChatAgent/components/chatView/toolCallLookup';
 import type { PreviewData } from '../../ChatAgent/hooks/utils/types';
 import type { Workspace } from '@/types/api';
 import MarketChatHistoryButton from './MarketChatHistoryButton';
@@ -629,10 +629,16 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     onNavigateSubagent?.(threadId, info.subagentId);
   }, [threadId, onNavigateSubagent]);
 
+  // Main transcript only: the panel keeps no subagent cards (it hands the
+  // chat engine no card updater), so a subagent's own rows never render here
+  // and there is no transcript of theirs to search.
+  const getToolCallProcess = useToolCallLookup(messages);
+
+  // A row whose record the transcript no longer holds still opens the dialog:
+  // it says the call is gone, where a swallowed click reads as a dead row.
   const handleToolCallDetailClick = useCallback((toolCallId: string) => {
-    const proc = findToolCallProcess(messages, toolCallId);
-    if (proc) setDialogPayload({ type: 'toolcall', toolCallProcess: proc });
-  }, [messages]);
+    setDialogPayload({ type: 'toolcall', toolCallId });
+  }, []);
 
   // The panel's transcript action surface. Each member is useStableHandler'd
   // so the context value survives every streamed chunk — the chat engine
@@ -1022,7 +1028,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
         tokenUsage={tokenUsage}
       />
 
-      <MarketDetailDialog payload={dialogPayload} onClose={handleCloseDialog} />
+      <MarketDetailDialog payload={dialogPayload} onClose={handleCloseDialog} getToolCallProcess={getToolCallProcess} />
     </div>
   );
 }

@@ -15,7 +15,7 @@ interface TranscriptMessage {
  * task it started does; the outcome the detail view reports lives on the
  * message's task record and rides along as `_subagentStatus`.
  */
-export function findToolCallProcess(messages: readonly unknown[], toolCallId: string): ToolCallProcessRecord | undefined {
+function findToolCallProcess(messages: readonly unknown[], toolCallId: string): ToolCallProcessRecord | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i] as TranscriptMessage | null | undefined;
     const proc = msg?.toolCallProcesses?.[toolCallId] as ToolCallProcessRecord | undefined;
