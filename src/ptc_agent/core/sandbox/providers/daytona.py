@@ -1,6 +1,7 @@
 """Daytona sandbox provider — wraps the Daytona SDK."""
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import shlex
@@ -371,6 +372,26 @@ class DaytonaRuntime(SandboxRuntime):
         return self._sandbox
 
 
+def _detach_event_dispatcher(client: AsyncDaytona) -> None:
+    """Start the SDK's event-socket tasks outside the caller's context.
+
+    The client is built lazily during a turn, and its dispatcher reconnects
+    from ``subscribe`` calls made during later turns. A task copies the context
+    it is created in, so the socket's long-lived tasks would otherwise pin a
+    turn's request-scoped state for the client's whole life. The dispatcher
+    is SDK-private; if it moves, this warns rather than fail.
+    """
+    dispatcher = getattr(client, "_event_dispatcher", None)
+    ensure_connected = getattr(dispatcher, "ensure_connected", None)
+    if ensure_connected is None:
+        logger.warning(
+            "Daytona event dispatcher hook not found; its socket tasks will "
+            "pin the context of the turn that starts them"
+        )
+        return
+    dispatcher.ensure_connected = lambda: contextvars.Context().run(ensure_connected)
+
+
 class DaytonaProvider(SandboxProvider):
     """Provider that manages sandboxes via the Daytona SDK."""
 
@@ -381,7 +402,8 @@ class DaytonaProvider(SandboxProvider):
         self._config = config
         self._working_dir = working_dir or DEFAULT_SANDBOX_ROOT
         sdk_config = SDKDaytonaConfig(api_key=config.api_key, api_url=config.base_url)
-        self._client = AsyncDaytona(sdk_config)
+        self._client = contextvars.Context().run(AsyncDaytona, sdk_config)
+        _detach_event_dispatcher(self._client)
 
     # -- SandboxProvider interface --
 
