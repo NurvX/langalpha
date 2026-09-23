@@ -7,6 +7,7 @@
  */
 
 import { useMemo } from 'react';
+import { fixed2 } from '@/lib/format';
 import { getExtendedHoursInfo } from '@/lib/marketUtils';
 import { isUSEquity } from '../utils/chartConstants';
 import type { StockInfo, RealTimePrice, SnapshotData } from '@/types/market';
@@ -34,6 +35,11 @@ export interface StockQuoteInputs {
   marketPhase?: string | null;
   displayOverride?: { name?: string; exchange?: string } | null;
 }
+
+/** The placeholder a quote figure prints while it has no value. */
+export const DASH = '—';
+/** The quote figures' formatter: `fixed2` takes a number, this decides what an absent one shows. */
+export const fixed2OrDash = (n: number | null | undefined): string => (n != null ? fixed2(n) : DASH);
 
 export type ChangeTone = 'positive' | 'negative' | '';
 
@@ -64,6 +70,10 @@ export interface StockQuoteModel {
   fiftyTwoWeekLow: number | null;
   averageVolume: number | null;
   volume: number | null;
+  /** The volume a row prints: the session's, or the 3-month average when the row has none. */
+  shownVolume: number | null;
+  /** True when `shownVolume` is the average, so the reader labels it as such. */
+  volumeIsAverage: boolean;
   displayName: string;
   displayExchange: string;
   dataSourceLabel: string;
@@ -137,6 +147,9 @@ export function deriveStockQuote({
     ? (PROVIDER_LABELS[activeSource] ?? activeSource)
     : (providers.map((p) => PROVIDER_LABELS[p] ?? p).join(', ') || 'REST');
 
+  const averageVolume = quoteData?.avgVolume ?? stockInfo?.AverageVolume ?? null;
+  const volume = stockInfo?.Volume ?? null;
+
   return {
     price,
     change,
@@ -151,8 +164,10 @@ export function deriveStockQuote({
     low: realTimePrice?.low ?? stockInfo?.Low ?? null,
     fiftyTwoWeekHigh: quoteData?.yearHigh ?? stockInfo?.['52WeekHigh'] ?? null,
     fiftyTwoWeekLow: quoteData?.yearLow ?? stockInfo?.['52WeekLow'] ?? null,
-    averageVolume: quoteData?.avgVolume ?? stockInfo?.AverageVolume ?? null,
-    volume: stockInfo?.Volume ?? null,
+    averageVolume,
+    volume,
+    shownVolume: volume ?? averageVolume,
+    volumeIsAverage: volume == null && averageVolume != null,
     displayName: displayOverride?.name ?? stockInfo?.Name ?? `${symbol} Corp`,
     displayExchange: displayOverride?.exchange ?? stockInfo?.Exchange ?? '',
     dataSourceLabel,

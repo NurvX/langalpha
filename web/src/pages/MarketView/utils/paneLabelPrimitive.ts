@@ -4,7 +4,9 @@
  *
  * It draws onto the pane's own canvas rather than floating an HTML element
  * over it, so it never needs repositioning when panes are resized or the
- * chart is laid out, and it lands in ``chart.takeScreenshot()`` for free.
+ * chart is laid out. It paints in the normal layer, since
+ * ``chart.takeScreenshot()`` copies only that one, and the caption belongs in
+ * the image handed to the agent.
  *
  * Usage:
  *   const label = new PaneLabelPrimitive('RSI (14)', color);
@@ -62,7 +64,7 @@ export class PaneLabelPrimitive implements IPanePrimitive<Time> {
   paneViews(): IPanePrimitivePaneView[] {
     const source = this;
     return [{
-      zOrder(): PrimitivePaneViewZOrder { return 'top'; },
+      zOrder(): PrimitivePaneViewZOrder { return 'normal'; },
       renderer(): IPrimitivePaneRenderer {
         return {
           draw(target: CanvasRenderingTarget2D): void {

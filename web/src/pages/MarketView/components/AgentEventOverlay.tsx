@@ -36,7 +36,7 @@ import type { ChartDataPoint } from '@/types/market';
 
 import { useAnnotationsForView } from '../stores/chartAnnotationStore';
 import { buildEvents, type EventItem } from '../utils/annotationGeometry';
-import { isOnPricePane, pricePaneHeight } from '../utils/paneBounds';
+import { isOnPricePane, pricePaneElement, pricePaneHeight } from '../utils/paneBounds';
 import './AgentEventOverlay.css';
 
 // Keep a badge's center this far from the pane edges so it stays readable.
@@ -210,8 +210,9 @@ export const AgentEventOverlay = React.memo(function AgentEventOverlay({
     }
     const host = hostRef.current;
     const w = host?.clientWidth ?? 0;
-    // The host spans the RSI pane too; a price off the price pane has no badge.
-    const paneH = pricePaneHeight(chart, host?.clientHeight ?? 0);
+    // The host spans the RSI pane too; a price off the price pane has no
+    // badge, and with no pane measured yet there is nowhere to put one.
+    const paneH = pricePaneHeight(chart);
     const next: PlacedEvent[] = [];
     for (const ev of evs) {
       let x: number | null;
@@ -229,9 +230,11 @@ export const AgentEventOverlay = React.memo(function AgentEventOverlay({
     setPlaced(next);
   }, [chartRef, seriesRef]);
 
-  // Reposition on pan/zoom (logical range), resize (ResizeObserver), and chart
-  // rebuilds (symbol/theme/data deps re-grab the current chart instance). The
-  // initial placement waits a frame so the chart has laid out.
+  // Reposition on pan/zoom (logical range), resize (ResizeObserver on the host
+  // and on the price pane, whose separator can be dragged without the host
+  // changing), and chart rebuilds (symbol/theme/data deps re-grab the current
+  // chart instance). The initial placement waits a frame so the chart has
+  // laid out.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -266,6 +269,8 @@ export const AgentEventOverlay = React.memo(function AgentEventOverlay({
     if (host && typeof ResizeObserver !== 'undefined') {
       ro = new ResizeObserver(() => schedule());
       ro.observe(host);
+      const pane = pricePaneElement(chart);
+      if (pane) ro.observe(pane);
     }
     const raf = requestAnimationFrame(() => recompute());
 

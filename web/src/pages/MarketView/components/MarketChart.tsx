@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, useImperativeHandle, forwardRef, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useImperativeHandle, forwardRef, useCallback, useLayoutEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createChart, createTextWatermark, ColorType, CrosshairMode, PriceScaleMode, LineType, LineStyle, AreaSeries, BaselineSeries, CandlestickSeries, HistogramSeries, LineSeries } from 'lightweight-charts';
 import type { AreaData, IChartApi, ISeriesApi, ITextWatermarkPluginApi, LogicalRange, MouseEventParams, Time, UTCTimestamp } from 'lightweight-charts';
@@ -6,8 +6,8 @@ import html2canvas from 'html2canvas';
 import './MarketChart.css';
 import { fetchStockData } from '../utils/api';
 import {
-  centerLatestBarView,
-  fillLatestBarsView,
+  defaultBarsView,
+  type DefaultBarsView,
   computeInitialLoadRange,
   dedupeMergeByTime,
   rangeBeforeOldest,
@@ -104,19 +104,29 @@ interface MarketChartProps {
   selectionTools?: boolean;
   /**
    * How the chart frames the latest bars after a load: `centered` keeps the
-   * MarketView page's look (last bar mid-chart, room to the right), `fill`
-   * packs bars across the width for a narrow host such as a side panel.
+   * MarketView page's look (last bar mid-chart, room to the right) while the
+   * chart is wide enough for that, and packs the bars with a modest gutter
+   * below `NARROW_CENTERED_VIEW_PX`; `fill` packs them flush for a narrow
+   * host such as a side panel. Policy in `defaultBarsView`.
    */
-  defaultView?: 'centered' | 'fill';
+  defaultView?: DefaultBarsView;
   /** Offer the Light / Advanced (TradingView) switch. Off forces the light chart. */
   modeSwitcher?: boolean;
   /**
    * Rendered first in the toolbar row, before the intervals: a host's ticker
-   * legend. Inline content, laid on one line: when the row is short of room
-   * the chart shortens it with an ellipsis rather than let it push the
-   * controls over each other.
+   * legend. Inline content, laid on one line. The slot is the one flex item
+   * in the row that gives: it takes what the controls leave and ellipsizes
+   * past that, so the lead never pushes the controls over each other.
    */
   toolbarLead?: React.ReactNode;
+  /**
+   * When the lead's intrinsic width can have changed. The toolbar re-measures
+   * its slots (a forced layout) whenever this changes; without it, on every
+   * new `toolbarLead` node, which a live quote produces on every tick. A
+   * host whose lead width follows its content's shape (`legendLeadShapeKey`)
+   * passes that.
+   */
+  toolbarLeadKey?: string;
   /** Rendered last in the toolbar row, after the chart's tools: a host's own actions. */
   toolbarTrail?: React.ReactNode;
   /** A second thin row under the toolbar, above the panes: a host's actions and figures. */
@@ -167,6 +177,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
   defaultView = 'centered',
   modeSwitcher = true,
   toolbarLead,
+  toolbarLeadKey,
   toolbarTrail,
   toolbarSubrow,
 }, ref) => {
@@ -292,6 +303,14 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
       toolbarObserverRef.current = null;
     };
   }, [measureToolbar]);
+  // The observer reports a slot's box, and a lead that already fills its line
+  // keeps the same box when its content grows (an after-hours pair appears,
+  // the status text changes) or when the slot is removed. Its scrollWidth is
+  // what the tier reads, so a change to what fills the slots re-measures
+  // before paint. A host that keys the lead's shape narrows that to the
+  // changes that can move its width.
+  const leadShape = toolbarLeadKey ?? toolbarLead;
+  useLayoutEffect(() => { measureToolbar(); }, [measureToolbar, leadShape, toolbarTrail]);
   // Close the overflow menu if the chart widens enough to unmount it.
   useEffect(() => { if (toolbarLevel < 2) setViewOpen(false); }, [toolbarLevel]);
 
@@ -572,10 +591,11 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     const rect = container.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const rawY = e.clientY - rect.top;
-    // The RSI pane shares this container; a gesture there is not a price.
-    // Either tool starts on the price pane, so a selection's bounds are points
-    // the user chose.
-    const paneH = pricePaneHeight(chartRef.current, rect.height);
+    // The RSI pane shares this container; a gesture there is not a price, and
+    // with no pane measured there is no price to read. Either tool starts on
+    // the price pane, so a selection's bounds are points the user chose.
+    const paneH = pricePaneHeight(chartRef.current);
+    if (paneH <= 0) return;
     if (!isOnPricePane(rawY, paneH)) return;
     const y = clampToPricePane(rawY, paneH);
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* unsupported */ }
@@ -594,8 +614,10 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     const prim = selectionPrimitiveRef.current;
     if (!container || !prim) return;
     const rect = container.getBoundingClientRect();
+    const paneH = pricePaneHeight(chartRef.current);
+    if (paneH <= 0) return;
     const x = e.clientX - rect.left;
-    const y = clampToPricePane(e.clientY - rect.top, pricePaneHeight(chartRef.current, rect.height));
+    const y = clampToPricePane(e.clientY - rect.top, paneH);
     prim.setDraft(
       selectModeRef.current === 'price_level'
         ? { type: 'price_level', x1: 0, y1: y, x2: rect.width, y2: y }
@@ -611,10 +633,11 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     const mode = selectModeRef.current;
     const container = chartContainerRef.current;
     const series = candlestickSeriesRef.current;
-    if (container && series) {
+    const paneH = pricePaneHeight(chartRef.current);
+    if (container && series && paneH > 0) {
       const rect = container.getBoundingClientRect();
       const endX = e.clientX - rect.left;
-      const endY = clampToPricePane(e.clientY - rect.top, pricePaneHeight(chartRef.current, rect.height));
+      const endY = clampToPricePane(e.clientY - rect.top, paneH);
       try {
         if (mode === 'price_level') {
           const price = series.coordinateToPrice(endY);
@@ -1164,11 +1187,11 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     for (const pt of rsiData) map.set(pt.time, pt.value);
     rsiDataMapRef.current = map;
 
-    if (rsiData.length > 0) {
-      const lastRsi = rsiData[rsiData.length - 1]?.value;
-      if (lastRsi != null) setRsiValue(lastRsi.toFixed(0));
-      rsiSeriesRef.current?.setData(rsiData as AreaData<Time>[]);
-    }
+    // Too few bars for the period clears the line rather than leaving the
+    // previous period's under the new caption.
+    const lastRsi = rsiData[rsiData.length - 1]?.value;
+    setRsiValue(lastRsi != null ? lastRsi.toFixed(0) : null);
+    rsiSeriesRef.current?.setData(rsiData as AreaData<Time>[]);
 
     // Update chart data state for overlay hooks
     setChartDataForHooks(data);
@@ -1713,7 +1736,8 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
 
           // Subscribe to visible range changes for scroll-based loading (debounced)
           if (chartRef.current) {
-            const unsubscribe = chartRef.current.timeScale().subscribeVisibleLogicalRangeChange((range: LogicalRange | null) => {
+            const timeScale = chartRef.current.timeScale();
+            const onRange = (range: LogicalRange | null) => {
               if (rangeChangeTimerRef.current) clearTimeout(rangeChangeTimerRef.current);
               rangeChangeTimerRef.current = setTimeout(() => {
                 if (!range) return;
@@ -1722,8 +1746,9 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
                   handleScrollLoadMore();
                 }
               }, RANGE_CHANGE_DEBOUNCE_MS);
-            }) as unknown as (() => void);
-            rangeUnsubRef.current = unsubscribe;
+            };
+            timeScale.subscribeVisibleLogicalRangeChange(onRange);
+            rangeUnsubRef.current = () => timeScale.unsubscribeVisibleLogicalRangeChange(onRange);
           }
 
           // --- Stage 2: background backfill ---
@@ -1818,8 +1843,9 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
     const dataLen = allDataRef.current.length;
     if (dataLen === 0) { ts.scrollToRealTime(); return; }
     const chartWidth = chartRef.current.options().width || chartContainerRef.current?.clientWidth || 800;
-    const frame = defaultViewRef.current === 'fill' ? fillLatestBarsView : centerLatestBarView;
-    ts.setVisibleLogicalRange(frame({ chartWidth, barSpacing: target, dataLen }));
+    ts.setVisibleLogicalRange(defaultBarsView({
+      defaultView: defaultViewRef.current, chartWidth, barSpacing: target, dataLen,
+    }));
   }, []);
 
   // Fit the visible window to a bottom-bar range preset: from the preset's
@@ -1901,6 +1927,20 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
 
   const isTV = effectiveChartMode === 'tradingview';
   const intervalsCollapsed = toolbarLevel >= 5;
+
+  // One pick path for the inline buttons and the collapsed dropdown, so the
+  // 4H guard cannot hold in one layout and not the other.
+  const isIntervalDisabled = (key: string) => key === '4hour' && !supports4hInterval;
+  const pickInterval = (key: string) => {
+    if (isIntervalDisabled(key)) {
+      setDisabledTooltip('4H data requires FMP or Ginlix Data provider');
+      if (disabledTooltipTimer.current) clearTimeout(disabledTooltipTimer.current);
+      disabledTooltipTimer.current = setTimeout(() => setDisabledTooltip(null), 2000);
+      return;
+    }
+    setActiveRange(null); pendingRangeRef.current = null;
+    onIntervalChange?.(key); setIntervalsOpen(false); setIndicatorsOpen(false); setToolsOpen(false); setViewOpen(false);
+  };
 
   // --- Toolbar render helpers (shared between wide & compact layouts) ---
 
@@ -2080,22 +2120,13 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
         <div className="chart-tools-left">
           <div className="interval-selector interval-selector--intervals">
             {!intervalsCollapsed && INTERVALS.filter(({ key }) => PRIMARY_INTERVAL_KEYS.has(key)).map(({ key, label }) => {
-              const isDisabled = key === '4hour' && !supports4hInterval;
+              const isDisabled = isIntervalDisabled(key);
               return (
               <div key={key} style={{ position: 'relative', display: 'inline-flex' }}>
                 <button
                   type="button"
                   className={`interval-btn${interval === key ? ' interval-btn-active' : ''}${isDisabled ? ' interval-btn-disabled' : ''}`}
-                  onClick={() => {
-                    if (isDisabled) {
-                      setDisabledTooltip('4H data requires FMP or Ginlix Data provider');
-                      if (disabledTooltipTimer.current) clearTimeout(disabledTooltipTimer.current);
-                      disabledTooltipTimer.current = setTimeout(() => setDisabledTooltip(null), 2000);
-                      return;
-                    }
-                    setActiveRange(null); pendingRangeRef.current = null;
-                    onIntervalChange?.(key); setIntervalsOpen(false); setIndicatorsOpen(false); setToolsOpen(false); setViewOpen(false);
-                  }}
+                  onClick={() => pickInterval(key)}
                 >
                   {label}
                 </button>
@@ -2120,16 +2151,23 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
               </button>
               {intervalsOpen && (
                 <div className="toolbar-dropdown-panel interval-dropdown-panel">
-                  {INTERVALS.filter(({ key }) => intervalsCollapsed || !PRIMARY_INTERVAL_KEYS.has(key)).map(({ key, label }) => (
-                    <button
-                      key={key}
-                      type="button"
-                      className={`interval-dropdown-item${interval === key ? ' interval-dropdown-item-active' : ''}`}
-                      onClick={() => { setActiveRange(null); pendingRangeRef.current = null; onIntervalChange?.(key); setIntervalsOpen(false); setIndicatorsOpen(false); setToolsOpen(false); }}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                  {INTERVALS.filter(({ key }) => intervalsCollapsed || !PRIMARY_INTERVAL_KEYS.has(key)).map(({ key, label }) => {
+                    const isDisabled = isIntervalDisabled(key);
+                    return (
+                    <div key={key} style={{ position: 'relative', display: 'flex' }}>
+                      <button
+                        type="button"
+                        className={`interval-dropdown-item${interval === key ? ' interval-dropdown-item-active' : ''}${isDisabled ? ' interval-btn-disabled' : ''}`}
+                        onClick={() => pickInterval(key)}
+                      >
+                        {label}
+                      </button>
+                      {isDisabled && disabledTooltip && (
+                        <div className="interval-disabled-tooltip">{disabledTooltip}</div>
+                      )}
+                    </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Info, List, Sunrise, Sunset, ChevronDown } from 'lucide-react';
+import { Info, List, ChevronDown } from 'lucide-react';
 import { SymbolSwitcher } from './SymbolSwitcher';
 import { HeaderPill } from './HeaderPill';
+import { ExtendedHoursPair } from './ExtendedHoursPair';
 import './StockHeader.css';
-import { EXT_COLOR_PRE, EXT_COLOR_POST } from '../utils/chartConstants';
 import type { StockSearchHit } from '@/lib/marketUtils';
 import { compactNumberFixed2, fixed2, signedFixed2 } from '@/lib/format';
-import type { StockQuoteModel } from '../hooks/useStockQuoteModel';
+import { DASH, fixed2OrDash as fmt, type StockQuoteModel } from '../hooks/useStockQuoteModel';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionStatus, DataLevel } from '../hooks/useMarketDataWS';
@@ -34,9 +34,6 @@ interface StockHeaderProps {
   headerActions?: React.ReactNode;
 }
 
-const DASH = '—';
-const fmt = (n: number | null | undefined): string => (n != null ? fixed2(n) : DASH);
-
 const EXCHANGE_LABELS: Record<string, string> = { HK: 'HK', SS: 'SH', SZ: 'SZ', L: 'LON', T: 'TYO', TO: 'TSX', AX: 'ASX' };
 
 function getVenueStatusLabel(sym: string | null | undefined, status: string): string {
@@ -51,13 +48,10 @@ const StockHeader = ({ symbol, quote: q, chartMeta: _chartMeta, onToggleOverview
   const { t } = useTranslation();
   const {
     headline, status, tickAt, changePercent,
-    previousClose, open, high, low, fiftyTwoWeekHigh, fiftyTwoWeekLow, averageVolume, volume,
+    previousClose, open, high, low, fiftyTwoWeekHigh, fiftyTwoWeekLow, averageVolume, shownVolume, volumeIsAverage,
     displayName, displayExchange, dataSourceLabel, ext,
   } = q;
   const hasDayRange = high != null && low != null;
-  // A row without a session volume shows the 3-month average, said so.
-  const volumeIsAverage = volume == null && averageVolume != null;
-  const shownVolume = volume ?? averageVolume;
 
   const isMobile = useIsMobile();
   const [metricsCollapsed, setMetricsCollapsed] = useState(false);
@@ -124,21 +118,12 @@ const StockHeader = ({ symbol, quote: q, chartMeta: _chartMeta, onToggleOverview
             <div className={`stock-change ${headline.tone}`}>{DASH}</div>
           )}
           {ext && (
-            <div
+            <ExtendedHoursPair
+              ext={ext}
+              iconSize={13}
               className="stock-extended-hours"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-                fontSize: '0.8125rem',
-                color: ext.type === 'pre' ? EXT_COLOR_PRE : EXT_COLOR_POST,
-              }}
-            >
-              {ext.type === 'pre' ? <Sunrise size={13} /> : <Sunset size={13} />}
-              {fixed2(ext.price)}
-              {ext.change != null && <span>{signedFixed2(ext.change)}</span>}
-              <span>({signedFixed2(ext.pct)}%)</span>
-            </div>
+              style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.8125rem' }}
+            />
           )}
         </div>
       </div>

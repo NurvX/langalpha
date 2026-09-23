@@ -38,8 +38,8 @@ import {
   WS_FOLD_INTERVALS,
   isUSEquity,
   fetchStockData,
-  centerLatestBarView,
   computeInitialLoadRange,
+  defaultBarsView,
   dedupeMergeByTime,
   rangeBeforeOldest,
   currencySymbol,
@@ -428,11 +428,11 @@ function ChartWidget({ instance, updateConfig }: WidgetRenderProps<ChartConfig>)
     setSummary({ first, last });
   }, []);
 
-  // --- Default view: mirror MarketView's convention — latest bar centered
-  // at `TARGET_BAR_SPACING[interval]` pixels per bar. Keeps the candlestick
-  // ratio and scroll feel consistent between the widget and the full chart
-  // page. Half the chart width is reserved as empty future-space on the
-  // right (same as `centerLatestBarView`).
+  // --- Default view: mirror MarketView's framing (`defaultBarsView`): the
+  // latest bar centered at `TARGET_BAR_SPACING[interval]` pixels per bar with
+  // room to the right while the widget is wide, the bars packed with a gutter
+  // once it is narrow. Keeps the candlestick ratio and scroll feel consistent
+  // between the widget and the full chart page.
   const applyDefaultView = useCallback(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -449,7 +449,7 @@ function ChartWidget({ instance, updateConfig }: WidgetRenderProps<ChartConfig>)
       containerRef.current?.clientWidth ||
       800;
     ts.setVisibleLogicalRange(
-      centerLatestBarView({ chartWidth, barSpacing, dataLen: bars.length }),
+      defaultBarsView({ defaultView: 'centered', chartWidth, barSpacing, dataLen: bars.length }),
     );
   }, []);
 
