@@ -689,3 +689,50 @@ def test_a_row_of_unknown_size_is_pulled_as_unknown_not_as_empty():
     row = {"file_path": "old.bin", "kind": "file", "blob_sha256": "e" * 64, "file_size": None}
     assert restore._pull_item(row, url="https://store/x")["size"] is None
     assert restore._pull_item({**row, "file_size": 0}, url=None)["size"] == 0
+
+
+class TestLiveDownloadLink:
+    """The link is an optimization over the download route, which streams any
+    size, so a file the export cannot store falls back rather than failing."""
+
+    MOD = "src.server.services.persistence.download_link"
+    WS = {"workspace_id": "ws-1", "user_id": "u-1"}
+
+    def _entry(self, size: int) -> ScanEntry:
+        return ScanEntry("big.bin", "file", size, 1, 0o644, "a" * 64, None, True)
+
+    async def _link(self, size: int, *, cap, persisted, hashed=None):
+        from src.server.services.persistence import download_link
+
+        hashed = hashed or AsyncMock(return_value=self._entry(size))
+        with (
+            patch(f"{self.MOD}.is_storage_enabled", return_value=True),
+            patch(f"{self.MOD}.get_file_locator", AsyncMock(return_value=None)),
+            patch(f"{self.MOD}.hash_one_file", hashed),
+            patch(f"{self.MOD}.scan_cap_bytes", return_value=cap),
+            patch(f"{self.MOD}._persist_blobs", AsyncMock(return_value=persisted)) as push,
+            patch(f"{self.MOD}._sign", AsyncMock(return_value="https://signed")),
+        ):
+            url = await download_link.live_download_link(
+                self.WS, MagicMock(), "big.bin", layout=SandboxLayout()
+            )
+        return url, push
+
+    @pytest.mark.asyncio
+    async def test_file_the_route_can_serve_falls_back_when_the_export_fails(self):
+        changed = UnsavedFile(path="big.bin", size=50 << 20, reason="changed")
+        url, _ = await self._link(50 << 20, cap=None, persisted=([], [changed]))
+        assert url is None
+
+    @pytest.mark.asyncio
+    async def test_relay_mode_falls_back_to_the_stream_without_exporting(self):
+        url, push = await self._link(300 << 20, cap=256 << 20, persisted=([], []))
+        assert url is None
+        push.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_hash_that_raises_falls_back_without_exporting(self):
+        failing = AsyncMock(side_effect=RuntimeError("transfer op timed out"))
+        url, push = await self._link(50 << 20, cap=None, persisted=([], []), hashed=failing)
+        assert url is None
+        push.assert_not_awaited()

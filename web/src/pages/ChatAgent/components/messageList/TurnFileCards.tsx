@@ -18,7 +18,9 @@ import {
 import { deckHeight, deckSlot, useDeckCollapse, type DeckGeometry } from '@/components/ui/cardDeck';
 import { fileExtension, fileKind, fileKindIcon } from '../../utils/filePaths';
 import type { OpenFileHandler } from '../../utils/fileLocation';
+import { cardDownloadKey, downloadLabel, useDownloadState } from '../../utils/downloadNotice';
 import type { TurnFile } from '../../utils/turnFiles';
+import { useMessageActions } from './MessageActionsContext';
 import './TurnFileCards.css';
 
 /** Taller cards than the sources deck, since each carries a name and a meta line. */
@@ -42,6 +44,25 @@ interface TurnFileCardsProps {
    *  scrolls; and the host re-asserts its own scroll position on every growth
    *  frame of the fan. Only the host can do this. */
   onReveal?: () => void;
+}
+
+/** Its own component so each card can read whether its save is running. */
+function CardDownloadItem({ file, onDownloadFile }: {
+  file: { path: string; workspaceId?: string };
+  onDownloadFile: (path: string, workspaceId?: string) => void;
+}): React.ReactElement {
+  const { t } = useTranslation();
+  const { downloadKeyFor } = useMessageActions();
+  const key = downloadKeyFor
+    ? downloadKeyFor(file.path, file.workspaceId)
+    : cardDownloadKey(file.workspaceId, file.path);
+  const state = useDownloadState(key);
+  return (
+    <DropdownMenuItem onSelect={() => onDownloadFile(file.path, file.workspaceId)} disabled={state !== 'idle'}>
+      <Download className="h-3.5 w-3.5" />
+      {downloadLabel(state, t('chat.turnFiles.download'))}
+    </DropdownMenuItem>
+  );
 }
 
 export function TurnFileCards({ files, onOpenFile, onDownloadFile, onReveal }: TurnFileCardsProps): React.ReactElement | null {
@@ -149,10 +170,7 @@ export function TurnFileCards({ files, onOpenFile, onDownloadFile, onReveal }: T
                           {t('filePanel.openInNewTab')}
                         </DropdownMenuItem>
                         {onDownloadFile && (
-                          <DropdownMenuItem onSelect={() => onDownloadFile(file.path, file.workspaceId)}>
-                            <Download className="h-3.5 w-3.5" />
-                            {t('chat.turnFiles.download')}
-                          </DropdownMenuItem>
+                          <CardDownloadItem file={file} onDownloadFile={onDownloadFile} />
                         )}
                       </DropdownMenuContent>
                     </DropdownMenu>

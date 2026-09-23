@@ -21,6 +21,8 @@ Environment Variables:
     STORAGE_READ_TIMEOUT_S    - boto3 read timeout in seconds (default: 30)
     STORAGE_MAX_POOL_CONNECTIONS - boto3 connection pool size (default: 32)
     STORAGE_ADDRESSING_STYLE  - Bucket addressing: virtual (default) | path | auto
+    STORAGE_BROWSER_ENDPOINT_URL - Endpoint browsers reach for signed download
+                                   links, when it differs from STORAGE_ENDPOINT_URL
 
 Endpoint / addressing:
     AWS S3:        No endpoint needed, just credentials + bucket + region
@@ -96,6 +98,10 @@ class StorageConfig:
     REGION = os.getenv("STORAGE_REGION") or os.getenv("S3_REGION", "us-east-1")
     ENDPOINT_URL = os.getenv("STORAGE_ENDPOINT_URL") or os.getenv("S3_ENDPOINT_URL")
     PUBLIC_URL_BASE = os.getenv("STORAGE_PUBLIC_URL_BASE") or os.getenv("S3_PUBLIC_URL_BASE")
+    # The endpoint a browser reaches the store at, when it differs from the
+    # one this process uses (a MinIO addressed by its compose service name).
+    # Links handed to a browser are signed for this host instead.
+    BROWSER_ENDPOINT_URL = os.getenv("STORAGE_BROWSER_ENDPOINT_URL")
     MAX_UPLOAD_SIZE = int(os.getenv("STORAGE_MAX_UPLOAD_SIZE", str(10 * 1024 * 1024)))
 
     DEFAULT_IMAGE_PREFIX = os.getenv("STORAGE_DEFAULT_IMAGE_PREFIX", "images/")
@@ -138,6 +144,7 @@ class StorageConfig:
 # happen exactly once; the unlocked fast path keeps the steady state free.
 _CLIENT: Any | None = None
 _RANGE_CLIENT: Any | None = None
+_BROWSER_CLIENT: Any | None = None
 _CLIENT_MU = threading.Lock()
 
 
@@ -171,7 +178,22 @@ def _get_range_client() -> Any:
     return _RANGE_CLIENT
 
 
-def _build_client(**config_overrides: Any) -> Any:
+def _get_browser_client() -> Any:
+    """The client that signs links a browser follows; signing makes no request."""
+    if not StorageConfig.BROWSER_ENDPOINT_URL:
+        return _get_client()
+    global _BROWSER_CLIENT
+    if _BROWSER_CLIENT is not None:
+        return _BROWSER_CLIENT
+    with _CLIENT_MU:
+        if _BROWSER_CLIENT is None:
+            _BROWSER_CLIENT = _build_client(
+                endpoint_url=StorageConfig.BROWSER_ENDPOINT_URL
+            )
+    return _BROWSER_CLIENT
+
+
+def _build_client(*, endpoint_url: str | None = None, **config_overrides: Any) -> Any:
     kwargs: dict[str, Any] = {
         "aws_access_key_id": StorageConfig.ACCESS_KEY_ID,
         "aws_secret_access_key": StorageConfig.SECRET_ACCESS_KEY,
@@ -186,17 +208,18 @@ def _build_client(**config_overrides: Any) -> Any:
             **config_overrides,
         ),
     }
-    if StorageConfig.ENDPOINT_URL:
-        kwargs["endpoint_url"] = StorageConfig.ENDPOINT_URL
+    if endpoint_url or StorageConfig.ENDPOINT_URL:
+        kwargs["endpoint_url"] = endpoint_url or StorageConfig.ENDPOINT_URL
     return boto3.client("s3", **kwargs)
 
 
 def _reset_client_for_test() -> None:
     """Drop the cached clients. Test-only — production never re-initializes."""
-    global _CLIENT, _RANGE_CLIENT
+    global _CLIENT, _RANGE_CLIENT, _BROWSER_CLIENT
     with _CLIENT_MU:
         _CLIENT = None
         _RANGE_CLIENT = None
+        _BROWSER_CLIENT = None
 
 
 def upload_file(key: str, file_path: str, content_type: str | None = None) -> bool:
@@ -572,13 +595,31 @@ def abort_multipart_upload(key: str, upload_id: str) -> bool:
         return False
 
 
-def get_signed_url(key: str, expires_in: int = 3600) -> str | None:
-    """Generate a pre-signed URL for temporary access."""
+def get_signed_url(
+    key: str,
+    expires_in: int = 3600,
+    *,
+    content_disposition: str | None = None,
+    content_type: str | None = None,
+    for_browser: bool = False,
+) -> str | None:
+    """Generate a pre-signed URL for temporary access.
+
+    ``content_disposition`` and ``content_type`` override the stored object's
+    headers on the response, so a content-addressed object can be handed to a
+    browser under its user-facing name and type. ``for_browser`` signs for
+    ``STORAGE_BROWSER_ENDPOINT_URL`` when one is set.
+    """
+    params: dict[str, Any] = {"Bucket": StorageConfig.BUCKET_NAME, "Key": key}
+    if content_disposition:
+        params["ResponseContentDisposition"] = content_disposition
+    if content_type:
+        params["ResponseContentType"] = content_type
     try:
-        client = _get_client()
+        client = _get_browser_client() if for_browser else _get_client()
         return client.generate_presigned_url(
             "get_object",
-            Params={"Bucket": StorageConfig.BUCKET_NAME, "Key": key},
+            Params=params,
             ExpiresIn=expires_in,
         )
     except ClientError as e:

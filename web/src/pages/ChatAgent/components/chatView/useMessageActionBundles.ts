@@ -11,6 +11,7 @@ type Action<K extends keyof MessageActions> = NonNullable<MessageActions[K]>;
 export interface MessageActionSources {
   onOpenFile: Action<'onOpenFile'>;
   onDownloadFile: Action<'onDownloadFile'>;
+  downloadKeyFor: Action<'downloadKeyFor'>;
   onRevealFiles: Action<'onRevealFiles'>;
   onOpenSources: Action<'onOpenSources'>;
   onToolCallDetailClick: Action<'onToolCallDetailClick'>;
@@ -59,6 +60,7 @@ export function useMessageActionBundles(src: MessageActionSources): {
 } {
   const stableOpenFile = useStableHandler(src.onOpenFile);
   const stableDownloadFile = useStableHandler(src.onDownloadFile);
+  const stableDownloadKeyFor = useStableHandler(src.downloadKeyFor);
   const stableRevealFiles = useStableHandler(src.onRevealFiles);
   const stableOpenSources = useStableHandler(src.onOpenSources);
   const stableToolCallDetail = useStableHandler(src.onToolCallDetailClick);
@@ -100,6 +102,7 @@ export function useMessageActionBundles(src: MessageActionSources): {
   const messageActions = useMemo<MessageActions>(() => ({
     onOpenFile: stableOpenFile,
     onDownloadFile: stableDownloadFile,
+    downloadKeyFor: stableDownloadKeyFor,
     onRevealFiles: stableRevealFiles,
     onOpenSources: stableOpenSources,
     onToolCallDetailClick: stableToolCallDetail,
@@ -129,7 +132,7 @@ export function useMessageActionBundles(src: MessageActionSources): {
     onReportWithAgent: stableReportWithAgent,
     onWidgetSendPrompt: stableSendMessage,
   }), [
-    stableOpenFile, stableDownloadFile, stableRevealFiles, stableOpenSources, stableToolCallDetail,
+    stableOpenFile, stableDownloadFile, stableDownloadKeyFor, stableRevealFiles, stableOpenSources, stableToolCallDetail,
     stableOpenChart, stableOpenSubagentTask, stableApprovePlan, stableRejectPlan, stablePlanDetail,
     stableAnswerQuestion, stableSkipQuestion, stableApproveCreateWorkspace,
     stableRejectCreateWorkspace, stableApproveStartQuestion, stableRejectStartQuestion,
@@ -147,9 +150,10 @@ export function useMessageActionBundles(src: MessageActionSources): {
   const subagentMessageActions = useMemo<MessageActions>(() => ({
     onOpenFile: stableOpenFile,
     onDownloadFile: stableDownloadFile,
+    downloadKeyFor: stableDownloadKeyFor,
     onToolCallDetailClick: stableToolCallDetail,
     onOpenChart: stableOpenChart,
-  }), [stableOpenFile, stableDownloadFile, stableToolCallDetail, stableOpenChart]);
+  }), [stableOpenFile, stableDownloadFile, stableDownloadKeyFor, stableToolCallDetail, stableOpenChart]);
 
   return { messageActions, subagentMessageActions };
 }

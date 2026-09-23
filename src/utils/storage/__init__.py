@@ -143,7 +143,14 @@ if STORAGE_PROVIDER == "none":
     def get_public_url(key: str) -> str:
         return ""
 
-    def get_signed_url(key: str, expires_in: int = 3600) -> str | None:
+    def get_signed_url(
+        key: str,
+        expires_in: int = 3600,
+        *,
+        content_disposition: str | None = None,
+        content_type: str | None = None,
+        for_browser: bool = False,
+    ) -> str | None:
         return None
 
     def get_signed_upload_url(

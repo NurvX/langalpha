@@ -22,6 +22,7 @@ import { classifyAgentPath, parseAgentPath } from '../utils/agentPaths';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { parseFragment, type FileLocation, type OpenFileHandler } from '../utils/fileLocation';
 import FileHeaderActions from './FileHeaderActions';
+import { useDownloadState, workspaceDownloadKey } from '../utils/downloadNotice';
 import './FilePanel.css';
 
 const ExportPreviewModal = React.lazy(() => import('./ExportPreviewModal'));
@@ -404,6 +405,12 @@ function FilePanel({
 
   // --- file actions ---
 
+  const selectedDownloadState = useDownloadState(
+    selectedFile ? workspaceDownloadKey(workspaceId, selectedFile) : null,
+  );
+  const contextMenuDownloadState = useDownloadState(
+    contextMenu ? workspaceDownloadKey(workspaceId, contextMenu.filePath) : null,
+  );
   const handleDownloadSelected = canDownload && selectedFile ? () => downloads.download(selectedFile) : undefined;
   const handleDownloadInFallback = canDownload && selectedFile ? () => downloads.downloadQuietly(selectedFile) : undefined;
 
@@ -721,6 +728,7 @@ function FilePanel({
                   error: fileError,
                   onRetry: retry,
                   onDownload: handleDownloadSelected,
+                  downloadState: selectedDownloadState,
                   onDownloadInFallback: handleDownloadInFallback,
                   focus,
                   isEditing: edit.isEditing,
@@ -800,6 +808,7 @@ function FilePanel({
             ? (memoedMap.has(contextMenu.filePath) ? 'present' : 'absent')
             : null}
           canDownload={canDownload}
+          downloadState={contextMenuDownloadState}
           selectedCount={selection.selectedPaths.has(contextMenu.filePath) ? selection.selectedPaths.size : 0}
         />
       )}

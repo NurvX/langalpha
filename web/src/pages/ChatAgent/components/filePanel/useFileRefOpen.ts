@@ -58,8 +58,12 @@ export function useFileRefOpen({
       await cache.fetchBody(path);
       return null;
     } catch (err) {
-      console.error(`[FilePanel] Failed to load ${path}:`, err);
-      return categorizeFileError(err, workspaceStatus);
+      const error = categorizeFileError(err, workspaceStatus);
+      // Too large or binary is an answer the panel renders, not a fault.
+      if (error.category !== 'too_large' && error.category !== 'binary_file') {
+        console.error(`[FilePanel] Failed to load ${path}:`, err);
+      }
+      return error;
     }
   }, [tabs, cache, hasChanged, workspaceStatus, onBeforeOpen]);
 

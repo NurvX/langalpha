@@ -9,13 +9,16 @@ import shlex
 from contextlib import AsyncExitStack
 from dataclasses import asdict
 from datetime import UTC, datetime
+from collections.abc import AsyncIterator
 from typing import Any
 
+import anyio
 from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from src.server.utils.api import CurrentUserId, require_workspace_owner
 from src.server.services.persistence.transfer import scan_cap_bytes
+from ptc_agent.core.sandbox.runtime import STREAM_CHUNK_BYTES
 from src.server.utils.uploads import read_capped
 from src.utils.storage import is_storage_enabled
 from src.server.utils.error_sanitization import (
@@ -23,11 +26,15 @@ from src.server.utils.error_sanitization import (
     single_line,
 )
 from src.server.utils.http_headers import content_disposition
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from src.server.database.workspace import get_workspace as db_get_workspace
 from src.server.services.workspace_manager import WorkspaceManager
 from src.server.services.persistence.file import FilePersistenceService
+from src.server.services.persistence.download_link import (
+    live_download_link,
+    mirror_download_link,
+)
 from src.server.utils.secret_redactor import (
     get_redactor,
     get_vault_secrets_for_redaction,
@@ -45,6 +52,7 @@ from .file_refs import (
 from src.server.models.workspace import served_from_mirror
 
 from ._containment import (
+    FileTooLargeToServe,
     contained_absolute_path,
     contained_sandbox_paths,
     contained_listing_path,
@@ -54,7 +62,9 @@ from ._containment import (
 )
 from ._shared import (
     held_bytes_budget,
+    streamed_download_budget,
     DEFAULT_READ_LIMIT_LINES,
+    TOO_LARGE_DETAIL,
     _USER_PROFILE_FILES,
     _is_text_content_type,
     _is_utf8,
@@ -115,7 +125,12 @@ async def _read_contained_target(
     candidate = contained_absolute_path(path, work_dir)
     if candidate is None or not sandbox.validate_path(candidate):
         raise HTTPException(status_code=404, detail="File not found")
-    resolved = await read_contained_sandbox_file(sandbox, candidate, work_dir=work_dir)
+    try:
+        resolved = await read_contained_sandbox_file(
+            sandbox, candidate, work_dir=work_dir
+        )
+    except FileTooLargeToServe:
+        raise HTTPException(status_code=413, detail=TOO_LARGE_DETAIL) from None
     if resolved is None:
         raise HTTPException(status_code=404, detail="File not found")
     return resolved
@@ -574,13 +589,68 @@ async def write_workspace_file(
     }
 
 
+# How long a large download waits for a stream slot before answering 503.
+_STREAM_SLOT_WAIT_S = 30
+# How long the sandbox has to produce a stream's first chunk.
+_STREAM_OPEN_TIMEOUT_S = 60
+
+
+class _StreamedDownload(StreamingResponse):
+    """A download streamed from the sandbox that keeps ``held`` open until sent.
+
+    ``held`` owns the upstream stream and its slot in the stream budget, so
+    both last exactly as long as the client is reading, and a client that
+    disconnects closes the upstream read with them.
+    """
+
+    def __init__(
+        self, body: AsyncIterator[bytes], *, held: AsyncExitStack, **kwargs: Any
+    ) -> None:
+        super().__init__(body, **kwargs)
+        self._held = held
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Shielded: this close releases the stream slot, and a cancelled
+            # one would hold it for the life of the worker.
+            with anyio.CancelScope(shield=True):
+                await self._held.aclose()
+
+
+class _FileChangedWhileSending(Exception):
+    """The file grew or shrank after its size went out as Content-Length."""
+
+
+async def _exactly(body: AsyncIterator[bytes], size: int) -> AsyncIterator[bytes]:
+    """Yield ``body`` only while it matches ``size``.
+
+    A file an agent is still writing can outgrow the size admitted for it.
+    Stopping at that size would hand the client a silent prefix, so the send
+    fails instead and the client sees a broken download.
+    """
+    sent = 0
+    async for chunk in body:
+        sent += len(chunk)
+        if sent > size:
+            raise _FileChangedWhileSending(f"grew past {size} bytes")
+        yield chunk
+    if sent != size:
+        raise _FileChangedWhileSending(f"ended at {sent} of {size} bytes")
+
+
 def _build_download_response(
-    content: bytes, filename: str, mime: str, request: Request
+    content: bytes,
+    filename: str,
+    mime: str,
+    request: Request,
+    disposition: str = "inline",
 ) -> Response:
     """Build a download response with caching headers for image types."""
     etag = hashlib.md5(content).hexdigest()
     headers: dict[str, str] = {
-        "Content-Disposition": content_disposition(filename, disposition="inline"),
+        "Content-Disposition": content_disposition(filename, disposition=disposition),
         "ETag": f'"{etag}"',
     }
     if mime in _CACHEABLE_IMAGE_TYPES:
@@ -593,11 +663,7 @@ def _build_download_response(
     if if_none_match and if_none_match.strip('" ') == etag:
         return Response(status_code=304, headers=headers)
 
-    return Response(
-        content=content,
-        media_type=mime,
-        headers=headers,
-    )
+    return Response(content=content, media_type=mime, headers=headers)
 
 
 @router.get("/{workspace_id}/files/download")
@@ -606,8 +672,12 @@ async def download_workspace_file(
     x_user_id: CurrentUserId,
     request: Request,
     path: str = Query(..., description="File path (virtual or absolute)."),
+    attachment: bool = Query(
+        False, description="Ask the browser to save the file rather than show it."
+    ),
 ) -> Response:
     """Download raw bytes from the workspace's sandbox, or from DB if stopped."""
+    disposition = "attachment" if attachment else "inline"
 
     workspace = await db_get_workspace(workspace_id)
     require_workspace_owner(workspace, user_id=x_user_id)
@@ -641,11 +711,23 @@ async def download_workspace_file(
         if _is_text_content_type(mime) or _is_utf8(content):
             content = get_redactor().redact_bytes(content, vault_secrets=vault_secrets)
 
-        return _build_download_response(content, filename, mime, request)
+        return _build_download_response(content, filename, mime, request, disposition)
 
     sandbox = await _acquire_sandbox(workspace_id, x_user_id)
 
-    normalized, content = await _read_contained_target(sandbox, path, work_dir)
+    candidate = contained_absolute_path(path, work_dir)
+    if candidate is None or not sandbox.validate_path(candidate):
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        resolved = await read_contained_sandbox_file(
+            sandbox, candidate, work_dir=work_dir
+        )
+        too_large = None
+    except FileTooLargeToServe as e:
+        resolved, too_large = (e.canonical, b""), e
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    normalized, content = resolved
 
     client_path = _to_client_path(sandbox, normalized, work_dir)
     if _is_always_hidden_path(client_path):
@@ -654,13 +736,122 @@ async def download_workspace_file(
     filename = client_path.split("/")[-1] if client_path else "download"
     mime = resolve_content_type(filename)
 
+    if too_large is not None:
+        return await _stream_large_file(sandbox, too_large, filename, mime, disposition)
+
     if _is_text_content_type(mime) or _is_utf8(content):
         vault_secrets = await get_vault_secrets_for_redaction(workspace_id)
         content = get_redactor().redact_bytes(content, vault_secrets=vault_secrets)
 
     _record_fs_bytes("download", len(content))
 
-    return _build_download_response(content, filename, mime, request)
+    return _build_download_response(content, filename, mime, request, disposition)
+
+
+async def _stream_large_file(
+    sandbox: Any,
+    too_large: FileTooLargeToServe,
+    filename: str,
+    mime: str,
+    disposition: str,
+) -> Response:
+    """Stream a file past the exec read's limit straight from the sandbox.
+
+    Any file the store cannot carry lands here: every file without a store,
+    one past what a relay export can hold, or one whose export failed.
+    Streaming keeps a worker's memory flat at any size. Like the signed link,
+    the body skips secret redaction: it is the owner's own file, and
+    redaction needs it whole.
+    """
+    async with AsyncExitStack() as held:
+        try:
+            async with asyncio.timeout(_STREAM_SLOT_WAIT_S):
+                await held.enter_async_context(
+                    streamed_download_budget().hold(STREAM_CHUNK_BYTES)
+                )
+        except TimeoutError:
+            # Slow readers can hold every slot for as long as they like, so a
+            # queued download gives up rather than hang behind them.
+            raise HTTPException(
+                status_code=503,
+                detail="Too many downloads in progress; try again shortly",
+                headers={"Retry-After": str(_STREAM_SLOT_WAIT_S)},
+            ) from None
+        try:
+            # Short, apart from the provider's hour-long read: a sandbox that
+            # accepts the request and never answers would hold a slot for it.
+            async with asyncio.timeout(_STREAM_OPEN_TIMEOUT_S):
+                stream = await sandbox.astream_file_bytes(too_large.canonical)
+        except TimeoutError:
+            raise HTTPException(
+                status_code=504, detail="The sandbox did not start sending the file"
+            ) from None
+        if stream is None:
+            raise HTTPException(status_code=404, detail="File not found")
+        held.push_async_callback(stream.aclose)
+        _record_fs_bytes("download", too_large.size)
+        return _StreamedDownload(
+            _exactly(stream, too_large.size),
+            held=held.pop_all(),
+            media_type=mime,
+            headers={
+                "Content-Disposition": content_disposition(
+                    filename, disposition=disposition
+                ),
+                "Content-Length": str(too_large.size),
+                "Cache-Control": "private, no-cache",
+            },
+        )
+
+
+@router.get("/{workspace_id}/files/download-url")
+async def workspace_file_download_url(
+    workspace_id: str,
+    x_user_id: CurrentUserId,
+    path: str = Query(..., description="File path (virtual or absolute)."),
+) -> dict[str, str | None]:
+    """A short-lived store link for saving a file, or ``url: null`` to use /files/download.
+
+    A bearer token cannot ride a browser navigation, so the download is two
+    steps: this owner-checked call, then a plain GET the browser streams to
+    disk. The link skips secret redaction: it is the owner's own file, and
+    redacting would mean carrying the bytes through this process.
+    """
+    workspace = await db_get_workspace(workspace_id)
+    require_workspace_owner(workspace, user_id=x_user_id)
+    if _is_flash_workspace(workspace):
+        raise HTTPException(
+            status_code=400, detail="Flash workspaces do not have a sandbox"
+        )
+
+    layout = owner_layout(workspace)
+    work_dir = layout.workspace
+
+    if served_from_mirror(workspace.get("status")):
+        normalized_path = _normalize_requested_path(path, work_dir)
+        if not normalized_path:
+            raise HTTPException(status_code=400, detail="File path is required")
+        if _is_always_hidden_path(normalized_path):
+            raise HTTPException(status_code=404, detail="File not found")
+        return {"url": await mirror_download_link(workspace, normalized_path)}
+
+    sandbox = await _acquire_sandbox(workspace_id, x_user_id)
+    try:
+        canonical = await _contained_target(sandbox, path, work_dir)
+    except HTTPException:
+        # This check is the project folder's; reads also admit shared tiers
+        # outside it. /files/download applies the read policy and refuses the
+        # rest itself, so it decides, and no answer here says which it was.
+        return {"url": None}
+    client_path = _to_client_path(sandbox, canonical, work_dir)
+    if _is_always_hidden_path(client_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    rel_path = canonical[len(work_dir.rstrip("/")) + 1 :]
+    try:
+        url = await live_download_link(workspace, sandbox, rel_path, layout=layout)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found") from None
+    return {"url": url}
 
 
 @router.post("/{workspace_id}/files/upload")

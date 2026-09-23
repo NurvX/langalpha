@@ -402,7 +402,14 @@ def get_signed_upload_url(
     return None
 
 
-def get_signed_url(key: str, expires_in: int = 3600) -> str | None:
+def get_signed_url(
+    key: str,
+    expires_in: int = 3600,
+    *,
+    content_disposition: str | None = None,
+    content_type: str | None = None,
+    for_browser: bool = False,
+) -> str | None:
     """Generate a signed URL for temporary access to a private object.
 
     Args:
@@ -422,6 +429,8 @@ def get_signed_url(key: str, expires_in: int = 3600) -> str | None:
         result = client.presign(oss.GetObjectRequest(
             bucket=OSSConfig.BUCKET_NAME,
             key=key,
+            response_content_disposition=content_disposition,
+            response_content_type=content_type,
         ), expires=expires_in)
 
         return result.url

@@ -442,6 +442,36 @@ async def scan_workspace(
     )
 
 
+async def hash_one_file(
+    sandbox: Any,
+    path: str,
+    *,
+    prior: tuple[int, int, str] | None,
+    layout: WorkspaceLayout,
+) -> ScanEntry | None:
+    """Stat and hash one file under the project folder; None when it is not a file.
+
+    ``path`` is relative to ``layout.workspace``. ``prior`` is the manifest's
+    (size, mtime_ns, sha256) and lets an unchanged file skip the read.
+    """
+    spec: dict[str, Any] = {**_transfer_roots(layout), "path": path}
+    if prior is not None:
+        spec["prior"] = list(prior)
+    out = await run_transfer_op(sandbox, "hash", spec, timeout_s=SCAN_TIMEOUT_S)
+    if out.get("status") != "ok" or not out.get("sha256"):
+        return None
+    return ScanEntry(
+        path=path,
+        kind="file",
+        size=int(out.get("size") or 0),
+        mtime_ns=int(out.get("mtime_ns") or 0),
+        mode=int(out.get("mode") or 0),
+        sha256=out["sha256"],
+        symlink_target=None,
+        is_binary=out.get("is_binary"),
+    )
+
+
 async def push_direct(
     sandbox: Any, items: list[dict[str, Any]], *, layout: WorkspaceLayout
 ) -> dict[str, dict[str, Any]]:

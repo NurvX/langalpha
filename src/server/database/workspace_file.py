@@ -301,6 +301,42 @@ async def get_file(
         raise
 
 
+async def get_file_locator(
+    workspace_id: str, file_path: str, *, conn=None
+) -> Optional[Dict[str, Any]]:
+    """Where one file's bytes live, without the bytes.
+
+    ``get_file(include_content=False)`` leaves out the blob and pack pointers,
+    and ``include_content=True`` pulls an inline body of up to 100 MB to learn
+    them. ``mtime_ns`` matches ``get_file_metadata_for_sync``.
+    """
+
+    async def _execute(cur):
+        await cur.execute(
+            """
+            SELECT file_name, file_size, content_hash, blob_sha256, pack_sha256,
+                   mime_type, sandbox_modified_at
+            FROM workspace_files
+            WHERE workspace_id = %s AND file_path = %s AND kind = 'file'
+            """,
+            (workspace_id, file_path),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        micros = datetime_to_micros(out.pop("sandbox_modified_at"))
+        out["mtime_ns"] = micros * 1000 if micros is not None else None
+        return out
+
+    if conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            return await _execute(cur)
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            return await _execute(cur)
+
+
 async def get_file_metadata_for_sync(
     workspace_id: str,
     *,

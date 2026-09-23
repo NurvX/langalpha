@@ -170,6 +170,41 @@
   animation: scrim-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* === Download progress: a thin indicator, so the accent is permitted. The
+       indeterminate fill is for work that reports nothing until it ends. === */
+@keyframes download-progress-slide {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(250%); }
+}
+
+.download-progress-track {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: var(--color-border-muted);
+}
+
+.download-progress-fill {
+  height: 100%;
+  background: var(--color-accent-primary);
+  transition: width 200ms linear;
+}
+
+.download-progress-fill[data-indeterminate] {
+  width: 40%;
+  animation: download-progress-slide 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Still, but not absent: the text carries the state. */
+@media (prefers-reduced-motion: reduce) {
+  .download-progress-fill[data-indeterminate] {
+    width: 100%;
+    opacity: 0.4;
+    animation: none;
+  }
+}
+
 /* Near-zero rather than `none`: the animation still has to end for Radix to
    unmount the closing element. */
 @media (prefers-reduced-motion: reduce) {

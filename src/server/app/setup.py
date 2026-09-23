@@ -1031,8 +1031,23 @@ class MalformedIdDiagnosticMiddleware:
         await self.app(scope, receive, send)
 
 
+class _GZipExceptFileDownloads(GZipMiddleware):
+    """GZip, except the workspace file download.
+
+    That body is the file's own bytes, often already compressed, and can be
+    gigabytes streamed from a sandbox: compressing it spends a worker's CPU
+    for little, and drops the Content-Length the client's progress bar needs.
+    """
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"].endswith("/files/download"):
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
 # Register GZip compression middleware (compresses JSON responses >= 1KB)
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(_GZipExceptFileDownloads, minimum_size=1000)
 
 # TEMP (malformed-id-diag): log malformed workspace/thread ids + Referer so the next
 # real prod occurrence names the SPA route that built the bad request.

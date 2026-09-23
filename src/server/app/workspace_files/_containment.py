@@ -31,6 +31,25 @@ PROBE_ESCAPED = 4
 _PROBE_TIMEOUT_S = 10
 READ_MISSING = 2
 READ_CONTAINMENT = 3
+READ_TOO_LARGE = 5
+# The read returns the file as base64 on the exec's stdout. Daytona fails an
+# exec whose output passes ~128 MiB (a ~95 MiB file) with a 502 and stops the
+# sandbox, so a read stays well under that; larger files go through the
+# provider's file download instead.
+EXEC_READ_MAX_BYTES = 64 * 1024 * 1024
+
+
+class FileTooLargeToServe(Exception):
+    """The file is contained but too large to read through an exec.
+
+    Carries the canonical path and size the same exec resolved, so a caller
+    that can fetch the file another way reads what the check approved.
+    """
+
+    def __init__(self, canonical: str, size: int) -> None:
+        super().__init__(canonical)
+        self.canonical = canonical
+        self.size = size
 
 
 def contained_relative_path(path: str, work_dir: str) -> str | None:
@@ -187,6 +206,8 @@ def contained_read_command(
             denied_check,
             f'[ -f "$tt" ] || exit {READ_MISSING}; ',
             'printf %s "$tt" | base64 | tr -d "\\n"; printf "\\n"; ',
+            f'sz=$(wc -c < "$tt"); [ "$sz" -le {EXEC_READ_MAX_BYTES} ] ',
+            f'|| {{ printf %s "$sz"; exit {READ_TOO_LARGE}; }}; ',
             'base64 < "$tt"',
         ]
     )
@@ -221,7 +242,7 @@ async def read_contained_sandbox_file(
     exit_code = getattr(result, "exit_code", None)
     if exit_code in (READ_MISSING, READ_CONTAINMENT):
         return None
-    if exit_code != 0:
+    if exit_code not in (0, READ_TOO_LARGE):
         raise SandboxTransientError(
             f"Contained file read failed with exit code {exit_code}"
         )
@@ -233,7 +254,10 @@ async def read_contained_sandbox_file(
         return None
     try:
         canonical = base64.b64decode(encoded_path, validate=True).decode("utf-8")
-        content = base64.b64decode("".join(encoded_content.split()), validate=True)
+        if exit_code == READ_TOO_LARGE:
+            size, content = int(encoded_content.strip()), b""
+        else:
+            content = base64.b64decode("".join(encoded_content.split()), validate=True)
     except (binascii.Error, UnicodeDecodeError, ValueError):
         return None
     if not any(is_within(root, canonical) for root in roots):
@@ -241,6 +265,8 @@ async def read_contained_sandbox_file(
     validate = getattr(sandbox, "validate_path", None)
     if callable(validate) and not validate(canonical):
         return None
+    if exit_code == READ_TOO_LARGE:
+        raise FileTooLargeToServe(canonical, size)
     return canonical, content
 
 

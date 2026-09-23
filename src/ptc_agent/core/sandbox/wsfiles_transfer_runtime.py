@@ -6,7 +6,7 @@ through presigned URLs. It runs on the sandbox's bare python3, so it is
 standard library only and imports nothing from the host repo.
 
 CLI: ``python3 wsfiles_transfer.py <op> (--spec-b64 <base64 json> | <in.json>)``
-where ``op`` is scan, push, pull, pack or unlink. The result is the last
+where ``op`` is scan, hash, push, pull, pack or unlink. The result is the last
 stdout line, behind ``RESULT_MARKER``, and the process exits 0 even on partial
 failure; exit 2 is reserved for unreadable or invalid input.
 """
@@ -1440,6 +1440,49 @@ def _rmtree_quiet(path: str) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
+def hash_one(spec: dict[str, Any]) -> dict[str, Any]:
+    """Stat and hash one regular file, so a single file can be exported alone.
+
+    ``prior`` is the manifest's (size, mtime_ns, sha256) for the path and
+    skips the read when the file has not moved since, as the scan does. A
+    symlink is refused rather than followed: the caller resolved the path
+    already, and what sits there now is the only thing it may name.
+    """
+    root = os.path.abspath(spec["root"])
+    path = _resolve_under_root(root, spec.get("path") or "")
+    if path is None:
+        return {"status": "missing"}
+    try:
+        st = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return {"status": "missing"}
+    if not stat.S_ISREG(st.st_mode):
+        return {"status": "missing"}
+    real_root = os.path.realpath(root)
+    if not os.path.realpath(path).startswith(real_root.rstrip(os.sep) + os.sep):
+        return {"status": "missing"}
+    known = spec.get("prior")
+    if (
+        known
+        and len(known) >= 3
+        and known[0] == st.st_size
+        and known[2]
+        and known[1] is not None
+        and int(known[1]) // 1000 == st.st_mtime_ns // 1000
+    ):
+        digest, is_binary, size = known[2], None, st.st_size
+    else:
+        digest, is_binary, size = _hash_file(path)
+    return {
+        "status": "ok",
+        "size": size,
+        "mtime_ns": st.st_mtime_ns,
+        "mode": stat.S_IMODE(st.st_mode),
+        "sha256": digest,
+        "is_binary": is_binary,
+    }
+
+
 def unlink(spec: dict[str, Any]) -> dict[str, Any]:
     """Remove files under root; used to drop chunks the server relayed itself."""
     root = os.path.abspath(spec["root"])
@@ -1458,11 +1501,18 @@ def unlink(spec: dict[str, Any]) -> dict[str, Any]:
 # CLI
 # ---------------------------------------------------------------------------
 
-_OPS = {"scan": scan, "push": push, "pull": pull, "pack": pack, "unlink": unlink}
+_OPS = {
+    "scan": scan,
+    "hash": hash_one,
+    "push": push,
+    "pull": pull,
+    "pack": pack,
+    "unlink": unlink,
+}
 
 
 RESULT_MARKER = "WSFILES_RESULT "
-_USAGE = "usage: wsfiles_transfer.py <scan|push|pull|pack|unlink> (--spec-b64 <base64 json> | <in.json>)\n"
+_USAGE = "usage: wsfiles_transfer.py <scan|hash|push|pull|pack|unlink> (--spec-b64 <base64 json> | <in.json>)\n"
 
 
 def _load_spec(argv: list[str]) -> dict[str, Any]:

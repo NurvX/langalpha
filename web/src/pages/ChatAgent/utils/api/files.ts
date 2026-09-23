@@ -2,6 +2,8 @@
  * Workspace file endpoints (list/read/write/delete/backup/upload).
  */
 import { api } from '@/api/client';
+import { isPlatformMode } from '@/config/hostMode';
+import { withDownloadNotice, workspaceDownloadKey, type DownloadProgressReport } from '../downloadNotice';
 import type { FileRefResolution } from '../../components/filePanel/types';
 import type { BackupResponse, BackupStatusResponse } from '@/types/api';
 
@@ -40,10 +42,17 @@ export async function readWorkspaceFile(workspaceId: string, filePath: string) {
  * @param {string} filePath
  * @returns {Promise<string>} Blob URL for the file
  */
-export async function downloadWorkspaceFile(workspaceId: string, filePath: string) {
+export async function downloadWorkspaceFile(
+  workspaceId: string,
+  filePath: string,
+  onProgress?: DownloadProgressReport,
+) {
   const response = await api.get(`/api/v1/workspaces/${workspaceId}/files/download`, {
     params: { path: filePath },
     responseType: 'blob',
+    onDownloadProgress: onProgress
+      ? (event) => { if (event.total) onProgress(event.loaded / event.total); }
+      : undefined,
   });
   return URL.createObjectURL(response.data as Blob);
 }
@@ -67,16 +76,50 @@ export async function downloadWorkspaceFileAsArrayBuffer(workspaceId: string, fi
  * @param {string} workspaceId
  * @param {string} filePath
  */
-export async function triggerFileDownload(workspaceId: string, filePath: string) {
-  const blobUrl = await downloadWorkspaceFile(workspaceId, filePath);
+export function triggerFileDownload(workspaceId: string, filePath: string): Promise<void> {
   const fileName = filePath.split('/').pop() || 'download';
+  return withDownloadNotice(workspaceDownloadKey(workspaceId, filePath), fileName, (report, current) =>
+    saveWorkspaceFile(workspaceId, filePath, fileName, report, current),
+  );
+}
+
+async function saveWorkspaceFile(
+  workspaceId: string,
+  filePath: string,
+  fileName: string,
+  report: DownloadProgressReport,
+  current: () => boolean,
+) {
+  // A large file is handed out as a short-lived storage link the browser
+  // streams to disk itself; buffering it as a blob would hold the whole file
+  // in tab memory. A null url means the file is small enough to fetch here.
+  const { data } = await api.get<{ url: string | null }>(
+    `/api/v1/workspaces/${workspaceId}/files/download-url`,
+    { params: { path: filePath } },
+  );
+  // Without a bearer token the download route itself is a plain GET, so the
+  // browser can stream it to disk too; with one, only a blob can carry it.
+  const direct = data?.url ?? (isPlatformMode ? null : directDownloadUrl(workspaceId, filePath));
+  const href = direct ?? (await downloadWorkspaceFile(workspaceId, filePath, report));
+  // Signed out while this was being prepared: the file is the last account's.
+  if (!current()) {
+    if (!direct) URL.revokeObjectURL(href);
+    return;
+  }
   const a = document.createElement('a');
-  a.href = blobUrl;
+  a.href = href;
   a.download = fileName;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(blobUrl);
+  if (!direct) URL.revokeObjectURL(href);
+}
+
+function directDownloadUrl(workspaceId: string, filePath: string): string {
+  return api.getUri({
+    url: `/api/v1/workspaces/${workspaceId}/files/download`,
+    params: { path: filePath, attachment: true },
+  });
 }
 
 /** Back up the sandbox's files so they outlive it. */

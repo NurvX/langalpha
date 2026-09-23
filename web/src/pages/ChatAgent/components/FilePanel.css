@@ -373,8 +373,12 @@
     cursor: pointer;
     transition: background-color 0.1s;
   }
-  .file-panel-context-menu-item:hover {
+  .file-panel-context-menu-item:hover:not(:disabled) {
     background-color: var(--color-bg-hover);
+  }
+  .file-panel-context-menu-item:disabled {
+    color: var(--color-text-tertiary);
+    cursor: default;
   }
 
   /* Monaco editor container — fills available panel height */
