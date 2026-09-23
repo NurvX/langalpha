@@ -91,7 +91,7 @@ async def get_current_user_id(
     if credentials is None:
         raise HTTPException(status_code=401, detail="Missing authentication")
 
-    return _decode_token(credentials.credentials).user_id
+    return (await _decode_token(credentials.credentials)).user_id
 
 
 # Annotated type for cleaner endpoint signatures
@@ -116,7 +116,7 @@ async def get_optional_user_id(
         return LOCAL_DEV_USER_ID
     if credentials is None:
         return None
-    return _decode_token(credentials.credentials).user_id
+    return (await _decode_token(credentials.credentials)).user_id
 
 
 # The resolved user id, or None for an anonymous caller.

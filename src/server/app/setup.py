@@ -629,6 +629,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Credit gate wiring check failed: {e}")
 
+    from src.server.auth.jwt_bearer import warm_jwks
+
+    await warm_jwks()
+
     # Startup leaves ~700k import-time objects (pydantic schemas, routes,
     # module state) that never die, and every full collection re-walks them
     # while the loop is frozen. Freezing moves them out of the collector for
