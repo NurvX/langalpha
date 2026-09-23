@@ -2749,9 +2749,11 @@
       "low": "低",
       "close": "收",
       "volume": "量",
+      "avgVolume3m": "3 月均量",
       "prevClose": "昨收",
       "range52w": "52 周",
-      "change": "涨跌"
+      "change": "涨跌",
+      "changeExt": "涨跌（含盘前盘后）"
     },
     "symbolSearch": {
       "switchSymbol": "切换标的，当前为 {{symbol}}",

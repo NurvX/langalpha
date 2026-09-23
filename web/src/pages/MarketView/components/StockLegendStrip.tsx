@@ -64,16 +64,20 @@ export function LegendLead({ symbol, quote: q, onSwitchSymbol }: LegendLeadProps
 
 export function LegendStats({ quote: q }: { quote: StockQuoteModel }): React.ReactElement {
   const { t } = useTranslation();
+  // A row without a session volume shows the 3-month average, said so.
+  const volumeIsAverage = q.volume == null && q.averageVolume != null;
   const volume = q.volume ?? q.averageVolume;
   const cells: Array<{ k: string; v: string; tone?: string }> = [
     { k: t('marketView.quote.open'), v: fmt(q.open) },
     { k: t('marketView.quote.high'), v: fmt(q.high) },
     { k: t('marketView.quote.low'), v: fmt(q.low) },
-    { k: t('marketView.quote.close'), v: fmt(q.price) },
-    { k: t('marketView.quote.volume'), v: volume != null ? compactNumberFixed2(volume) : DASH },
+    // The candle ends at the regular close: in an extended session the live
+    // price belongs to the lead, and C is the settled close the headline shows.
+    { k: t('marketView.quote.close'), v: fmt(q.headline.price) },
+    { k: t(volumeIsAverage ? 'marketView.quote.avgVolume3m' : 'marketView.quote.volume'), v: volume != null ? compactNumberFixed2(volume) : DASH },
     { k: t('marketView.quote.prevClose'), v: fmt(q.previousClose) },
     { k: t('marketView.quote.range52w'), v: q.fiftyTwoWeekLow != null && q.fiftyTwoWeekHigh != null ? `${fmt(q.fiftyTwoWeekLow)}–${fmt(q.fiftyTwoWeekHigh)}` : DASH },
-    { k: t('marketView.quote.change'), v: q.changePercent != null ? `${signedFixed2(q.changePercent)}%` : DASH, tone: q.tone },
+    { k: t(q.ext ? 'marketView.quote.changeExt' : 'marketView.quote.change'), v: q.changePercent != null ? `${signedFixed2(q.changePercent)}%` : DASH, tone: q.tone },
   ];
   return (
     <div className="legend-stats">

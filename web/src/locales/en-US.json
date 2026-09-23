@@ -2775,9 +2775,11 @@
       "low": "L",
       "close": "C",
       "volume": "V",
+      "avgVolume3m": "Avg vol 3M",
       "prevClose": "Prev",
       "range52w": "52W",
-      "change": "Chg"
+      "change": "Chg",
+      "changeExt": "Chg incl. ext"
     },
     "symbolSearch": {
       "switchSymbol": "Change symbol, currently {{symbol}}",

@@ -97,6 +97,16 @@ describe('StockHeader price section (market convention)', () => {
     expect(ext?.textContent).toContain('(-1.00%)');
   });
 
+  it('labels the change cell as extended-hours when an ext line is showing', () => {
+    render(<Header inputs={{ marketStatus: closedStatus, snapshot: postSnap, realTimePrice: quoteRow }} />);
+    expect(screen.getByText('Change % incl. ext')).toBeInTheDocument();
+  });
+
+  it('keeps the plain change label with no ext line', () => {
+    render(<Header inputs={{ snapshot: snap('fmp') }} />);
+    expect(screen.getByText('Change %')).toBeInTheDocument();
+  });
+
   it('the big close is refresh-stable: a quote-row price never replaces it', () => {
     // The row's own price field (96.5, a different tape moment) must not leak
     // into the big number — that mix was the refresh nondeterminism.
@@ -215,6 +225,31 @@ describe('StockHeader market status badge', () => {
       <Header inputs={{ wsStatus: 'connected', wsHasData: true, marketPhase: 'closed' }} wsDataLevel="second" />,
     );
     expect(screen.getByText('Live')).toBeInTheDocument();
+  });
+});
+
+describe('StockHeader volume cell', () => {
+  const cellValue = (label: string) =>
+    screen.getAllByText(label).map((el) => el.nextElementSibling?.textContent);
+
+  it('labels the session volume as Volume', () => {
+    render(
+      <Header inputs={{ stockInfo: { Symbol: 'AMD', Name: 'AMD', Volume: 1_200_000 } as never, quoteData: { avgVolume: 2_500_000 } }} />,
+    );
+    expect(cellValue('Volume')).toEqual(['1.20M']);
+    expect(cellValue('Avg Vol (3M)')).toEqual(['2.50M']);
+  });
+
+  it('says it is the 3-month average when that is what it falls back to', () => {
+    render(<Header inputs={{ quoteData: { avgVolume: 2_500_000 } }} />);
+    expect(screen.queryByText('Volume')).not.toBeInTheDocument();
+    expect(cellValue('Avg Vol (3M)')).toEqual(['2.50M', '2.50M']);
+  });
+
+  it('colours Change % by the percent it prints, even with no absolute change', () => {
+    render(<Header inputs={{ realTimePrice: { price: 118, change: null, changePercent: -1.5 } as never }} />);
+    const value = screen.getByText('-1.50%');
+    expect(value.className).toContain('negative');
   });
 });
 

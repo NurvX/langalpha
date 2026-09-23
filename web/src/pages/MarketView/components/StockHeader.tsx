@@ -50,11 +50,13 @@ function getVenueStatusLabel(sym: string | null | undefined, status: string): st
 const StockHeader = ({ symbol, quote: q, chartMeta: _chartMeta, onToggleOverview, onOpenWatchlist, wsStatus, wsHasData = false, wsDataLevel = null, ginlixDataEnabled: _ginlixDataEnabled = true, onSwitchSymbol, headerActions }: StockHeaderProps) => {
   const { t } = useTranslation();
   const {
-    headline, status, tickAt, changePercent, tone,
+    headline, status, tickAt, changePercent,
     previousClose, open, high, low, fiftyTwoWeekHigh, fiftyTwoWeekLow, averageVolume, volume,
     displayName, displayExchange, dataSourceLabel, ext,
   } = q;
   const hasDayRange = high != null && low != null;
+  // A row without a session volume shows the 3-month average, said so.
+  const volumeIsAverage = volume == null && averageVolume != null;
   const shownVolume = volume ?? averageVolume;
 
   const isMobile = useIsMobile();
@@ -191,7 +193,7 @@ const StockHeader = ({ symbol, quote: q, chartMeta: _chartMeta, onToggleOverview
             </span>
           </div>
           <div className="metric-item">
-            <span className="metric-label">Volume</span>
+            <span className="metric-label">{volumeIsAverage ? 'Avg Vol (3M)' : 'Volume'}</span>
             <span className="metric-value">
               {shownVolume != null ? compactNumberFixed2(shownVolume) : DASH}
             </span>
@@ -203,8 +205,8 @@ const StockHeader = ({ symbol, quote: q, chartMeta: _chartMeta, onToggleOverview
             </span>
           </div>
           <div className="metric-item">
-            <span className="metric-label">Change %</span>
-            <span className={`metric-value ${tone === 'negative' ? 'negative' : 'positive'}`}>
+            <span className="metric-label">{ext ? 'Change % incl. ext' : 'Change %'}</span>
+            <span className={`metric-value ${(changePercent ?? 0) < 0 ? 'negative' : 'positive'}`}>
               {changePercent != null ? `${signedFixed2(changePercent)}%` : DASH}
             </span>
           </div>
