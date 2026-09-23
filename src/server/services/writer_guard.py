@@ -15,6 +15,7 @@ global pooled saver, lifecycle SQL on the app pool, single worker only.
 """
 
 import asyncio
+import contextvars
 import contextlib
 import logging
 from typing import Any, Callable, Optional
@@ -352,8 +353,13 @@ class WriterGuard:
                         exc_info=True,
                     )
             raise
+        # Fresh contexts for both guard tasks: the guard and its tasks form a
+        # reference cycle that outlives the turn until a full collection, and
+        # a copied context would pin the turn's request-scoped state with it.
         guard._monitor_task = asyncio.create_task(
-            guard._monitor(), name=f"writer-guard-monitor-{run_id[:8]}"
+            guard._monitor(),
+            name=f"writer-guard-monitor-{run_id[:8]}",
+            context=contextvars.Context(),
         )
         logger.info(
             f"[WriterGuard] fenced run={run_id} thread={thread_id} "
@@ -642,7 +648,9 @@ class WriterGuard:
             if discard:
                 self._discard = True
             self._release_task = asyncio.create_task(
-                self._do_release(), name=f"writer-guard-release-{self.run_id[:8]}"
+                self._do_release(),
+                name=f"writer-guard-release-{self.run_id[:8]}",
+                context=contextvars.Context(),
             )
         elif discard and not self._discard:
             logger.warning(

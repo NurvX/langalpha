@@ -49,7 +49,6 @@ from src.server.utils.multimodal_context import (
     build_attachment_metadata,
     parse_multimodal_contexts,
 )
-from src.utils.tracking import ExecutionTracker
 from ptc_agent.agent.flash import build_flash_graph
 from ptc_agent.agent.graph import fetch_user_data_counts, get_user_profile_for_prompt
 from ptc_agent.agent.middleware.credit_gate import run_with_credit_gate
@@ -138,7 +137,6 @@ async def astream_flash_workflow(
     workspace_id = None
     timezone_str = None
 
-    ExecutionTracker.start_tracking()
     logger.info(f"[FLASH_CHAT] Starting flash workflow: thread_id={thread_id}")
 
     # Owns the burst lease, admission lock, and open START row until the
@@ -653,4 +651,3 @@ async def astream_flash_workflow(
         # Backstop for any error path that bypassed the normal release
         # (e.g., exception before start_run); idempotent on the scope.
         scope.release_admission()
-        ExecutionTracker.stop_tracking()

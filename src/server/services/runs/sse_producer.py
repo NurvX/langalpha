@@ -25,7 +25,6 @@ from src.server.utils.content_normalizer import (
 from src.server.utils.pg_sanitize import finite_json_dumps
 from src.server.utils.text_phase import TextPhaseTracker
 from src.llms.content_utils import extract_reasoning_summary_index
-from src.utils.tracking import ExecutionTracker
 from src.config import settings as app_settings
 from src.config.settings import (
     get_workflow_timeout,
@@ -557,7 +556,7 @@ class RunSSEProducer:
         timeout_warning_sent = False
         timeout_warning_threshold = 0.9  # Send warning at 90% of timeout
 
-        # Set tool tracking ContextVar (like ExecutionTracker pattern)
+        # Set tool tracking ContextVar
         # This must be done BEFORE graph.astream() so nodes inherit the ContextVar
         if self.tool_tracker:
             from src.tools.decorators import _tool_usage_context
@@ -907,8 +906,7 @@ class RunSSEProducer:
                     continue
 
                 # Task content (text/reasoning/tool frames) is owned by the
-                # per-task channel; it also stays out of the main turn's
-                # ExecutionTracker — task messages live in the task's own
+                # per-task channel; task messages live in the task's own
                 # checkpoint namespace, not the turn transcript.
                 if task_lane:
                     continue
@@ -947,15 +945,6 @@ class RunSSEProducer:
                         logger.debug(
                             f"[RAW_REASONING] agent={agent_name} reasoning_content={reasoning_raw}"
                         )
-
-                # Track message for persistence (if tracking is active)
-                # Only track complete messages (AIMessage, ToolMessage), not chunks.
-                # Compaction chunks are internal — don't persist them as turns.
-                if isinstance(message_chunk, (AIMessage, ToolMessage)) and not is_compaction_chunk:
-                    ExecutionTracker.update_context(
-                        agent_name=agent_name,
-                        messages=message_chunk
-                    )
 
                 # Process the message chunk
                 async for event in self._process_message_chunk(

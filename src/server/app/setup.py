@@ -16,6 +16,7 @@ This module contains:
 # async code runs to avoid "ProactorEventLoop" errors when opening connection pools.
 import sys
 import asyncio
+import gc
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -627,6 +628,18 @@ async def lifespan(app: FastAPI):
         await verify_credit_gate_wiring()
     except Exception as e:
         logger.warning(f"Credit gate wiring check failed: {e}")
+
+    from src.server.auth.jwt_bearer import warm_jwks
+
+    await warm_jwks()
+
+    # Startup leaves ~700k import-time objects (pydantic schemas, routes,
+    # module state) that never die, and every full collection re-walks them
+    # while the loop is frozen. Freezing moves them out of the collector for
+    # good; the collect first keeps startup garbage from being frozen with them.
+    gc.collect()
+    gc.freeze()
+    logger.info(f"Froze {gc.get_freeze_count()} startup objects out of the GC")
 
     yield  # Server is running
 
