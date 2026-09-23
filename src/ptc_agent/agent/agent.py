@@ -606,8 +606,8 @@ class PTCAgent:
 
         # --- Build final middleware stacks ---
         compaction_config = self.config.compaction.model_dump()
-        if self.config.llm and self.config.llm.compaction:
-            compaction_config["llm"] = self.config.llm.compaction
+        if self.config.llm and self.config.llm.compaction_name:
+            compaction_config["llm"] = self.config.llm.compaction_name
         client = resolve_compaction_client(self.config)
         if client is not None:
             compaction_config["_llm_client"] = client

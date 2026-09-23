@@ -367,16 +367,18 @@ def init_tracking(thread_id: str) -> tuple[TokenTrackingManager, ToolUsageTracke
 
 
 def apply_fetch_override(config) -> None:
-    """Propagate fetch model / client overrides from *config* into context vars."""
-    # The client override applies whenever a fetch-role client was resolved
-    # (including the "blank fetch inherits flash" case in role_registry) —
-    # it must not be gated on config.llm.fetch being explicitly set, or an
-    # OAuth/BYOK client never reaches web_fetch's LLM extraction.
+    """Propagate fetch model / client overrides from *config* into context vars.
+
+    A blank fetch means the turn's flash model, the same default ``role_registry``
+    resolves a client for. Without the name override, web_fetch would fall back
+    to re-reading agent_config.yaml and miss the user's own flash choice.
+    """
     fetch_client = config.subsidiary_llm_clients.get("fetch")
     if fetch_client:
         fetch_llm_client_override.set(fetch_client)
-    if config.llm and config.llm.fetch:
-        fetch_model_override.set(config.llm.fetch)
+    fetch_model = config.llm and config.llm.fetch_name
+    if fetch_model:
+        fetch_model_override.set(fetch_model)
 
 
 class PriorThread(NamedTuple):
