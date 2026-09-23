@@ -54,7 +54,6 @@ from src.server.utils.multimodal_context import (
     build_attachment_metadata,
     parse_multimodal_contexts,
 )
-from src.utils.tracking import ExecutionTracker
 
 from ptc_agent.agent.graph import build_ptc_graph_with_session
 from ptc_agent.agent.middleware.credit_gate import run_with_credit_gate
@@ -190,8 +189,6 @@ async def astream_ptc_workflow(
         now = time.time()
         _phase_times[name] = (now - _phase_t0) * 1000  # ms
         _phase_t0 = now
-
-    ExecutionTracker.start_tracking()
 
     # Owns the burst lease, admission lock, and open START row until the
     # executor's done-callback is armed (transfer_to_executor below).
@@ -1015,5 +1012,3 @@ async def astream_ptc_workflow(
         # Backstop for any error path that bypassed the normal release
         # (e.g., exception before start_run); idempotent on the scope.
         scope.release_admission()
-        # Always stop execution tracking to prevent memory leaks and context pollution
-        ExecutionTracker.stop_tracking()

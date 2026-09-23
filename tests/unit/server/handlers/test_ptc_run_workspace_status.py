@@ -137,7 +137,6 @@ async def _run_to_sentinel(request, workspace_manager):
         patch(f"{PTC}._fire_and_forget"),
         patch(f"{PTC}.update_workspace_activity"),
         patch(f"{PTC}.BackgroundRegistryStore") as mock_reg_store_cls,
-        patch(f"{PTC}.ExecutionTracker"),
     ):
         mock_setup.agent_config = MagicMock()
         mock_wm_cls.get_instance.return_value = workspace_manager

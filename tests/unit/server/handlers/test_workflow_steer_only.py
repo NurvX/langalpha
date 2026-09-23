@@ -82,7 +82,6 @@ async def test_ptc_foreground_forwards_steer_only_and_can_steer():
 
     with (
         patch(f"{PTC}.setup") as mock_setup,
-        patch(f"{PTC}.ExecutionTracker"),
         patch(f"{PTC}.LocalRunExecutor") as mock_btm_cls,
         patch(f"{PTC}.WorkspaceManager") as mock_wm_cls,
         patch(RELEASE, new_callable=AsyncMock),
@@ -119,7 +118,6 @@ async def test_flash_foreground_forwards_steer_only_and_can_steer():
 
     with (
         patch(f"{FLASH}.setup") as mock_setup,
-        patch(f"{FLASH}.ExecutionTracker"),
         patch(f"{FLASH}.LocalRunExecutor") as mock_btm_cls,
         patch(RELEASE, new_callable=AsyncMock),
         patch(
@@ -161,7 +159,6 @@ async def test_ptc_dispatched_forwards_can_steer_false():
 
     with (
         patch(f"{PTC}.setup") as mock_setup,
-        patch(f"{PTC}.ExecutionTracker"),
         patch(f"{PTC}.LocalRunExecutor") as mock_btm_cls,
         patch(f"{PTC}.WorkspaceManager") as mock_wm_cls,
         patch(RELEASE, new_callable=AsyncMock),
@@ -199,7 +196,6 @@ async def test_flash_dispatched_forwards_can_steer_false():
 
     with (
         patch(f"{FLASH}.setup") as mock_setup,
-        patch(f"{FLASH}.ExecutionTracker"),
         patch(f"{FLASH}.LocalRunExecutor") as mock_btm_cls,
         patch(RELEASE, new_callable=AsyncMock),
         patch(
