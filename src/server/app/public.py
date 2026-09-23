@@ -213,6 +213,17 @@ def _strip_call_args(
     return data
 
 
+def _without_workspace_ids(value: Any) -> Any:
+    """A copy of ``value`` with every ``workspace_id`` key removed, at any depth."""
+    if isinstance(value, dict):
+        return {
+            k: _without_workspace_ids(v) for k, v in value.items() if k != "workspace_id"
+        }
+    if isinstance(value, list):
+        return [_without_workspace_ids(v) for v in value]
+    return value
+
+
 def _strip_private_artifact(data: dict[str, Any]) -> dict[str, Any]:
     """Drop the owner-only keys from a tool artifact, in place on the copy."""
     artifact = data.get("artifact")
@@ -315,11 +326,15 @@ async def replay_shared_thread(share_token: str):
             # Build user_message payload, less the keys a viewer must not read
             metadata = q.get("metadata") or {}
             if isinstance(metadata, dict):
-                metadata = {
-                    k: v
-                    for k, v in metadata.items()
-                    if k not in _PRIVATE_QUERY_METADATA_KEYS
-                }
+                # Attached context is client-shaped, so a workspace id can sit
+                # at any depth in it.
+                metadata = _without_workspace_ids(
+                    {
+                        k: v
+                        for k, v in metadata.items()
+                        if k not in _PRIVATE_QUERY_METADATA_KEYS
+                    }
+                )
 
             payload = {
                 "thread_id": thread_id,
@@ -369,12 +384,11 @@ async def replay_shared_thread(share_token: str):
                 seq += 1
                 # Shallow-copy so we never mutate the stored/cached event dict.
                 replay_data = dict(data)
-                # workspace_id is the bearer credential for GET /api/v1/wsfiles/
-                # {workspace_id}/{path}; stored workspace_status events carry it
-                # (see handlers/chat/ptc_run.py). Leaking it to a public,
-                # unauthenticated viewer would grant access to ALL workspace
-                # files, so strip it (plus the server-internal sandbox_state).
-                replay_data.pop("workspace_id", None)
+                # The owner's workspace_id never reaches a public viewer. Stored
+                # workspace_status events carry it at the top level and tool
+                # artifacts (chart annotations) nest it, so it goes at every
+                # depth. sandbox_state is server-side runtime state.
+                replay_data = _without_workspace_ids(replay_data)
                 replay_data.pop("sandbox_state", None)
                 replay_data = _strip_private_artifact(replay_data)
                 if event_type == "tool_calls":
