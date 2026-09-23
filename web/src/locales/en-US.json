@@ -1316,7 +1316,8 @@
     "permissions": "Permissions",
     "allowFileBrowsing": "Allow file browsing",
     "allowFileDownload": "Allow file download",
-    "anyoneWithLink": "Anyone with this link can view the conversation."
+    "anyoneWithLink": "Anyone with this link can view the conversation.",
+    "signInForChart": "Sign in to open the live chart."
   },
   "chat": {
     "backToWorkflow": "Back to workflow",
@@ -1685,10 +1686,13 @@
     },
     "chartAnnotationCard": {
       "openAnnotatedChart": "Open annotated chart",
+      "openChart": "Open chart",
       "loadingChart": "Loading chart…",
       "previewUnavailable": "Preview unavailable",
       "cardAria_one": "{{symbol}} {{timeframe}}, {{count}} annotation. Open annotated chart.",
       "cardAria_other": "{{symbol}} {{timeframe}}, {{count}} annotations. Open annotated chart.",
+      "cardAriaPricesOnly_one": "{{symbol}} {{timeframe}}, {{count}} annotation. Open chart.",
+      "cardAriaPricesOnly_other": "{{symbol}} {{timeframe}}, {{count}} annotations. Open chart.",
       "chipJumpTitle": "Switch the chart to {{symbol}} · {{timeframe}} to show these annotations",
       "chipShowTitle": "Show these annotations on the chart",
       "chipShownTitle": "Shown on the chart",
@@ -2256,6 +2260,7 @@
     "planDetails": "Plan Details",
     "noPlanDescription": "No plan description.",
     "toolCallGone": "This tool call is no longer in the chat. Close the tab, or open the call again from the conversation.",
+    "toolCallGoneDialog": "This tool call is no longer in the chat. Open the call again from the conversation.",
     "subagentTask": "Subagent Task",
     "instructions": "Instructions",
     "goToSubagentTab": "Go to subagent tab",

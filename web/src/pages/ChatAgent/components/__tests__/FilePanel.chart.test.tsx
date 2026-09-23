@@ -65,6 +65,21 @@ beforeEach(() => {
 });
 
 describe('FilePanel chart tabs', () => {
+  it('tells its host what kind of tab is in front, from the first paint to the last', async () => {
+    // The host sizes the panel, and a chart has a floor the other kinds do
+    // not, so it hears every change and a null once the panel is gone.
+    const onActiveTabKindChange = vi.fn();
+    const { rerender, unmount } = renderWithProviders(panel({ onActiveTabKindChange }));
+    expect(onActiveTabKindChange).toHaveBeenLastCalledWith('empty');
+
+    rerender(panel({ onActiveTabKindChange, target: GOOGL }));
+    await screen.findByTestId('chart-surface');
+    expect(onActiveTabKindChange).toHaveBeenLastCalledWith('chart');
+
+    unmount();
+    expect(onActiveTabKindChange).toHaveBeenLastCalledWith(null);
+  });
+
   it('opens a chart target as a tab and mounts the chart on it', async () => {
     renderWithProviders(panel({ target: GOOGL }));
 

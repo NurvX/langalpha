@@ -9,18 +9,18 @@ import { useStableHandler } from '@/hooks/useStableHandler';
 import { isValidUuid } from '../../utils/uuid';
 import { clampPanelWidth as clampPanelWidthUtil } from '@/lib/panelUtils';
 import { buildMarketViewUrl } from '@/pages/MarketView/utils/marketRoute';
+import { CHART_SURFACE_MIN_WIDTH } from '@/pages/MarketView/components/chartSurfaceLayout';
+import type { FileTab } from '../filePanel/useFileTabs';
 import { isOneShotKind, stampTarget, type ChartTabSpec, type PanelTarget, type PlanTabSpec, type UnsequencedTarget } from '../filePanel/types';
 import type { OpenFileHandler } from '../../utils/fileLocation';
 import type { PreviewData } from '../../hooks/utils/types';
 import type { ProvenanceRecord } from '@/types/chat';
 import type { PlanData } from './types';
 import { NO_TRANSCRIPTS, useToolCallLookup } from './toolCallLookup';
-import { PLAN_TAB_WIDTH, detailPanelWidth } from '../filePanel/detailWidth';
+import { DEFAULT_PANEL_WIDTH, PLAN_TAB_WIDTH, detailPanelWidth } from '../filePanel/detailWidth';
 
 // A running app or a live chart opens wide, so its toolbar has room.
 const PREVIEW_MAX_RATIO = 0.92;
-/** What the file panel opens at before a drag has said otherwise. */
-const DEFAULT_PANEL_WIDTH = 850;
 
 /** Right-panel controller (carved out of ChatView, 5.9c): panel type/width,
  * target routing, tool-call/plan detail, multi-port preview resolution,
@@ -33,6 +33,8 @@ export function useRightPanel({
   isActive,
   containerRef,
   setFilePanelWorkspaceId,
+  filePanelWorkspaceId = null,
+  isFlashMode = false,
   messages,
   subagentTranscripts = NO_TRANSCRIPTS,
   watching = false,
@@ -45,6 +47,9 @@ export function useRightPanel({
   isActive: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
   setFilePanelWorkspaceId: Dispatch<SetStateAction<string | null>>;
+  /** The cross-workspace override; only Flash's panel shows it. */
+  filePanelWorkspaceId?: string | null;
+  isFlashMode?: boolean;
   messages: unknown[];
   /** Each subagent's own messages, so a tool row clicked in its transcript resolves too. */
   subagentTranscripts?: readonly (readonly unknown[])[];
@@ -106,6 +111,14 @@ export function useRightPanel({
     [t],
   );
   const [rightPanelWidth, setRightPanelWidth] = useState(750);
+  // What the file panel has in front, reported by the panel as it changes. A
+  // chart is the one tab with a width of its own: below the surface's floor
+  // its toolbar collides, so while a chart is in front the divider stops
+  // there and the panel grows to it on the way in. The container's own cap
+  // still wins on a screen too narrow for both.
+  const [activeTabKind, setActiveTabKind] = useState<FileTab['kind'] | null>(null);
+  const handleActiveTabKindChange = useCallback((kind: FileTab['kind'] | null) => setActiveTabKind(kind), []);
+  const panelMinWidth = activeTabKind === 'chart' ? CHART_SURFACE_MIN_WIDTH : 0;
   // Mobile-sheet-only preview state. On desktop a running app is a tab in the
   // file panel, which mints and refreshes its own URL; the bottom sheet has no
   // tab strip, shows one app at a time, and keeps this Map keyed by port in a
@@ -166,6 +179,18 @@ export function useRightPanel({
     setRightPanelWidth((prev) => clampPanelWidthUtil(open ? Math.max(prev, desired) : desired, containerW, ratio));
   }, [containerRef]);
 
+  // A chart coming to the front, by landing, by a click on its tab or by a
+  // strip restored with it in front, widens the panel to its floor and no
+  // further. Mobile shows the panel full width and has no divider.
+  // The cap rises with it, as a chart landing raises it, so the floor holds
+  // however the chart came to the front.
+  useEffect(() => {
+    if (isMobile || !panelMinWidth) return;
+    panelMaxRatioRef.current = Math.max(panelMaxRatioRef.current ?? 0, PREVIEW_MAX_RATIO);
+    const containerW = containerRef.current?.offsetWidth || window.innerWidth;
+    setRightPanelWidth((prev) => clampPanelWidthUtil(Math.max(prev, panelMinWidth), containerW, panelMaxRatioRef.current));
+  }, [isMobile, panelMinWidth, containerRef]);
+
   // Handle drag panel width: direct DOM manipulation for smooth, jank-free resize.
   // React state is only updated once on mouseup; during drag we bypass React/Framer.
   const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
@@ -176,6 +201,7 @@ export function useRightPanel({
     const startWidth = rightPanelWidth;
     const containerW = containerRef.current?.offsetWidth || window.innerWidth;
     const maxRatio = panelMaxRatioRef.current;
+    const minWidth = panelMinWidth;
 
     // Immediately disable pointer events on iframes to prevent them from
     // capturing mouse events during resize (can't wait for React re-render).
@@ -190,7 +216,8 @@ export function useRightPanel({
     const onMouseMove = (moveEvent: MouseEvent) => {
       if (!isDraggingRef.current) return;
       const delta = startX - moveEvent.clientX;
-      currentWidth = clampPanelWidthUtil(startWidth + delta, containerW, maxRatio);
+      // The floor goes in before the clamp so the container's cap still wins.
+      currentWidth = clampPanelWidthUtil(Math.max(startWidth + delta, minWidth), containerW, maxRatio);
       if (wrapperEl) wrapperEl.style.width = `${currentWidth}px`;
       if (innerEl) innerEl.style.width = `${currentWidth}px`;
     };
@@ -220,7 +247,7 @@ export function useRightPanel({
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
     dragCleanupRef.current = teardown;
-  }, [rightPanelWidth, containerRef]);
+  }, [rightPanelWidth, containerRef, panelMinWidth]);
 
   // Push a sentinel history entry when a panel opens so that the browser back
   // gesture closes the panel instead of navigating away from ChatView.
@@ -332,13 +359,20 @@ export function useRightPanel({
     } else {
       target = { kind: 'file', path: r.targetFile, location: location ?? null, pin: !!opts?.pin };
     }
+    // Another workspace's strip replaces this one's, drafts included. Only a
+    // change in the workspace the panel shows does that; clearing an unset
+    // override, or PTC's panel, which never shows it, keeps the strip.
+    const shown = (override: string | null) => (isFlashMode && override) || workspaceId;
+    const nextOverride = r.clearWorkspaceId ? null : (r.setWorkspaceId ?? filePanelWorkspaceId);
+    const switching = shown(nextOverride) !== shown(filePanelWorkspaceId);
+    if (switching && !confirmLeaveFiles()) return;
     if (r.clearWorkspaceId) {
       setFilePanelWorkspaceId(null);
     } else if (r.setWorkspaceId) {
       setFilePanelWorkspaceId(r.setWorkspaceId);
     }
     landInFilePanel(target);
-  }, [landInFilePanel, setFilePanelWorkspaceId, workspaceDirName]);
+  }, [landInFilePanel, setFilePanelWorkspaceId, workspaceDirName, confirmLeaveFiles, isFlashMode, workspaceId, filePanelWorkspaceId]);
 
   // A turn's sources open as a tab of the file view, one per turn; the tab
   // reads its live records through `getSourcesRecords`.
@@ -525,7 +559,10 @@ export function useRightPanel({
    * the files about the same company, sized like a preview so the toolbar has
    * room. Mobile has no tab strip and goes to the MarketView page itself.
    */
-  const handleOpenChart = useCallback((spec: ChartTabSpec) => {
+  const handleOpenChart = useCallback((ask: ChartTabSpec) => {
+    // The workspace comes off an agent artifact; one that is not an id would
+    // stick to the tab and be asked for on every open, so the panel's is used.
+    const spec = ask.workspaceId && !isValidUuid(ask.workspaceId) ? { ...ask, workspaceId: undefined } : ask;
     if (isMobile) {
       handleOpenInMarketView(spec);
       return;
@@ -659,6 +696,7 @@ export function useRightPanel({
   }, [rightPanelType, applyPanelWidth, pushPanelHistory, popPanelHistory, confirmLeaveFiles]);
 
   return {
+    activeTabKind,
     panelTarget,
     handleTargetHandled,
     handleTargetMemoryHandled,
@@ -682,6 +720,7 @@ export function useRightPanel({
     handleRefreshPreview,
     handleToggleFilePanel,
     handleFilesDirtyChange,
+    handleActiveTabKindChange,
     confirmLeaveFiles,
     handleOpenPreview,
     handleOpenChart,

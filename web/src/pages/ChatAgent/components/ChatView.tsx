@@ -909,6 +909,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     handleRefreshPreview,
     handleToggleFilePanel,
     handleFilesDirtyChange,
+    handleActiveTabKindChange,
+    activeTabKind,
     confirmLeaveFiles,
     handleOpenPreview,
     handleOpenChart,
@@ -928,6 +930,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     isActive,
     containerRef,
     setFilePanelWorkspaceId,
+    filePanelWorkspaceId,
+    isFlashMode,
     messages,
     subagentTranscripts,
     watching: showWatchChip,
@@ -1875,7 +1879,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
             initial={{ x: '100%' }}
             animate={{ x: 0 }}
             transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-            drag="x"
+            // A chart pans with the same rightward swipe, so a chart tab closes by its button.
+            drag={activeTabKind === 'chart' ? false : 'x'}
             dragConstraints={{ left: 0, right: 0 }}
             dragElastic={{ left: 0, right: 0.5 }}
             onDragEnd={(_: unknown, info: PanInfo) => {
@@ -1897,6 +1902,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                   isActive={isActive}
                   onClose={() => { setRightPanelType(null); popPanelHistory(); }}
                   onDirtyChange={handleFilesDirtyChange}
+                  onActiveTabKindChange={handleActiveTabKindChange}
                   target={panelTarget}
                   onTargetHandled={handleTargetHandled}
                   onTargetMemoryHandled={handleTargetMemoryHandled}
@@ -1963,6 +1969,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       isActive={isActive}
                       onClose={() => { setRightPanelType(null); popPanelHistory(); }}
                       onDirtyChange={handleFilesDirtyChange}
+                      onActiveTabKindChange={handleActiveTabKindChange}
                       target={panelTarget}
                       onTargetHandled={handleTargetHandled}
                       onTargetMemoryHandled={handleTargetMemoryHandled}

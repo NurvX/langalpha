@@ -48,11 +48,12 @@ function renderCard(
   artifact: Record<string, unknown>,
   surface: Partial<ChartSurface> = {},
   onOpenChart?: (spec: { symbol: string; timeframe?: string }) => void,
+  workspaceId: string | null = 'ws-ctx',
 ) {
   const value: ChartSurface = { chartPresent: false, ...surface };
   return render(
     <MemoryRouter initialEntries={['/chat/t/thread-123']}>
-      <WorkspaceProvider workspaceId="ws-ctx" downloadFile={null}>
+      <WorkspaceProvider workspaceId={workspaceId} downloadFile={null}>
         <ChartSurfaceContext.Provider value={value}>
           <MessageActionsProvider actions={onOpenChart ? { onOpenChart } : {}}>
             <Routes>
@@ -116,6 +117,20 @@ describe('InlineChartAnnotationCard', () => {
     expect(card).toHaveAttribute('tabindex', '0');
 
     fireEvent.keyDown(card, { key });
+    expect(onOpenChart).toHaveBeenCalledWith({ symbol: 'NVDA', timeframe: '1day', workspaceId: 'ws-art' });
+  });
+
+  // A share mounts the transcript with no workspace, and the chart it opens
+  // carries no drawing, so the card offers the chart and promises no more.
+  it('offers a plain chart, not an annotated one, on a share', () => {
+    const onOpenChart = vi.fn();
+    renderCard(ARTIFACT, {}, onOpenChart, null);
+
+    expect(screen.getByText('Open chart')).toBeInTheDocument();
+    expect(screen.queryByText('Open annotated chart')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'NVDA 1day, 2 annotations. Open chart.' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button'));
     expect(onOpenChart).toHaveBeenCalledWith({ symbol: 'NVDA', timeframe: '1day', workspaceId: 'ws-art' });
   });
 

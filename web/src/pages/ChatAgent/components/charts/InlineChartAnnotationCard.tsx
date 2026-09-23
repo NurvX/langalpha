@@ -6,8 +6,9 @@
  * "spotlight" card — the symbol's real (clean) price chart; ticker, latest
  * price, window change and an annotation legend float over soft scrims, all
  * from the same bars (annotations are listed, not drawn). A click opens the
- * symbol's chart tab in the workspace panel, where the drawing is live; a
- * mount with no panel goes to the MarketView page instead.
+ * symbol's chart tab in the host's panel: the workspace panel, where the
+ * drawing is live, or a share's, which shows the prices alone. A mount with
+ * no panel goes to the MarketView page instead.
  *
  * Inside the MarketView desktop panel the real chart already shows the drawing
  * live, so the card collapses to a one-line confirmation chip (see
@@ -91,6 +92,10 @@ export function InlineChartAnnotationCard({
   );
   const workspaceId = (artifact?.workspace_id as string | undefined) || ctxWorkspaceId || undefined;
   const threadId = params.threadId as string | undefined;
+  // A transcript mounted with no workspace is a share: the owner's hosts always
+  // name one. The drawing lives in a workspace's store, so a chart opened from
+  // here carries none, and the card must not promise it.
+  const pricesOnly = ctxWorkspaceId === null;
 
   // Whether this instance is currently cleared from the chart (MarketView only).
   const displayCleared = useDisplayCleared(workspaceId, symbol, timeframe);
@@ -125,10 +130,9 @@ export function InlineChartAnnotationCard({
   }, [symbol, timeframe, workspaceId, threadId, location, navigate]);
 
   // The chart tab beside the chat is where the drawing is live, so the card
-  // goes straight there. A mount without a panel to land in (a shared
-  // thread, say) still has the MarketView page.
-  // Either way the card asks for the drawing, so one the user cleared from
-  // that chart comes back, as the MarketView chip does it.
+  // goes straight there. A mount without a panel to land in still has the
+  // MarketView page. Either way the card asks for the drawing, so one the user
+  // cleared from that chart comes back, as the MarketView chip does it.
   const handleOpen = useCallback(() => {
     if (!symbol) return;
     if (workspaceId) chartAnnotationStore.restoreDisplay(workspaceId, makeChartId(symbol, timeframe));
@@ -244,7 +248,10 @@ export function InlineChartAnnotationCard({
     <div
       role="button"
       tabIndex={0}
-      aria-label={t('chat.chartAnnotationCard.cardAria', { symbol, timeframe, count })}
+      aria-label={t(
+        pricesOnly ? 'chat.chartAnnotationCard.cardAriaPricesOnly' : 'chat.chartAnnotationCard.cardAria',
+        { symbol, timeframe, count },
+      )}
       onClick={handleOpen}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -476,7 +483,8 @@ export function InlineChartAnnotationCard({
           </div>
         )}
 
-        {/* Bottom-right — CTA (glass → accent whenever the card is raised). */}
+        {/* Bottom-right — CTA (glass → accent whenever the card is raised).
+            The accent fill is the sanctioned exception recorded in DESIGN.md. */}
         <span
           style={{
             position: 'absolute',
@@ -492,11 +500,11 @@ export function InlineChartAnnotationCard({
             backdropFilter: 'blur(8px)',
             background: raised ? ACCENT : GLASS_BG,
             border: `1px solid ${raised ? 'transparent' : GLASS_BORDER}`,
-            color: raised ? '#fff' : 'var(--color-text-primary)',
+            color: raised ? 'var(--color-text-on-accent)' : 'var(--color-text-primary)',
             transition: 'background 0.16s, color 0.16s, border-color 0.16s',
           }}
         >
-          {t('chat.chartAnnotationCard.openAnnotatedChart')}
+          {t(pricesOnly ? 'chat.chartAnnotationCard.openChart' : 'chat.chartAnnotationCard.openAnnotatedChart')}
           <ArrowRight
             size={14}
             style={{ transform: raised ? 'translateX(3px)' : 'none', transition: 'transform 0.16s' }}

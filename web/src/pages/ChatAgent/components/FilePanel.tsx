@@ -35,7 +35,7 @@ import { useFileSelection } from './filePanel/useFileSelection';
 import { useFileBackup } from './filePanel/useFileBackup';
 import { useFileFocus } from './filePanel/useFileFocus';
 import { FocusChip } from './filePanel/FocusChip';
-import { useFileTabs, isListingTab, lastChartSymbol } from './filePanel/useFileTabs';
+import { useFileTabs, isListingTab, lastChartSymbol, type FileTab } from './filePanel/useFileTabs';
 import { useTreeFilter } from './filePanel/useTreeFilter';
 import { useTreeInteraction } from './filePanel/useTreeInteraction';
 import { useFileRefOpen } from './filePanel/useFileRefOpen';
@@ -118,6 +118,10 @@ interface FilePanelProps {
   /** Whether any open tab holds an unsaved edit. Whoever can unmount the
    *  panel reads this to ask before doing so. */
   onDirtyChange?: ((dirty: boolean) => void) | null;
+  /** What kind of tab is in front, as it changes; null once the panel is gone.
+   *  The host that sizes the panel reads this, since a chart has a floor of
+   *  its own. */
+  onActiveTabKindChange?: ((kind: FileTab['kind'] | null) => void) | null;
   /** Copy a shareable link to an HTML report (authenticated app only). */
   onCopyShareLink?: ((filePath: string) => void) | null;
 }
@@ -153,6 +157,7 @@ function FilePanel({
   showSystemFiles = false,
   onToggleSystemFiles = null,
   onDirtyChange = null,
+  onActiveTabKindChange = null,
   onCopyShareLink = null,
 }: FilePanelProps): React.ReactElement {
   const { t } = useTranslation();
@@ -260,6 +265,11 @@ function FilePanel({
   const reportDirty = useStableHandler((dirty: boolean) => onDirtyChange?.(dirty));
   useEffect(() => { reportDirty(edit.hasAnyUnsavedChanges); }, [edit.hasAnyUnsavedChanges, reportDirty]);
   useEffect(() => () => reportDirty(false), [reportDirty]);
+
+  // Reported on mount too, for a strip restored with a chart in front.
+  const reportActiveKind = useStableHandler((kind: FileTab['kind'] | null) => onActiveTabKindChange?.(kind));
+  useEffect(() => { reportActiveKind(activeTab.kind); }, [activeTab.kind, reportActiveKind]);
+  useEffect(() => () => reportActiveKind(null), [reportActiveKind]);
 
   const { selectionTooltip, contentWrapperRef, contextMenu, setContextMenu, handleContentMouseUp, handleEditorTextSelect, handleAddSelectionContext } =
     useSelectionContext({ selectedFile, fileContent, onAddContext });
