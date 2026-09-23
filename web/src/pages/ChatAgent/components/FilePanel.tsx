@@ -56,6 +56,7 @@ import { usePanelTarget } from './filePanel/usePanelTarget';
 import { ActiveTabBody } from './filePanel/ActiveTabBody';
 import { useWatchTab } from './filePanel/useWatchTab';
 import type { MarketWatchState } from '../session/marketWatchEvents';
+import { RouteLeaveGuardContext, type RouteLeaveGuard } from '../contexts/RouteLeaveGuardContext';
 import type { SubagentInfo, ToolCallProcessRecord } from './ToolCallDetailView';
 import { countDedupedSources, type ProvenanceRecord } from '@/types/chat';
 
@@ -454,19 +455,22 @@ function FilePanel({
     onAddContext?.(ctx);
   }, [tabs, activeTab.id, onAddContext]);
 
-  // A route change fires no beforeunload, so the panel's drafts would go with it.
-  const leaveForMarketView = useCallback((spec: ChartTabSpec) => {
+  // Every way out of this mount asks the question closing a dirty tab asks: a
+  // route change fires no beforeunload, so the drafts would go with it. The
+  // same guard is handed down to the tool and plan tabs, whose result views
+  // carry links off the route.
+  const guardLeave = useCallback<RouteLeaveGuard>((go) => {
     if (edit.hasAnyUnsavedChanges && !window.confirm(t('filePanel.discardUnsaved'))) return;
-    onOpenInMarketView?.(spec);
-  }, [edit.hasAnyUnsavedChanges, onOpenInMarketView, t]);
+    go();
+  }, [edit.hasAnyUnsavedChanges, t]);
 
-  // The drafts live in this mount, so closing the panel asks the question
-  // closing a dirty tab asks. Always offered: on mobile the panel covers the
-  // chat, and a close that went away with the draft left no way back.
-  const closePanel = useCallback(() => {
-    if (edit.hasAnyUnsavedChanges && !window.confirm(t('filePanel.discardUnsaved'))) return;
-    onClose();
-  }, [edit.hasAnyUnsavedChanges, onClose, t]);
+  const leaveForMarketView = useCallback((spec: ChartTabSpec) => {
+    guardLeave(() => onOpenInMarketView?.(spec));
+  }, [guardLeave, onOpenInMarketView]);
+
+  // Always offered: on mobile the panel covers the chat, and a close that went
+  // away with the draft left no way back.
+  const closePanel = useCallback(() => { guardLeave(onClose); }, [guardLeave, onClose]);
 
   const closeTab = useCallback((id: string) => {
     if (edit.tabHasUnsavedChanges(id) && !window.confirm(t('filePanel.discardUnsaved'))) return;
@@ -550,8 +554,8 @@ function FilePanel({
     previews.ensure(port);
   }, [previews, tabs, cancelPending]);
 
-  // Only a tab the tree sits beside takes a drop: a preview is a frame and a
-  // chart is a live view, and settings is a form.
+  // Only a tab the tree sits beside takes a drop; every other kind shows
+  // something that is not a folder.
   const canDropHere = !readOnly && listingTab;
 
   const onPageCount = useCallback((path: string, pages: number) => {
@@ -559,6 +563,7 @@ function FilePanel({
   }, []);
 
   return (
+    <RouteLeaveGuardContext.Provider value={guardLeave}>
     <div className="file-panel" ref={panelRef} onKeyDown={tree.onEscape}>
       <TabStrip
         tabs={tabs.tabs}
@@ -821,6 +826,7 @@ function FilePanel({
         />
       )}
     </div>
+    </RouteLeaveGuardContext.Provider>
   );
 }
 

@@ -14,6 +14,7 @@ import { useTheme } from '../../../../contexts/ThemeContext';
 import { createThemeResolver, useThemeTokens } from '@/lib/themeTokens';
 import { useTranslation } from 'react-i18next';
 import { buildMarketViewUrl } from '@/pages/MarketView/utils/marketRoute';
+import { useRouteLeaveGuard } from '../../contexts/RouteLeaveGuardContext';
 
 // ─── Shared Constants ───────────────────────────────────────────────
 
@@ -133,12 +134,13 @@ function OpenInMarketLink({ symbol }: OpenInMarketLinkProps): React.ReactElement
   const { t } = useTranslation();
   const navigate = useNavigate();
   const params = useParams();
+  const guardLeave = useRouteLeaveGuard();
   if (!symbol) return null;
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     // The current chat route lets MarketView offer a "Return to Chat" button
-    navigate(buildMarketViewUrl({ symbol, returnTo: params.threadId ? `/chat/t/${params.threadId}` : null }));
+    guardLeave(() => navigate(buildMarketViewUrl({ symbol, returnTo: params.threadId ? `/chat/t/${params.threadId}` : null })));
   };
 
   return (
