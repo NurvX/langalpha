@@ -13,7 +13,10 @@ Covers:
 """
 
 import asyncio
+import contextvars
+import gc
 import logging
+import weakref
 from contextlib import suppress
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2365,3 +2368,44 @@ class TestReplayOwnershipRecheck:
         assert ok is True
         contents = [e["data"]["content"] for e in out]
         assert contents == ["LEGACY", "OWN"]
+
+
+# ---------------------------------------------------------------------------
+# A finished run must not pin the request's context
+# ---------------------------------------------------------------------------
+
+class _RequestScoped:
+    pass
+
+
+_request_var: "contextvars.ContextVar[_RequestScoped | None]" = contextvars.ContextVar(
+    "test_request_scoped", default=None
+)
+
+
+class TestFinishedRunReleasesContext:
+
+    @pytest.mark.asyncio
+    async def test_finished_run_drops_task_and_its_context(self):
+        """The entry outlives the run by the result TTL; the task (and the
+        request context it copied) must not, or every object that context
+        references stays alive for that long."""
+        btm = _make_btm()
+
+        async def fake_workflow():
+            yield "event-0"
+
+        async def handler() -> LocalRunExecution:
+            _request_var.set(_RequestScoped())
+            return await btm.start_run("thread-ctx", "run-1", fake_workflow())
+
+        with patch.object(btm, "_finalize_run", new_callable=AsyncMock):
+            info = await asyncio.create_task(handler(), context=contextvars.Context())
+            scoped = weakref.ref(info.task.get_context()[_request_var])
+            await asyncio.wait({info.task})
+            await asyncio.sleep(0)
+
+        assert btm.executions[("thread-ctx", "run-1")] is info
+        assert info.task is None
+        gc.collect()
+        assert scoped() is None

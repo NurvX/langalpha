@@ -531,6 +531,9 @@ class LocalRunExecutor:
                     cancel_event=task_info.cancel_event,
                 )
             )
+            task_info.task.add_done_callback(
+                lambda t, info=task_info: self._drop_finished_task(info, t)
+            )
             task_info.started_at = datetime.now()
 
             self.executions[key] = task_info
@@ -928,6 +931,28 @@ class LocalRunExecutor:
         info.metadata.pop("sandbox", None)
         info.metadata.pop("run_handle", None)
         info.metadata.pop("artifact_hook", None)
+
+    @staticmethod
+    def _drop_finished_task(info: LocalRunExecution, task: asyncio.Task) -> None:
+        """Let go of the run's tasks once it finishes.
+
+        A task keeps its copied context alive, and with it every request-scoped
+        object that context references. The entry itself stays for the
+        result TTL, so holding the done task would pin all of that for as long.
+        Every reader already treats a missing task as a finished one.
+        """
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            logger.error(
+                f"[LocalRunExecutor] Run task ({info.thread_id}, {info.run_id}) "
+                f"ended with an unhandled error",
+                exc_info=exc,
+            )
+        if info.task is task:
+            info.task = None
+        # The inner task copied the same context; _release_terminal_refs
+        # only drops it when finalize concludes, so a failed finalize kept it.
+        if info.inner_task is not None and info.inner_task.done():
+            info.inner_task = None
 
     async def _finalize_run(
         self,
