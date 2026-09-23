@@ -42,8 +42,9 @@ class _SigningKeys:
     fetch on expiry froze every stream on the worker for the round trip. Fetches
     run in a thread and concurrent callers share one. A set older than
     ``REFRESH_AFTER`` is refetched before it verifies, so a rotated-out key is
-    dropped as promptly as before; a failed refetch keeps serving the cached set
-    until ``MAX_STALE``, so an outage is not a sign-out. An unknown ``kid`` (key
+    dropped as promptly as before; after a failed refetch the cached set is
+    served while retries run in the background, until ``MAX_STALE``, so an
+    outage is neither a sign-out nor a stall. An unknown ``kid`` (key
     rotation) waits for a refetch, at most one per cooldown on its own clock, so
     forged ``kid``s cannot drive a fetch storm and routine refreshes cannot
     starve a real rotation.
@@ -60,6 +61,7 @@ class _SigningKeys:
         self._fetched_at = 0.0
         self._last_attempt = float("-inf")
         self._last_kid_fetch = float("-inf")
+        self._last_failed = False
         self._inflight: asyncio.Task | None = None
 
     def _client_for(self) -> PyJWKClient:
@@ -80,7 +82,9 @@ class _SigningKeys:
         try:
             self._keys = await asyncio.to_thread(self._fetch)
             self._fetched_at = time.monotonic()
+            self._last_failed = False
         except Exception as exc:
+            self._last_failed = True
             logger.warning(f"[JWKS] Refresh failed, serving the cached set: {exc}")
 
     def _start_refresh(self) -> asyncio.Task:
@@ -112,7 +116,12 @@ class _SigningKeys:
         elif now - self._fetched_at > self.REFRESH_AFTER and (
             refreshing or now - self._last_attempt >= self.UNKNOWN_KID_COOLDOWN
         ):
-            await self.refresh()
+            # Once a refresh has failed, retry in the background: holding
+            # requests on a fetch that may hang to its timeout buys nothing.
+            if self._last_failed:
+                self._start_refresh()
+            else:
+                await self.refresh()
         return self._keys.get(kid) if self.usable else None
 
 
