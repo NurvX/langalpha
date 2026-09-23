@@ -28,6 +28,7 @@ import {
   unwrapMarketOverview,
   type InlineCardProps,
 } from './inlineCardsShared';
+import { readTypedTicker } from '@/lib/marketUtils';
 
 export const INLINE_ARTIFACT_TOOLS = new Set([
   'get_daily_prices',
@@ -1088,7 +1089,9 @@ const CHART_CARD_TYPES = new Set(['quote', 'stock_prices']);
 /** The symbol whose live chart a card opens, or null for a card about no one stock. */
 export function chartSymbolOf(artifact: Record<string, unknown> | null | undefined): string | null {
   if (!artifact || !CHART_CARD_TYPES.has(artifact.type as string)) return null;
-  return typeof artifact.symbol === 'string' ? artifact.symbol : null;
+  // A symbol no chart tab would take falls back to the result, rather than
+  // opening the panel on nothing.
+  return typeof artifact.symbol === 'string' ? readTypedTicker(artifact.symbol) : null;
 }
 
 /**

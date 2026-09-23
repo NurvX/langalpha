@@ -1750,6 +1750,12 @@
     "add": "添加"
   },
   "filePanel": {
+    "tabs": {
+      "files": "工作区",
+      "memory": "记忆",
+      "memo": "备忘录",
+      "status": "状态"
+    },
     "planTab": "计划",
     "sourcesTab": "来源（{{count}}）",
     "changedSinceRead": "打开后文件已变更",
@@ -1918,16 +1924,6 @@
       "retry": "重试",
       "download": "改为下载"
     }
-  },
-  "rightPanel": {
-    "tabs": {
-      "files": "工作区",
-      "memory": "记忆",
-      "memo": "备忘录",
-      "sources": "数据来源",
-      "status": "状态"
-    },
-    "close": "关闭面板"
   },
   "memoryPanel": {
     "backToList": "返回记忆列表",

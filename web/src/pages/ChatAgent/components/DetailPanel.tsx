@@ -9,6 +9,7 @@ import iconRoboSing from '../../../assets/img/icon-robo-sing.png';
 import { useTranslation } from 'react-i18next';
 import ToolCallDetailView, { type ToolCallProcessRecord, type SubagentInfo } from './ToolCallDetailView';
 import { taskCardStatusKind } from './taskStatusUi';
+import { isToolCallFailed } from './filePanel/toolCallFailure';
 import type { PlanData } from './filePanel/types';
 
 interface DetailPanelProps {
@@ -72,9 +73,7 @@ function DetailPanel({ toolCallProcess, planData, onOpenFile, onOpenSubagentTask
   // or stopped task is as done working as a finished one.
   const isSubagentLive =
     isTask && taskCardStatusKind(toolCallProcess._subagentStatus) === 'running';
-  // A task's own status chip already reports its outcome, so only a plain tool
-  // call marks its header failed.
-  const isFailed = !isTask && toolCallProcess.isFailed === true;
+  const isFailed = isToolCallFailed(toolCallProcess);
 
   return (
     <div

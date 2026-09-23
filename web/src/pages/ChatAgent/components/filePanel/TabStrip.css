@@ -97,6 +97,11 @@
   flex-shrink: 0;
   background-color: var(--color-status-modified);
 }
+/* A tool tab whose call failed carries the mark beside its name, in front or
+   not: the strip is where the reader learns which of the open calls to look at. */
+.file-panel-tab-failed {
+  color: var(--color-loss);
+}
 .file-panel-tab-close {
   display: inline-flex;
   align-items: center;

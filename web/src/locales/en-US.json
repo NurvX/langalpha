@@ -1752,6 +1752,12 @@
     "add": "Add"
   },
   "filePanel": {
+    "tabs": {
+      "files": "Workspace",
+      "memory": "Memory",
+      "memo": "Memo",
+      "status": "Status"
+    },
     "planTab": "Plan",
     "sourcesTab": "Sources ({{count}})",
     "changedSinceRead": "Changed since you opened it",
@@ -1925,16 +1931,6 @@
       "retry": "Try again",
       "download": "Download instead"
     }
-  },
-  "rightPanel": {
-    "tabs": {
-      "files": "Workspace",
-      "memory": "Memory",
-      "memo": "Memo",
-      "sources": "Sources",
-      "status": "Status"
-    },
-    "close": "Close panel"
   },
   "memoryPanel": {
     "backToList": "Back to memory list",

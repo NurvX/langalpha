@@ -328,6 +328,31 @@ describe('useFileTabs persistence', () => {
     expect(paths(result.current.tabs)).toEqual([null]);
   });
 
+  it('keeps memory and memo across a reload, and lets the watch tab go', () => {
+    const first = renderHook(() => useFileTabs('ws'));
+    act(() => first.result.current.openMemory());
+    act(() => first.result.current.openMemo());
+    act(() => first.result.current.openStatus());
+
+    // A watch may be over by the next mount, so its tab is not written; the
+    // stores are always there to come back to.
+    expect(stored(tabsStorageKey('ws'))).toEqual({ tabs: [{ kind: 'memory' }, { kind: 'memo' }], active: 1 });
+    first.unmount();
+
+    const { result } = renderHook(() => useFileTabs('ws'));
+    expect(result.current.tabs.map((t) => t.kind)).toEqual(['memory', 'memo']);
+  });
+
+  it('opens each store once, and comes back to the tab it has', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openMemory());
+    act(() => result.current.openFile('a.md', { pin: true }));
+    act(() => result.current.openMemory());
+
+    expect(result.current.tabs.map((t) => t.kind)).toEqual(['memory', 'file']);
+    expect(result.current.activeTab.kind).toBe('memory');
+  });
+
   it('persists nothing for a share, which has no workspace of its own', () => {
     const { result } = renderHook(() => useFileTabs(''));
     act(() => result.current.openFile('a.md', { pin: true }));
@@ -368,6 +393,33 @@ describe('useFileTabs thread scope', () => {
     expect(paths(result.current.tabs)).toEqual(['a.md', 'b.md']);
     rerender({ thread: 't2' });
     expect(paths(result.current.tabs)).toEqual(['b.md']);
+  });
+
+  it('lets a hidden panel keep its strip without writing it over the one on screen', () => {
+    // The chat keeps recently visited threads mounted off screen; the seed is
+    // the strip shown last, and a hidden panel is not showing anything.
+    const hidden = renderHook(
+      ({ active }: { active: boolean }) => useFileTabs('ws', 't1', { active }),
+      { initialProps: { active: true } },
+    );
+    act(() => hidden.result.current.openFile('one.md', { pin: true }));
+    hidden.rerender({ active: false });
+
+    // The new thread seeds from the strip shown last and adds to it.
+    const shown = renderHook(() => useFileTabs('ws', 't2'));
+    act(() => shown.result.current.openFile('two.md', { pin: true }));
+    expect(stored(tabsStorageKey('ws')).tabs.map((t: { path: string }) => t.path)).toEqual(['one.md', 'two.md']);
+
+    // A change in the hidden strip stays in memory: nothing it does reaches the seed.
+    act(() => hidden.result.current.openFile('three.md', { pin: true }));
+    expect(paths(hidden.result.current.tabs)).toEqual(['one.md', 'three.md']);
+    expect(stored(tabsStorageKey('ws')).tabs.map((t: { path: string }) => t.path)).toEqual(['one.md', 'two.md']);
+    expect(stored(threadTabsStorageKey('ws', 't1')).tabs.map((t: { path: string }) => t.path)).toEqual(['one.md']);
+
+    // Back on screen, what it shows is the strip shown last.
+    hidden.rerender({ active: true });
+    expect(stored(tabsStorageKey('ws')).tabs.map((t: { path: string }) => t.path)).toEqual(['one.md', 'three.md']);
+    expect(stored(threadTabsStorageKey('ws', 't1')).tabs.map((t: { path: string }) => t.path)).toEqual(['one.md', 'three.md']);
   });
 
   it('does not write the outgoing thread’s strip over the incoming thread’s saved one', () => {
@@ -568,6 +620,32 @@ describe('useFileTabs chart retarget', () => {
     expect(result.current.tabs.filter((t) => t.kind === 'chart')).toHaveLength(1);
     expect(result.current.activeId).toBe(googl);
     expect(result.current.activeTab).toMatchObject({ symbol: 'GOOGL', timeframe: '1hour' });
+  });
+
+  it('keeps the drawings of the tab being switched when it folds into another', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    const wsA = '11111111-1111-4111-8111-111111111111';
+    const wsB = '22222222-2222-4222-8222-222222222222';
+    act(() => result.current.openChart({ symbol: 'NVDA', workspaceId: wsB }));
+    act(() => result.current.newTab());
+    act(() => result.current.openChart({ symbol: 'AAPL', workspaceId: wsA }));
+    act(() => result.current.retargetChart(result.current.activeId, 'NVDA'));
+    expect(result.current.activeTab).toMatchObject({ symbol: 'NVDA', workspaceId: wsA });
+
+    // A tab on the panel's own workspace folds in without the other's.
+    act(() => result.current.newTab());
+    act(() => result.current.openChart({ symbol: 'MSFT' }));
+    act(() => result.current.retargetChart(result.current.activeId, 'NVDA'));
+    expect(result.current.activeTab).toMatchObject({ symbol: 'NVDA' });
+    expect(result.current.activeTab).not.toHaveProperty('workspaceId');
+  });
+
+  it('takes the instrument forms the providers serve besides equities', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openChart({ symbol: 'eurusd=x' }));
+    expect(result.current.activeTab).toMatchObject({ kind: 'chart', symbol: 'EURUSD=X' });
+    act(() => result.current.retargetChart(result.current.activeId, 'X:BTCUSD'));
+    expect(result.current.activeTab).toMatchObject({ symbol: 'X:BTCUSD' });
   });
 
   it('ignores a blank ticker', () => {

@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import {
-  ArrowUpDown, CheckSquare, Globe, HardDrive, RefreshCw, Search, Settings, Trash2, Upload, X,
+  ArrowUpDown, BookMarked, CheckSquare, Globe, HardDrive, RefreshCw, ScrollText, Search, Settings, Trash2, Upload, X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
@@ -48,7 +48,9 @@ export interface TreeColumnProps {
   /** Dev servers the agent started in this workspace, in port order. */
   previews: PreviewEntry[];
   onOpenPreview: (port: number) => void;
-  /** The port on screen, tinted the way the open file is. */
+  /** The reader's memory and memo stores, pinned above the listing; null where the reader has none here. */
+  onOpenMemory: (() => void) | null;
+  onOpenMemo: (() => void) | null;
 
   readOnly: boolean;
   uploadDisabled: boolean;
@@ -305,6 +307,30 @@ export function TreeColumn(props: TreeColumnProps): React.ReactElement {
                 {type}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* The stores are pinned above the listing, and outside the tree for
+            the same reason the running apps are: they are not files, and a
+            `role="tree"` cannot hold rows that are not treeitems. */}
+        {(props.onOpenMemory || props.onOpenMemo) && (
+          <div className="file-panel-store-group">
+            {props.onOpenMemory && (
+              <button type="button" className="file-panel-item file-panel-store-row" onClick={props.onOpenMemory}>
+                <BookMarked className="h-3.5 w-3.5 flex-shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+                <span className="flex-1 min-w-0 truncate text-xs" style={{ color: 'var(--color-text-primary)' }}>
+                  {t('filePanel.tabs.memory')}
+                </span>
+              </button>
+            )}
+            {props.onOpenMemo && (
+              <button type="button" className="file-panel-item file-panel-store-row" onClick={props.onOpenMemo}>
+                <ScrollText className="h-3.5 w-3.5 flex-shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+                <span className="flex-1 min-w-0 truncate text-xs" style={{ color: 'var(--color-text-primary)' }}>
+                  {t('filePanel.tabs.memo')}
+                </span>
+              </button>
+            )}
           </div>
         )}
 

@@ -75,7 +75,7 @@ import { MobileBottomSheet } from '@/components/ui/mobile-bottom-sheet';
 
 
 
-const RightPanel = React.lazy(() => import('./RightPanel'));
+const FilePanel = React.lazy(() => import('./FilePanel'));
 const DetailPanel = React.lazy(() => import('./DetailPanel'));
 const PreviewViewer = React.lazy(() => import('./viewers/PreviewViewer'));
 
@@ -930,6 +930,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     setFilePanelWorkspaceId,
     messages,
     subagentTranscripts,
+    watching: showWatchChip,
   });
 
   // Keep the ref in sync so SSE events (via handleOpenPreviewFromStream) use the latest closure
@@ -1890,12 +1891,13 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
             <div className="flex-shrink-0 h-full" style={{ width: '100%' }}>
               <Suspense fallback={null}>
                 <WorkspaceProvider workspaceId={effectiveFileWorkspaceId || workspaceId} downloadFile={null}>
-                <RightPanel
+                <FilePanel
                   workspaceId={effectiveFileWorkspaceId || workspaceId}
                   threadId={panelThreadId}
+                  isActive={isActive}
                   onClose={() => { setRightPanelType(null); popPanelHistory(); }}
                   onDirtyChange={handleFilesDirtyChange}
-                  panelTarget={panelTarget}
+                  target={panelTarget}
                   onTargetHandled={handleTargetHandled}
                   onTargetMemoryHandled={handleTargetMemoryHandled}
                   onTargetMemoHandled={handleTargetMemoHandled}
@@ -1955,12 +1957,13 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                 <Suspense fallback={null}>
                   {rightPanelType === 'file' ? (
                     <WorkspaceProvider workspaceId={effectiveFileWorkspaceId || workspaceId} downloadFile={null}>
-                    <RightPanel
+                    <FilePanel
                       workspaceId={effectiveFileWorkspaceId || workspaceId}
                       threadId={panelThreadId}
+                      isActive={isActive}
                       onClose={() => { setRightPanelType(null); popPanelHistory(); }}
                       onDirtyChange={handleFilesDirtyChange}
-                      panelTarget={panelTarget}
+                      target={panelTarget}
                       onTargetHandled={handleTargetHandled}
                       onTargetMemoryHandled={handleTargetMemoryHandled}
                       onTargetMemoHandled={handleTargetMemoHandled}

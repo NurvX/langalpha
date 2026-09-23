@@ -229,6 +229,22 @@ describe('FilePanel chart tabs', () => {
     expect(document.querySelector('.file-panel-crumbs')).toBeNull();
   });
 
+  it('brings a listing tab to the front when a folder is opened over a chart', async () => {
+    // The tree sits beside a file or the empty tab only, so a folder link
+    // clicked with a chart in front has to move off the chart first, or the
+    // click lands nowhere.
+    const { rerender } = renderWithProviders(panel({ target: GOOGL, files: ['notes.md', 'docs/index.md'] }));
+    await screen.findByTestId('chart-surface');
+
+    rerender(panel({ target: { kind: 'file', dir: 'docs', seq: 2 }, files: ['notes.md', 'docs/index.md'] }));
+
+    await waitFor(() => expect(document.querySelector('.file-panel-tree-list')).toBeTruthy());
+    expect(document.querySelector('.file-panel-tree-scope')?.textContent).toContain('docs/');
+    // The chart tab is still there; the listing opened beside it, not over it.
+    expect(within(screen.getByRole('tablist')).getByText('GOOGL')).toBeTruthy();
+    expect(screen.queryByTestId('chart-surface')).toBeNull();
+  });
+
   it('offers no chart on a read-only panel', () => {
     renderWithProviders(panel({ readOnly: true }));
     expect(screen.queryByText('Open a chart')).toBeNull();

@@ -145,8 +145,12 @@ export function getExtendedHoursInfo(
  * Search for stocks by keyword (symbol or company name).
  * GET /api/v1/market-data/search/stocks
  */
-/** A ticker typed straight in, when the search has nothing better to offer. */
-const TICKER_RE = /^[A-Za-z0-9.^-]{1,12}$/;
+/**
+ * A ticker typed straight in, when the search has nothing better to offer.
+ * Wide enough for the instrument forms the data providers take besides
+ * equities: `EURUSD=X`, `ES=F`, `X:BTCUSD`, `I:SPX`.
+ */
+const TICKER_RE = /^[A-Za-z0-9.^=:-]{1,16}$/;
 
 /** Every symbol field hands over the same shape: trimmed, uppercase, never blank. */
 export function normalizeSymbolInput(raw: string): string | null {

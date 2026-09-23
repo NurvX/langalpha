@@ -57,7 +57,7 @@ export const FileToolGroupRow = memo(function FileToolGroupRow({ items, onOpenFi
   const category = categorizeTool(toolName, item.toolCall);
   const tab = category === 'memoryRead' || category === 'memoryWrite' ? 'memory'
     : category === 'memo' || category === 'memoWrite' ? 'memo' : 'files';
-  const openLabel = t('toolArtifact.a11y.openInTab', { tab: t(`rightPanel.tabs.${tab}`) });
+  const openLabel = t('toolArtifact.a11y.openInTab', { tab: t(`filePanel.tabs.${tab}`) });
   const singlePath = filePathOf(item);
   const singleLabel = getCompletedSummary(toolName, item.toolCall, t)
     || (singlePath && classifyAgentPath(singlePath).kind === 'file' ? singlePath.split('/').pop() : null);

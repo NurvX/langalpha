@@ -92,10 +92,10 @@ export const ToolCallRow = memo(function ToolCallRow({ item, onClick, running = 
   const cat = categorizeTool(toolName, item.toolCall);
   const isMemory = cat === 'memoryRead' || cat === 'memoryWrite';
   const tabLabel = isMemory
-    ? t('rightPanel.tabs.memory')
+    ? t('filePanel.tabs.memory')
     : cat === 'memo' || cat === 'memoWrite'
-      ? t('rightPanel.tabs.memo')
-      : t('rightPanel.tabs.files');
+      ? t('filePanel.tabs.memo')
+      : t('filePanel.tabs.files');
 
   // No pill → the row title becomes the click target so the affordance isn't
   // lost (e.g., memory/memo index rows where the verb already names the file).

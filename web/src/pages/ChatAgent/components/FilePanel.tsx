@@ -12,7 +12,6 @@ import {
 import { useWorkspace } from '@/hooks/useWorkspace';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useNarrowContainer } from '@/hooks/useNarrowContainer';
-import { SandboxSettingsContent } from './SandboxSettingsPanel';
 import {
   readWorkspaceFile, readWorkspaceFileFull, writeWorkspaceFile, downloadWorkspaceFileAsArrayBuffer,
   triggerFileDownload, resolveWorkspaceFile,
@@ -36,7 +35,7 @@ import { useFileSelection } from './filePanel/useFileSelection';
 import { useFileBackup } from './filePanel/useFileBackup';
 import { useFileFocus } from './filePanel/useFileFocus';
 import { FocusChip } from './filePanel/FocusChip';
-import { useFileTabs, lastChartSymbol } from './filePanel/useFileTabs';
+import { useFileTabs, isListingTab, lastChartSymbol } from './filePanel/useFileTabs';
 import { useTreeFilter } from './filePanel/useTreeFilter';
 import { useTreeInteraction } from './filePanel/useTreeInteraction';
 import { useFileRefOpen } from './filePanel/useFileRefOpen';
@@ -50,17 +49,15 @@ import { TabStrip } from './filePanel/TabStrip';
 import { AnimatePresence } from 'framer-motion';
 import { TreeColumn } from './filePanel/TreeColumn';
 import { FileCrumbs } from './filePanel/FileCrumbs';
-import { FileViewer } from './filePanel/FileViewer';
-import { EmptyTab } from './filePanel/EmptyTab';
 import { PreviewCrumbs } from './filePanel/PreviewCrumbs';
 import { PreviewPanes } from './filePanel/PreviewPanes';
-import { ChartTab } from './filePanel/ChartTab';
 import { usePreviews } from './filePanel/usePreviews';
-import DetailPanel from './DetailPanel';
+import { usePanelTarget } from './filePanel/usePanelTarget';
+import { ActiveTabBody } from './filePanel/ActiveTabBody';
+import { useWatchTab } from './filePanel/useWatchTab';
+import type { MarketWatchState } from '../session/marketWatchEvents';
 import type { SubagentInfo, ToolCallProcessRecord } from './ToolCallDetailView';
 import { countDedupedSources, type ProvenanceRecord } from '@/types/chat';
-
-const SourcesPanel = React.lazy(() => import('./SourcesPanel'));
 
 /** Below this the tree cannot be a column without starving the viewer. */
 const TREE_OVERLAY_WIDTH = 720;
@@ -70,11 +67,16 @@ interface FilePanelProps {
   /** Scopes the tab strip; absent for a chat that has not sent its first message, or a share. */
   threadId?: string | null;
   onClose: () => void;
-  /** What the chat asked the panel to show. Only `file`, `preview` and `chart`
-   *  concern this panel; a `file` target's `dir` stays on as the tree's scope
-   *  until `onTargetHandled` clears it. */
+  /** What the chat asked the panel to show. A `file` target's `dir` stays on
+   *  as the tree's scope until `onTargetHandled` clears it; a memory or memo
+   *  target stays until its tab has selected the entry. Each handled callback
+   *  names the ask's `seq`, so a clear cannot drop an ask that landed since. */
   target?: PanelTarget | null;
-  onTargetHandled?: () => void;
+  onTargetHandled?: (seq?: number) => void;
+  onTargetMemoryHandled?: (seq?: number) => void;
+  onTargetMemoHandled?: (seq?: number) => void;
+  /** The live market watch, which the Status tab follows. */
+  marketWatch?: MarketWatchState | null;
   /** Leaves the panel for the full MarketView page on this symbol. */
   onOpenInMarketView?: ((spec: ChartTabSpec) => void) | null;
   /** Leaves for a subagent's own transcript, from a tool tab showing its task. */
@@ -105,17 +107,17 @@ interface FilePanelProps {
   /** False keeps the strip in memory only: a panel browsing beside a gallery
    *  must not write over the strip the workspace's conversations seed from. */
   persistTabs?: boolean;
+  /** False for a panel mounted off screen (a recently visited thread the chat
+   *  keeps warm): it holds its strip but does not save it, since the saved
+   *  strip is the one the reader is looking at. */
+  isActive?: boolean;
   apiAdapter?: ApiAdapter | null;
   onAddContext?: ((ctx: ContextPayload) => void) | null;
   showSystemFiles?: boolean;
   onToggleSystemFiles?: (() => void) | null;
-  /** Hide the panel-close affordances when FilePanel is embedded inside a
-   * tabbed wrapper that owns the close button. */
-  hideClose?: boolean;
-  /** Whether any open tab holds an unsaved edit. A wrapper that owns the close
-   *  button reads this to ask before it unmounts the panel. */
+  /** Whether any open tab holds an unsaved edit. Whoever can unmount the
+   *  panel reads this to ask before doing so. */
   onDirtyChange?: ((dirty: boolean) => void) | null;
-  onSwitchToMemoTab?: (() => void) | null;
   /** Copy a shareable link to an HTML report (authenticated app only). */
   onCopyShareLink?: ((filePath: string) => void) | null;
 }
@@ -126,6 +128,9 @@ function FilePanel({
   onClose,
   target = null,
   onTargetHandled,
+  onTargetMemoryHandled,
+  onTargetMemoHandled,
+  marketWatch = null,
   onOpenInMarketView = null,
   onOpenSubagentTask = null,
   getToolCallProcess = null,
@@ -142,13 +147,12 @@ function FilePanel({
   canDownload = true,
   singleFileMode = false,
   persistTabs = true,
+  isActive = true,
   apiAdapter = null,
   onAddContext = null,
   showSystemFiles = false,
   onToggleSystemFiles = null,
-  hideClose = false,
   onDirtyChange = null,
-  onSwitchToMemoTab = null,
   onCopyShareLink = null,
 }: FilePanelProps): React.ReactElement {
   const { t } = useTranslation();
@@ -178,6 +182,10 @@ function FilePanel({
 
   const { data: wsData } = useWorkspace(workspaceId);
   const isFlashWorkspace = wsData?.status === 'flash';
+  // The reader's memory and memo stores open here as tabs. A share reads
+  // through an adapter with no workspace id: it browses someone else's files
+  // and has no stores to show.
+  const stores = !!workspaceId;
   // A file the tree never got is not a file that is gone, so this flag also
   // decides what a missed reference is told.
   const filesRestoreIncomplete = wsData?.files_restore_incomplete === true;
@@ -198,12 +206,12 @@ function FilePanel({
   // this workspace's: pointing the panel at another one starts that
   // workspace's strip rather than leaving these tabs under the new id.
   const persistStrip = !singleFileMode && persistTabs;
-  const tabs = useFileTabs(workspaceId, threadId, { persist: persistStrip });
+  const tabs = useFileTabs(workspaceId, threadId, { persist: persistStrip, active: isActive });
   const activeTab = tabs.activeTab;
   // The tree lists the workspace's files, so it sits beside a file or the
   // empty tab and nothing else: a chart, a tool result or an app is its own
   // surface, and the listing (and its notices) has no business there.
-  const listingTab = activeTab.kind === 'file' || activeTab.kind === 'empty';
+  const listingTab = isListingTab(activeTab);
   const selectedFile = activeTab.kind === 'file' ? activeTab.path : null;
 
   const previews = usePreviews(workspaceId);
@@ -274,15 +282,6 @@ function FilePanel({
     if (activeTab.kind === 'file' && activeTab.location) focus.focusAt(activeTab.path, activeTab.location);
   }, [activeTab.id, tabLocationSeq]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleAddToMemo = useAddToMemo({ workspaceId, downloadFileAsArrayBufferFn, readFileFullFn, onSwitchToMemoTab });
-  const memoedMap = useWorkspaceMemoIndex(workspaceId);
-  const memoEntry = selectedFile ? memoedMap.get(selectedFile) ?? null : null;
-  const { status: memoStaleStatus, sandboxText: memoStaleSandboxText, refresh: refreshMemoStale } = useMemoStaleCheck({
-    workspaceId, selectedFile, fileMime, memoSha256: memoEntry?.sha256 ?? null, readFileFullFn,
-  });
-  const [memoSyncing, setMemoSyncing] = useState(false);
-  const [memoDiffOpen, setMemoDiffOpen] = useState(false);
-
   // The folder a chat link pointed the tree at; it filters until the back
   // button clears it. The panel's own state rather than a reading of the
   // target: the target clears once handled, like every other kind, so a
@@ -330,10 +329,11 @@ function FilePanel({
   /** A reference nothing could settle: the tree, filtered to the name it used. */
   const landOnSearch = useCallback((ref: string, name: string, matches: string[]) => {
     filter.showMatches(ref, name, matches);
+    tabs.showListing();
     setTreeOpen(true);
     // A folder scope would hide candidates outside it, so it goes.
     setScopeDir(null);
-  }, [filter, setTreeOpen]);
+  }, [filter, tabs, setTreeOpen]);
 
   const { openFileAt, openFileRef, retryOpen, cancelPending } = useFileRefOpen({
     tabs,
@@ -349,60 +349,29 @@ function FilePanel({
     refetch,
   });
 
-  // A folder from chat points the tree, which stays on screen beside the open
-  // file, so nothing has to be closed to honour it. A parent that leaves the
-  // target in place re-runs this on every render of it, so the ask is keyed:
-  // a target that only shed its path must not re-open a tree the reader has
-  // since folded away, only a new ask does.
-  const lastDirAsk = useRef<string | null>(null);
-  useEffect(() => {
-    if (!target) return;
-    switch (target.kind) {
-      case 'file': {
-        if (target.dir != null) {
-          setScopeDir(target.dir);
-          const ask = `${target.seq ?? 0}:${target.dir}`;
-          if (lastDirAsk.current !== ask) {
-            lastDirAsk.current = ask;
-            filter.clearSearch();
-            setTreeOpen(true);
-          }
-        }
-        if (target.path) void openFileRef(target.path, { location: target.location ?? null, pin: !!target.pin });
-        onTargetHandled?.();
-        return;
-      }
-      case 'preview':
-        // The agent published an app: its tab, and a URL fresh enough to load.
-        cancelPending();
-        tabs.openPreview(target);
-        previews.open(target);
-        onTargetHandled?.();
-        return;
-      case 'chart':
-        cancelPending();
-        tabs.openChart(target);
-        onTargetHandled?.();
-        return;
-      case 'tool':
-        cancelPending();
-        tabs.openTool(target);
-        onTargetHandled?.();
-        return;
-      case 'plan':
-        cancelPending();
-        tabs.openPlan(target);
-        onTargetHandled?.();
-        return;
-      case 'sources':
-        cancelPending();
-        tabs.openSources(target.messageId);
-        onTargetHandled?.();
-        return;
-      default:
-        return;
-    }
-  }, [target]); // eslint-disable-line react-hooks/exhaustive-deps
+  usePanelTarget({
+    target, tabs, previews, openFileRef, cancelPending,
+    clearSearch: filter.clearSearch, setTreeOpen, setScopeDir, onTargetHandled,
+  });
+
+  // Opening a singleton tab drops a reference still resolving, like any other
+  // open. Each store is one tab, so "view in memo" lands on the Memo tab in
+  // place and leaves every draft parked where it is.
+  const openSettings = useCallback(() => { cancelPending(); tabs.openSettings(); }, [tabs, cancelPending]);
+  const openMemory = useCallback(() => { cancelPending(); tabs.openMemory(); }, [tabs, cancelPending]);
+  const openMemo = useCallback(() => { cancelPending(); tabs.openMemo(); }, [tabs, cancelPending]);
+  const viewInMemo = stores ? openMemo : null;
+
+  const handleAddToMemo = useAddToMemo({ workspaceId, downloadFileAsArrayBufferFn, readFileFullFn, onSwitchToMemoTab: viewInMemo });
+  const memoedMap = useWorkspaceMemoIndex(workspaceId);
+  const memoEntry = selectedFile ? memoedMap.get(selectedFile) ?? null : null;
+  const { status: memoStaleStatus, sandboxText: memoStaleSandboxText, refresh: refreshMemoStale } = useMemoStaleCheck({
+    workspaceId, selectedFile, fileMime, memoSha256: memoEntry?.sha256 ?? null, readFileFullFn,
+  });
+  const [memoSyncing, setMemoSyncing] = useState(false);
+  const [memoDiffOpen, setMemoDiffOpen] = useState(false);
+
+  useWatchTab(tabs, marketWatch);
 
   const sourceCount = useCallback(
     (messageId: string) => countDedupedSources(getSourcesRecords?.(messageId)),
@@ -463,11 +432,6 @@ function FilePanel({
     tabs.newTab();
   }, [tabs, cancelPending]);
 
-  const openSettings = useCallback(() => {
-    cancelPending();
-    tabs.openSettings();
-  }, [tabs, cancelPending]);
-
   const startEdit = useCallback(() => {
     tabs.pinTab(activeTab.id);
     void edit.handleStartEdit();
@@ -485,6 +449,14 @@ function FilePanel({
     if (edit.hasAnyUnsavedChanges && !window.confirm(t('filePanel.discardUnsaved'))) return;
     onOpenInMarketView?.(spec);
   }, [edit.hasAnyUnsavedChanges, onOpenInMarketView, t]);
+
+  // The drafts live in this mount, so closing the panel asks the question
+  // closing a dirty tab asks. Always offered: on mobile the panel covers the
+  // chat, and a close that went away with the draft left no way back.
+  const closePanel = useCallback(() => {
+    if (edit.hasAnyUnsavedChanges && !window.confirm(t('filePanel.discardUnsaved'))) return;
+    onClose();
+  }, [edit.hasAnyUnsavedChanges, onClose, t]);
 
   const closeTab = useCallback((id: string) => {
     if (edit.tabHasUnsavedChanges(id) && !window.confirm(t('filePanel.discardUnsaved'))) return;
@@ -572,108 +544,9 @@ function FilePanel({
   // chart is a live view, and settings is a form.
   const canDropHere = !readOnly && listingTab;
 
-  /** What fills the viewer slot. Preview panes are rendered beside this, always mounted. */
-  const renderActive = (): React.ReactNode => {
-    switch (activeTab.kind) {
-      case 'preview':
-        return null;
-      case 'chart':
-        return (
-          <ChartTab
-            tab={activeTab}
-            tabs={tabs}
-            workspaceId={workspaceId}
-            onAddContext={onAddContext}
-            onOpenInMarketView={onOpenInMarketView ? leaveForMarketView : null}
-          />
-        );
-      case 'settings':
-        return (
-          <div className="file-panel-settings">
-            <SandboxSettingsContent workspaceId={workspaceId} />
-          </div>
-        );
-      case 'tool': {
-        // The tab holds only the id, so a record cleared from the chat (a
-        // subagent card dismissed, say) leaves it nothing to draw.
-        const toolCallProcess = getToolCallProcess?.(activeTab.toolCallId) ?? null;
-        if (!toolCallProcess) {
-          return (
-            <p className="px-6 py-10 text-center text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-              {t('toolArtifact.toolCallGone')}
-            </p>
-          );
-        }
-        return (
-          <DetailPanel
-            key={activeTab.toolCallId}
-            toolCallProcess={toolCallProcess}
-            onOpenFile={onOpenFile ?? undefined}
-            onOpenSubagentTask={onOpenSubagentTask ?? undefined}
-          />
-        );
-      }
-      case 'plan':
-        return <DetailPanel key={activeTab.planId} toolCallProcess={null} planData={activeTab.plan} />;
-      case 'sources':
-        return (
-          <Suspense fallback={null}>
-            <SourcesPanel
-              provenanceRecords={getSourcesRecords?.(activeTab.messageId)}
-              allRecords={allSourcesRecords}
-              onOpenFile={onOpenFile ?? undefined}
-            />
-          </Suspense>
-        );
-      case 'file': {
-        const path = activeTab.path;
-        return (
-          <FileViewer
-            path={path}
-            body={body}
-            loading={fileLoading}
-            error={fileError}
-            onRetry={retry}
-            onDownload={handleDownloadSelected}
-            onDownloadInFallback={handleDownloadInFallback}
-            workspaceId={workspaceId}
-            focus={focus}
-            onPageCount={(pages) => setPageCounts((prev) => (prev[path] === pages ? prev : { ...prev, [path]: pages }))}
-            isEditing={edit.isEditing}
-            editContent={edit.editContent}
-            originalContent={edit.originalContent}
-            showDiff={edit.showDiff}
-            editorRef={edit.editorRef}
-            onEditorChange={edit.handleEditorChange}
-            onUndoRedoChange={edit.handleUndoRedoChange}
-            onEditorTextSelect={handleEditorTextSelect}
-            onAddContext={onAddContext ? addViewerContext : null}
-            onContentMouseUp={handleContentMouseUp}
-            onViewerLink={handleViewerLink}
-            onAnchorLink={handleAnchorLink}
-            servedUrl={apiAdapter?.buildServedUrl?.(path, { injectTheme: true })}
-            onCopyShareLink={onCopyShareLink}
-          />
-        );
-      }
-      case 'empty':
-        return (
-          <EmptyTab
-            canUpload={!readOnly}
-            treeOpen={treeOpen}
-            onShowTree={singleFileMode ? null : () => setTreeOpen(true)}
-            onOpenChart={readOnly || singleFileMode ? null : () => { cancelPending(); tabs.openChart({ symbol: lastChartSymbol(workspaceId, { persist: persistStrip }) }); }}
-          />
-        );
-      default:
-        return activeTab satisfies never;
-    }
-  };
-
-  // The panel's own close button, on a mount that owns one. An unsaved edit
-  // takes it away rather than asking about it: the tab's close asks already,
-  // and that is the way out that lets the reader save first.
-  const panelClose = hideClose || edit.hasAnyUnsavedChanges ? null : onClose;
+  const onPageCount = useCallback((path: string, pages: number) => {
+    setPageCounts((prev) => (prev[path] === pages ? prev : { ...prev, [path]: pages }));
+  }, []);
 
   return (
     <div className="file-panel" ref={panelRef} onKeyDown={tree.onEscape}>
@@ -689,7 +562,11 @@ function FilePanel({
         hasChanged={changed.hasChanged}
         treeOpen={treeShown}
         onToggleTree={singleFileMode || !listingTab ? null : () => setTreeOpen((v) => !v)}
-        onPanelClose={panelClose}
+        // Locked to one file, the panel has no tree to pin the stores in, so
+        // the strip offers them instead.
+        onOpenMemory={singleFileMode && stores ? openMemory : null}
+        onOpenMemo={singleFileMode ? viewInMemo : null}
+        onPanelClose={closePanel}
         backArrow={isMobile}
       />
 
@@ -757,7 +634,7 @@ function FilePanel({
         <MemoStaleBanner
           status={memoStaleStatus}
           syncing={memoSyncing}
-          onSwitchToMemoTab={onSwitchToMemoTab}
+          onSwitchToMemoTab={viewInMemo}
           onSync={handleSyncMemo}
           onViewDiff={memoStaleSandboxText !== null ? () => setMemoDiffOpen(true) : null}
         />
@@ -807,7 +684,50 @@ function FilePanel({
                 </button>
               )}
               <PreviewPanes tabs={tabs.tabs} activeId={activeTab.id} previews={previews} />
-              {renderActive()}
+              <ActiveTabBody
+                activeTab={activeTab}
+                tabs={tabs}
+                workspaceId={workspaceId}
+                apiAdapter={apiAdapter}
+                target={target}
+                onTargetMemoryHandled={onTargetMemoryHandled}
+                onTargetMemoHandled={onTargetMemoHandled}
+                marketWatch={marketWatch}
+                onOpenFile={onOpenFile}
+                onOpenSubagentTask={onOpenSubagentTask}
+                getToolCallProcess={getToolCallProcess}
+                getSourcesRecords={getSourcesRecords}
+                allSourcesRecords={allSourcesRecords}
+                onAddContext={onAddContext}
+                onOpenInMarketView={onOpenInMarketView ? leaveForMarketView : null}
+                file={{
+                  body,
+                  loading: fileLoading,
+                  error: fileError,
+                  onRetry: retry,
+                  onDownload: handleDownloadSelected,
+                  onDownloadInFallback: handleDownloadInFallback,
+                  focus,
+                  isEditing: edit.isEditing,
+                  editContent: edit.editContent,
+                  originalContent: edit.originalContent,
+                  showDiff: edit.showDiff,
+                  editorRef: edit.editorRef,
+                  onEditorChange: edit.handleEditorChange,
+                  onUndoRedoChange: edit.handleUndoRedoChange,
+                  onEditorTextSelect: handleEditorTextSelect,
+                  onAddContext: onAddContext ? addViewerContext : null,
+                  onContentMouseUp: handleContentMouseUp,
+                  onViewerLink: handleViewerLink,
+                  onAnchorLink: handleAnchorLink,
+                  onCopyShareLink,
+                }}
+                onPageCount={onPageCount}
+                canUpload={!readOnly}
+                treeOpen={treeOpen}
+                onShowTree={singleFileMode ? null : () => setTreeOpen(true)}
+                onOpenChart={readOnly || singleFileMode ? null : () => { cancelPending(); tabs.openChart({ symbol: lastChartSymbol(workspaceId, { persist: persistStrip }) }); }}
+              />
             </div>
           </div>
 
@@ -841,6 +761,8 @@ function FilePanel({
               onUpload={() => fileInputRef.current?.click()}
               previews={previews.previews}
               onOpenPreview={openPreviewTab}
+              onOpenMemory={stores ? openMemory : null}
+              onOpenMemo={viewInMemo}
               onOpenSettings={!readOnly && !isFlashWorkspace ? openSettings : null}
               workspaceName={wsData?.name}
               filesRestoreIncomplete={filesRestoreIncomplete}
