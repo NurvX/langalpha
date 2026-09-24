@@ -321,9 +321,9 @@ class FlashAgent:
 
         # Optional compaction (shares config with main agent)
         compaction_config = None
-        if self.config.llm.compaction:
+        if self.config.llm.compaction_name:
             compaction_config = self.config.compaction.model_dump()
-            compaction_config["llm"] = self.config.llm.compaction
+            compaction_config["llm"] = self.config.llm.compaction_name
             client = resolve_compaction_client(self.config)
             if client is not None:
                 compaction_config["_llm_client"] = client

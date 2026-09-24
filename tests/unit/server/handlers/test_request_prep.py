@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import psycopg
 import pytest
 
+from ptc_agent.config import LLMConfig
 from ptc_agent.core.sandbox.runtime import SandboxGoneError, SandboxTransientError
 from src.server.handlers.chat.request_prep import PriorThread, build_turn_context
 from src.server.models.additional_context import SkillContext
@@ -427,7 +428,7 @@ class TestApplyFetchOverride:
         from src.server.handlers.chat.request_prep import apply_fetch_override
 
         config = MagicMock()
-        config.llm.fetch = "gpt-4o-mini"
+        config.llm = LLMConfig(name="main-model", fetch="gpt-4o-mini")
         config.subsidiary_llm_clients = {"fetch": MagicMock()}
 
         with (
@@ -441,11 +442,28 @@ class TestApplyFetchOverride:
             config.subsidiary_llm_clients["fetch"]
         )
 
-    def test_skips_when_no_fetch(self):
+    def test_blank_fetch_defaults_to_flash(self):
         from src.server.handlers.chat.request_prep import apply_fetch_override
 
         config = MagicMock()
-        config.llm.fetch = None
+        config.llm = LLMConfig(name="main-model", fetch=None, flash="gpt-4o-mini")
+        config.subsidiary_llm_clients = {}
+
+        with (
+            patch(f"{PREP}.fetch_model_override") as mock_model_var,
+            patch(f"{PREP}.fetch_llm_client_override") as mock_client_var,
+        ):
+            apply_fetch_override(config)
+
+        mock_model_var.set.assert_called_once_with("gpt-4o-mini")
+        mock_client_var.set.assert_not_called()
+
+    def test_skips_when_no_fetch_or_flash(self):
+        from src.server.handlers.chat.request_prep import apply_fetch_override
+
+        config = MagicMock()
+        config.llm = LLMConfig(name="main-model", fetch=None, flash=None)
+        config.subsidiary_llm_clients = {}
 
         with (
             patch(f"{PREP}.fetch_model_override") as mock_model_var,
@@ -460,7 +478,7 @@ class TestApplyFetchOverride:
         from src.server.handlers.chat.request_prep import apply_fetch_override
 
         config = MagicMock()
-        config.llm.fetch = "gpt-4o-mini"
+        config.llm = LLMConfig(name="main-model", fetch="gpt-4o-mini")
         config.subsidiary_llm_clients = {}
 
         with (
@@ -512,7 +530,7 @@ class TestApplyFetchOverrideContextVars:
         """
         fake_client = MagicMock(name="byok-fetch-client")
         config = MagicMock()
-        config.llm.fetch = "claude-haiku-4-5"
+        config.llm = LLMConfig(name="main-model", fetch="claude-haiku-4-5")
         config.subsidiary_llm_clients = {"fetch": fake_client}
 
         snap = self._run_and_capture(config)
@@ -525,7 +543,7 @@ class TestApplyFetchOverrideContextVars:
         client context var must remain None so fetch.py uses LLM(model).get_llm().
         """
         config = MagicMock()
-        config.llm.fetch = "claude-haiku-4-5"
+        config.llm = LLMConfig(name="main-model", fetch="claude-haiku-4-5")
         config.subsidiary_llm_clients = {}  # platform user — nothing materialized
 
         snap = self._run_and_capture(config)
@@ -533,11 +551,25 @@ class TestApplyFetchOverrideContextVars:
         assert snap["model"] == "claude-haiku-4-5"
         assert snap["client"] is None  # default — fetch.py takes the platform path
 
-    def test_no_fetch_model_leaves_both_vars_unset(self):
-        """When config.llm.fetch is falsy neither context var should be set."""
+    def test_blank_fetch_forwards_flash_role_client(self):
+        """A blank fetch means the flash model, and role_registry resolves a
+        client for it. That client must reach web_fetch, or an OAuth user's
+        extraction goes out on a server key it does not have.
+        """
+        fake_client = MagicMock(name="oauth-fetch-client")
         config = MagicMock()
-        config.llm.fetch = None
-        config.subsidiary_llm_clients = {"fetch": MagicMock()}  # should be ignored
+        config.llm = LLMConfig(name="main-model", fetch=None, flash="claude-sonnet-4-6-oauth")
+        config.subsidiary_llm_clients = {"fetch": fake_client}
+
+        snap = self._run_and_capture(config)
+
+        assert snap["model"] == "claude-sonnet-4-6-oauth"
+        assert snap["client"] is fake_client
+
+    def test_no_fetch_or_flash_leaves_both_vars_unset(self):
+        config = MagicMock()
+        config.llm = LLMConfig(name="main-model", fetch=None, flash=None)
+        config.subsidiary_llm_clients = {}
 
         snap = self._run_and_capture(config)
 
@@ -551,7 +583,7 @@ class TestApplyFetchOverrideContextVars:
         """
         fake_client = MagicMock(name="shared-client")
         config = MagicMock()
-        config.llm.fetch = "claude-haiku-4-5"
+        config.llm = LLMConfig(name="main-model", fetch="claude-haiku-4-5")
         config.subsidiary_llm_clients = {"fetch": fake_client}
 
         snap = self._run_and_capture(config)
@@ -569,7 +601,7 @@ class TestApplyFetchOverrideContextVars:
         leak_sentinel = MagicMock(name="leaked-client")
 
         config_with = MagicMock()
-        config_with.llm.fetch = "some-model"
+        config_with.llm = LLMConfig(name="main-model", fetch="some-model")
         config_with.subsidiary_llm_clients = {"fetch": leak_sentinel}
 
         # First run sets the client in its own context copy.

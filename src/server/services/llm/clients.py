@@ -575,8 +575,8 @@ def role_registry(config, enabled_subagents, subagent_defs, model_pref) -> list[
         )
 
     roles = [
-        _role("compaction", config.llm.compaction),
-        _role("fetch", config.llm.fetch),
+        _role("compaction", config.llm.compaction_name),
+        _role("fetch", config.llm.fetch_name),
     ]
     for name in enabled_subagents:
         defn = subagent_defs.get(name)

@@ -230,6 +230,17 @@ class LLMConfig(BaseModel):
         """
         return self.flash or self.name
 
+    # Blank compaction/fetch mean "whatever flash is for this turn". Resolved on
+    # read, not at load: a user's flash preference replaces ``flash`` per turn,
+    # and a value baked in at load would keep the deployment's flash instead.
+    @property
+    def compaction_name(self) -> str | None:
+        return self.compaction or self.flash
+
+    @property
+    def fetch_name(self) -> str | None:
+        return self.fetch or self.flash
+
 
 class AgentConfig(BaseModel):
     """Agent-specific configuration.

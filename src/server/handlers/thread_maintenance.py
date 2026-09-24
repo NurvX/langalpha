@@ -165,7 +165,10 @@ async def trigger_compaction(
     so manual /compact matches the auto path.
     """
     try:
-        from ptc_agent.agent.middleware.compaction import compact_messages
+        from ptc_agent.agent.middleware.compaction import (
+            compact_messages,
+            resolve_compaction_client,
+        )
         from src.server.app import setup
 
         # The mutation fence FIRST — before any graph state reads or writes:
@@ -209,22 +212,15 @@ async def trigger_compaction(
             original_count = len(messages)
 
             compaction_cfg = agent_cfg.compaction if agent_cfg else None
-            model_name = (agent_cfg.llm.compaction or "") if agent_cfg and agent_cfg.llm else ""
+            model_name = (agent_cfg.llm.compaction_name or "") if agent_cfg and agent_cfg.llm else ""
 
-            # Mirror PTCAgent.create_agent client priority: subsidiary → main → factory.
-            # Copy before handing the client to compact_messages — it calls
-            # maybe_disable_streaming (src/llms/api_call.py) which sets
-            # streaming=False in-place. Without the copy, the fallback path
-            # (agent_cfg == setup.agent_config) would permanently mutate the
-            # shared main-agent client and break SSE streaming for every
-            # subsequent chat workflow.
-            compaction_client = None
-            if agent_cfg is not None:
-                subsidiary = agent_cfg.subsidiary_llm_clients.get("compaction")
-                if subsidiary is not None:
-                    compaction_client = subsidiary.model_copy()
-                elif agent_cfg.llm_client is not None:
-                    compaction_client = agent_cfg.llm_client.model_copy()
+            # Same resolver as automatic compaction, so a manual /compact runs the
+            # same model: a named compaction model without a role client resolves
+            # by name, not on a copy of the main client. It returns a copy, which
+            # matters because compact_messages sets streaming=False in place.
+            compaction_client = (
+                resolve_compaction_client(agent_cfg) if agent_cfg is not None else None
+            )
 
             # Read previous event from state (for chained compactions).
             # The state key "_summarization_event" is preserved as a wire/storage

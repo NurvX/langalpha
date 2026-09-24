@@ -46,7 +46,7 @@ def resolve_compaction_client(config: AgentConfig) -> Any | None:
     (credentialed users) or None (platform users keep the cheap name-based
     model). Without one, fall back to a copy of the main client.
     """
-    has_compaction_model = bool(config.llm and config.llm.compaction)
+    has_compaction_model = bool(config.llm and config.llm.compaction_name)
     return config.client_for_role("compaction", fallback_to_main=not has_compaction_model)
 
 
