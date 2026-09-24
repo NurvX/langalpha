@@ -1,5 +1,6 @@
 /** ChatView's local type contracts, carved out of ChatView.tsx (5.9b). */
 import type { WidgetContextSnapshot } from '@/pages/Dashboard/widgets/framework/contextSnapshot';
+import type { ChartSelectionSnapshot } from '@/pages/MarketView/stores/chartSelectionStore';
 import type { SubagentTokenUsage } from '../../utils/tokenUsage';
 
 export type MessageRecord = Record<string, unknown>;
@@ -130,6 +131,8 @@ export interface ModelOptions {
    * per snapshot) by `handleSendWithAttachments`.
    */
   widgetSnapshots?: WidgetContextSnapshot[];
+  /** Chart selections riding this send, so the user bubble renders their cards. */
+  chartSelections?: ChartSelectionSnapshot[];
 }
 
 export interface ActionCommand {

@@ -86,6 +86,8 @@ export function ChartTab({ tab, tabs, workspaceId, onAddContext, onOpenInMarketV
           onIntervalChange={rememberInterval}
           onSwitchSymbol={onSwitchSymbol}
           headerActions={headerActions}
+          // Picks go out with the thread's composer, so only a host with one gets the tools.
+          selectionTools={onAddContext != null}
           variant="compact"
         />
       </div>

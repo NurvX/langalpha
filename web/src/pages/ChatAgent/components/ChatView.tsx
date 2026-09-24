@@ -94,6 +94,8 @@ import { useTurnEndScroll } from './chatView/useTurnEndScroll';
 import { useSubagentTabs } from './chatView/useSubagentTabs';
 import { publishSidebarAgents, clearSidebarAgents } from './sidebarAgentsBridge';
 import { useRightPanel } from './chatView/useRightPanel';
+import { usePanelChartSelections } from './chatView/usePanelChartSelections';
+import { SelectionChips } from '@/pages/MarketView/components/SelectionChips';
 import { useMessageActionBundles } from './chatView/useMessageActionBundles';
 
 
@@ -688,6 +690,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     }
   }, [isCompacting, isLoading, handleStop, stableStopCompaction]);
 
+  const { chips: chartSelectionChips, takeForSend: takeChartSelections } = usePanelChartSelections(isActive);
+
   // Wrapper: converts ChatInput's (message, planMode, attachments, slashCommands) into
   // handleSendMessage(message, planMode, additionalContext, attachmentMeta)
   const handleSendWithAttachments = useCallback((message: string, planMode: boolean, attachments: Attachment[] = [], slashCommands: SlashCommand[] = [], modelOptions: ModelOptions = {}) => {
@@ -737,9 +741,22 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       contexts.push(...(items as unknown as Record<string, unknown>[]));
     }
 
+    // Regions and price levels picked on a panel chart tab.
+    const picked = takeChartSelections(message);
+    if (picked) {
+      contexts.push(...picked.contexts);
+      if (picked.attachments.length > 0) attachmentMeta = [...(attachmentMeta ?? []), ...picked.attachments];
+    }
+
     const additionalContext = contexts.length > 0 ? contexts : null;
-    stableSendMessage(message, planMode, additionalContext, attachmentMeta, modelOptions);
-  }, [marketWatchEnabled, stableSendMessage]);
+    stableSendMessage(
+      picked?.outgoingMessage ?? message,
+      planMode,
+      additionalContext,
+      attachmentMeta,
+      picked ? { ...modelOptions, chartSelections: picked.snapshots } : modelOptions,
+    );
+  }, [marketWatchEnabled, stableSendMessage, takeChartSelections]);
 
   // Handle action-type slash commands (e.g. /compact, /compaction, /offload)
   const handleAction = useCallback((cmd: ActionCommand) => {
@@ -1777,9 +1794,11 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                         {t('chat.queuedSend')}
                       </div>
                     )}
+                    <SelectionChips chips={chartSelectionChips} />
                     <ChatInput
                       ref={chatInputRef}
                       onSend={handleSendWithAttachments}
+                      hasExternalContext={chartSelectionChips.length > 0}
                       disabled={isLoadingHistory || !workspaceId || !!pendingInterrupt}
                       onStop={handleStopButton}
                       isLoading={isLoading}

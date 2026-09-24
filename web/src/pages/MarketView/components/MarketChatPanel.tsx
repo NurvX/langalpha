@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, RefreshCw, MessageSquare, ScrollText, X } from 'lucide-react';
+import { ArrowLeft, RefreshCw, MessageSquare, ScrollText } from 'lucide-react';
 import { queryKeys } from '@/lib/queryKeys';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Loader } from '@/components/ui/loader';
@@ -33,6 +33,7 @@ import { readMarketViewRoute } from '../utils/marketRoute';
 import { normalizeTimeframe } from '../stores/chartAnnotationStore';
 import { chartSelectionStore, useChartSelections, isConfirmedFor } from '../stores/chartSelectionStore';
 import { buildChartSelectionSend } from '../utils/selectionSend';
+import { SelectionChips } from './SelectionChips';
 import { marketViewAnnotationContext } from '../constants/annotationPrompt';
 import './MarketPanel.css';
 
@@ -923,81 +924,8 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
         </div>
       )}
 
-      {/* Chart selection chips — the regions / price levels the user picked on
-          the chart, each with its note, ready to attach to the next send. Click
-          a chip to re-open its note editor on the chart; ✕ removes it. Sits
-          directly above the input, matching the status-banner layout. */}
-      {chips.length > 0 && (
-        <div style={{ padding: '0 12px', marginBottom: 6, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {chips.map((c) => {
-            const baseLabel = c.selectionType === 'region'
-              ? t('marketView.selection.chipRegion', { symbol: c.symbol, timeframe: c.timeframe })
-              : t('marketView.selection.chipPriceLevel', {
-                  price: Number.isFinite(c.priceLow) ? c.priceLow.toFixed(2) : '—',
-                  symbol: c.symbol,
-                  timeframe: c.timeframe,
-                });
-            const label = c.comment ? `${baseLabel} · "${c.comment}"` : baseLabel;
-            return (
-              <span
-                key={c.id}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  maxWidth: '100%',
-                  padding: '4px 6px 4px 10px',
-                  borderRadius: 6,
-                  background: 'var(--color-bg-surface)',
-                  border: '1px solid var(--color-border-muted)',
-                  color: 'var(--color-text-secondary)',
-                  fontSize: '0.75rem',
-                }}
-              >
-                <button
-                  type="button"
-                  title={t('marketView.selection.editChip')}
-                  onClick={() => chartSelectionStore.openEditor(c.id)}
-                  style={{
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    maxWidth: 240,
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'inherit',
-                    font: 'inherit',
-                    padding: 0,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {label}
-                </button>
-                <button
-                  type="button"
-                  aria-label={t('marketView.selection.removeChip')}
-                  onClick={() => chartSelectionStore.remove(c.id)}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                    width: 16,
-                    height: 16,
-                    padding: 0,
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'var(--color-text-tertiary)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <X style={{ width: 12, height: 12 }} />
-                </button>
-              </span>
-            );
-          })}
-        </div>
-      )}
+      {/* Chart selection chips, directly above the input like the status banners. */}
+      <SelectionChips chips={chips} />
 
       {/* Input */}
       <ChatInput

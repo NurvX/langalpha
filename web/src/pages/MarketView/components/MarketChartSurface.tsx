@@ -45,6 +45,8 @@ interface MarketChartSurfaceProps {
    *  `compact` variant they land in the chart's toolbar row, so a host passes
    *  toolbar-sized icon buttons there (`ChartToolButton`). */
   headerActions?: React.ReactNode;
+  /** Region and price-level selection, for a host whose composer sends them. */
+  selectionTools?: boolean;
   /**
    * `full` reproduces the MarketView page (metrics grid, centered latest bar,
    * Light / Advanced switch). `compact` is for a host that keeps its height
@@ -67,6 +69,7 @@ function MarketChartSurfaceInner({
   onIntervalChange,
   onSwitchSymbol,
   headerActions,
+  selectionTools = false,
   variant = 'full',
 }: MarketChartSurfaceProps): React.ReactElement {
   const compact = variant === 'compact';
@@ -231,6 +234,7 @@ function MarketChartSurfaceInner({
           marketStatus={marketStatus}
           defaultView={compact ? 'fill' : 'centered'}
           modeSwitcher={!compact}
+          selectionTools={selectionTools}
           toolbarLead={toolbarLead}
           toolbarLeadKey={toolbarLeadKey}
           toolbarTrail={toolbarTrail}
