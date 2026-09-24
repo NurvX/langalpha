@@ -153,7 +153,7 @@ function errToString(err: unknown): string {
 }
 
 // --- Layout breakpoints (panel-relative, not viewport) -------------------
-// The memo panel lives inside RightPanel which the user can resize, so the
+// The memo panel lives in the file panel, which the user can resize, so the
 // breakpoints are container-relative. Tracked via ResizeObserver.
 const BREAK_HIDE_PROVENANCE = 520; // below this, hide the workspace · path subline
 const BREAK_HIDE_TYPE = 640;       // below this, hide the Type column

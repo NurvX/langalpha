@@ -124,7 +124,7 @@ export function isFilePath(href: string | undefined): boolean {
 
 /**
  * A markdown destination as the API wants it: workspace-relative, decoded once.
- * `agentPaths.normalizeAgentHref` owns the rules and documents why.
+ * `agentPaths.parseAgentHref` owns the rules and documents why.
  */
 export function normalizeFilePath(path: string): string {
   return normalizeAgentHref(path);

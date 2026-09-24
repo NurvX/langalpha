@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useMemo } from 'react';
-import { ArrowLeft, Brain, FileText, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, BookMarked, FileText, RefreshCw, X } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
 import { useTranslation } from 'react-i18next';
 import {
@@ -315,7 +315,7 @@ export default function MemoryPanel({
         {!list.loading && !list.error && sorted.length === 0 && (
           <div className="px-4 py-8 flex flex-col items-center gap-3 text-center"
                style={{ color: 'var(--color-text-tertiary)' }}>
-            <Brain className="h-8 w-8 opacity-40" />
+            <BookMarked className="h-8 w-8 opacity-40" />
             <div className="text-xs max-w-[16rem]">
               <div>
                 {tier === 'user'

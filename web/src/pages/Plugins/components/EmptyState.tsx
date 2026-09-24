@@ -33,14 +33,8 @@ export function EmptyState({
   }
   return (
     <div
-      className="flex flex-col items-center gap-3 rounded-lg border px-6 py-10 text-center"
-      style={{
-        borderColor: 'var(--color-border-muted)',
-        backgroundImage:
-          'radial-gradient(circle at center, var(--color-dot-grid) 0.75px, transparent 0.75px)',
-        backgroundSize: '18px 18px',
-        backgroundPosition: '0 0',
-      }}
+      className="dot-grid flex flex-col items-center gap-3 rounded-lg border px-6 py-10 text-center"
+      style={{ borderColor: 'var(--color-border-muted)' }}
     >
       <p className="text-sm max-w-md" style={{ color: 'var(--color-text-tertiary)' }}>
         {message}

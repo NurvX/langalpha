@@ -97,15 +97,48 @@ export interface PreviewSpec {
   command?: string;
 }
 
-/** What a chart tab is opened with. The symbol is the identity; the interval is where it starts. */
+/**
+ * What a chart tab is opened with. The symbol is the identity; the interval is
+ * where it starts. `workspaceId` is whose annotations the chart draws, when an
+ * artifact names one other than the panel's; absent, the panel's own.
+ */
 export interface ChartTabSpec {
   symbol: string;
   timeframe?: string;
+  workspaceId?: string;
 }
 
 /**
- * What the right panel is currently pointed at: one discriminated value, so
- * exactly one target is set at a time and the active tab derives from `.kind`.
+ * What a tool tab is opened with: the call id alone. A tab holds no record of
+ * its own; it reads the transcript's live one at render, since stream handlers
+ * replace a call's record as its result lands, and a copy taken at click time
+ * would show a running call forever.
+ */
+export interface ToolTabSpec {
+  toolCallId: string;
+}
+
+export interface PlanData {
+  description?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * What a plan tab is opened with. Plans are one per approval interrupt, so a
+ * thread with a rejected plan and its successor has two, and the id keeps a
+ * pinned one from being retargeted. The text itself never changes once
+ * proposed, so it can travel with the ask.
+ */
+export interface PlanTabSpec {
+  planId: string;
+  plan: PlanData;
+}
+
+/**
+ * What the chat last asked the panel to show: one discriminated value, set by
+ * the landing, consumed by `usePanelTarget` and cleared by the handled
+ * callback once the tab it names has it. It is an ask, not the panel's state:
+ * the strip decides what is in front.
  *
  * `dir` outlives the click that set it: it is the tree's active filter, shown
  * in the header and cleared by the back button. So it cannot also say that a
@@ -127,17 +160,30 @@ export type PanelTarget =
   | ({ kind: 'preview'; seq: number } & PreviewSpec)
   /** A live market chart; it opens as a tab in the Files panel, one per symbol. */
   | ({ kind: 'chart'; seq: number } & ChartTabSpec)
-  | { kind: 'memory'; key: string; tier: MemoryTier }
-  | { kind: 'memo'; key: string }
-  | { kind: 'sources'; messageId: string }
-  | { kind: 'status' };
+  /** A tool call's result, opened as a tab in the Files panel. */
+  | ({ kind: 'tool'; seq: number } & ToolTabSpec)
+  /** A plan's text, opened as a tab in the Files panel. */
+  | ({ kind: 'plan'; seq: number } & PlanTabSpec)
+  /** A turn's provenance, opened as a tab in the Files panel. */
+  | { kind: 'sources'; seq: number; messageId: string }
+  /** An entry in the reader's memory store, opened in the singleton Memory tab. */
+  | { kind: 'memory'; seq: number; key: string; tier: MemoryTier }
+  /** An entry in the memo store; `''` opens the Memo tab on its list. */
+  | { kind: 'memo'; seq: number; key: string }
+  /** The live market watch, opened in the singleton Status tab. */
+  | { kind: 'status'; seq: number };
 
-/** The kinds the Files tab owns: it consumes each and clears it once handled. */
-export const FILES_PANEL_KINDS = ['file', 'preview', 'chart'] as const satisfies readonly PanelTarget['kind'][];
-export type FilesPanelKind = (typeof FILES_PANEL_KINDS)[number];
+/**
+ * The kinds the panel consumes on arrival and clears once handled. A memory
+ * or memo target outlives its arrival: the tab it opens selects the entry
+ * once the store's list resolves, and clears the target itself then. Either
+ * way the clear names the ask's `seq`, so an ask landed in between is kept.
+ */
+export const ONE_SHOT_KINDS = ['file', 'preview', 'chart', 'tool', 'plan', 'sources', 'status'] as const satisfies readonly PanelTarget['kind'][];
+export type OneShotKind = (typeof ONE_SHOT_KINDS)[number];
 
-export function isFilesPanelKind(kind: PanelTarget['kind'] | null | undefined): kind is FilesPanelKind {
-  return (FILES_PANEL_KINDS as readonly string[]).includes(kind ?? '');
+export function isOneShotKind(kind: PanelTarget['kind'] | null | undefined): kind is OneShotKind {
+  return (ONE_SHOT_KINDS as readonly string[]).includes(kind ?? '');
 }
 
 /** A target as a caller states it; the landing stamps `seq`. */

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useMemo, useCallback, useState, memo } from 'react';
-import { createChart, ColorType } from 'lightweight-charts';
+import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineSeries } from 'lightweight-charts';
 import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
@@ -14,6 +14,7 @@ import { useTheme } from '../../../../contexts/ThemeContext';
 import { createThemeResolver, useThemeTokens } from '@/lib/themeTokens';
 import { useTranslation } from 'react-i18next';
 import { buildMarketViewUrl } from '@/pages/MarketView/utils/marketRoute';
+import { useRouteLeaveGuard } from '../../contexts/RouteLeaveGuardContext';
 
 // ─── Shared Constants ───────────────────────────────────────────────
 
@@ -133,12 +134,13 @@ function OpenInMarketLink({ symbol }: OpenInMarketLinkProps): React.ReactElement
   const { t } = useTranslation();
   const navigate = useNavigate();
   const params = useParams();
+  const guardLeave = useRouteLeaveGuard();
   if (!symbol) return null;
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     // The current chat route lets MarketView offer a "Return to Chat" button
-    navigate(buildMarketViewUrl({ symbol, returnTo: params.threadId ? `/chat/t/${params.threadId}` : null }));
+    guardLeave(() => navigate(buildMarketViewUrl({ symbol, returnTo: params.threadId ? `/chat/t/${params.threadId}` : null })));
   };
 
   return (
@@ -329,14 +331,14 @@ export function StockPriceChart({ data }: DataProps): React.ReactElement {
     chartRef.current = chart;
 
     // Candlestick series
-    candleSeriesRef.current = chart.addCandlestickSeries({
+    candleSeriesRef.current = chart.addSeries(CandlestickSeries, {
       upColor: ct.up, downColor: ct.down,
       borderDownColor: ct.down, borderUpColor: ct.up,
       wickDownColor: ct.down, wickUpColor: ct.up,
     });
 
     // Volume histogram series (bottom 20%)
-    volumeSeriesRef.current = chart.addHistogramSeries({
+    volumeSeriesRef.current = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
     });
@@ -347,7 +349,7 @@ export function StockPriceChart({ data }: DataProps): React.ReactElement {
     // MA line series (daily only)
     if (chartInterval === 'daily') {
       [{ period: 20, color: MA_BLUE }, { period: 50, color: MA_ORANGE }].forEach(({ period, color }) => {
-        maSeriesRefs.current[period] = chart.addLineSeries({
+        maSeriesRefs.current[period] = chart.addSeries(LineSeries, {
           color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
         });
       });
@@ -1400,7 +1402,7 @@ function MiniCandlestick({ ohlcv, height = 180 }: MiniCandlestickProps): React.R
     });
     chartRef.current = chart;
 
-    const series = chart.addCandlestickSeries({
+    const series = chart.addSeries(CandlestickSeries, {
       upColor: ct.up,
       downColor: ct.down,
       borderDownColor: ct.down,

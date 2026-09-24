@@ -75,7 +75,7 @@ import { MobileBottomSheet } from '@/components/ui/mobile-bottom-sheet';
 
 
 
-const RightPanel = React.lazy(() => import('./RightPanel'));
+const FilePanel = React.lazy(() => import('./FilePanel'));
 const DetailPanel = React.lazy(() => import('./DetailPanel'));
 const PreviewViewer = React.lazy(() => import('./viewers/PreviewViewer'));
 
@@ -94,6 +94,8 @@ import { useTurnEndScroll } from './chatView/useTurnEndScroll';
 import { useSubagentTabs } from './chatView/useSubagentTabs';
 import { publishSidebarAgents, clearSidebarAgents } from './sidebarAgentsBridge';
 import { useRightPanel } from './chatView/useRightPanel';
+import { usePanelChartSelections } from './chatView/usePanelChartSelections';
+import { SelectionChips } from '@/pages/MarketView/components/SelectionChips';
 import { useMessageActionBundles } from './chatView/useMessageActionBundles';
 
 
@@ -195,6 +197,13 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     finalizePendingTodos,
     clearSubagentCards,
   } = useCardState();
+
+  // Every subagent's own messages, so a tool row clicked in one of their
+  // transcripts resolves to its live record the way a main-thread row does.
+  const subagentTranscripts = useMemo(
+    () => Object.values(cards).flatMap((card) => (card.subagentData?.messages ? [card.subagentData.messages] : [])),
+    [cards],
+  );
 
   // Sync onboarding_completed via PUT when ChatAgent completes onboarding (risk_preference + stocks)
   const handleOnboardingRelatedToolComplete = useCallback(async () => {
@@ -681,6 +690,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     }
   }, [isCompacting, isLoading, handleStop, stableStopCompaction]);
 
+  const { chips: chartSelectionChips, takeForSend: takeChartSelections } = usePanelChartSelections(isActive);
+
   // Wrapper: converts ChatInput's (message, planMode, attachments, slashCommands) into
   // handleSendMessage(message, planMode, additionalContext, attachmentMeta)
   const handleSendWithAttachments = useCallback((message: string, planMode: boolean, attachments: Attachment[] = [], slashCommands: SlashCommand[] = [], modelOptions: ModelOptions = {}) => {
@@ -730,9 +741,22 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       contexts.push(...(items as unknown as Record<string, unknown>[]));
     }
 
+    // Regions and price levels picked on a panel chart tab.
+    const picked = takeChartSelections(message);
+    if (picked) {
+      contexts.push(...picked.contexts);
+      if (picked.attachments.length > 0) attachmentMeta = [...(attachmentMeta ?? []), ...picked.attachments];
+    }
+
     const additionalContext = contexts.length > 0 ? contexts : null;
-    stableSendMessage(message, planMode, additionalContext, attachmentMeta, modelOptions);
-  }, [marketWatchEnabled, stableSendMessage]);
+    stableSendMessage(
+      picked?.outgoingMessage ?? message,
+      planMode,
+      additionalContext,
+      attachmentMeta,
+      picked ? { ...modelOptions, chartSelections: picked.snapshots } : modelOptions,
+    );
+  }, [marketWatchEnabled, stableSendMessage, takeChartSelections]);
 
   // Handle action-type slash commands (e.g. /compact, /compaction, /offload)
   const handleAction = useCallback((cmd: ActionCommand) => {
@@ -902,14 +926,17 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     handleRefreshPreview,
     handleToggleFilePanel,
     handleFilesDirtyChange,
+    handleActiveTabKindChange,
+    activeTabKind,
     confirmLeaveFiles,
     handleOpenPreview,
     handleOpenChart,
     handleOpenInMarketView,
     detailToolCall,
     detailPlanData,
-    sourcesRecords,
-    allSourcesRecords,
+    getToolCallProcess,
+    getSourcesRecords,
+    getAllSourcesRecords,
     getRecentWritePaths,
     getWriteLog,
   } = useRightPanel({
@@ -920,7 +947,11 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     isActive,
     containerRef,
     setFilePanelWorkspaceId,
+    filePanelWorkspaceId,
+    isFlashMode,
     messages,
+    subagentTranscripts,
+    watching: showWatchChip,
   });
 
   // Keep the ref in sync so SSE events (via handleOpenPreviewFromStream) use the latest closure
@@ -1528,6 +1559,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                           isLoadingHistory={isLoadingHistory}
                           feedbackByTurn={feedbackByTurn}
                           flashContext={flashContext}
+                          workspaceDirName={workspaceRecord?.dir_name}
                         />
                       </MessageActionsProvider>
                     </div>
@@ -1606,6 +1638,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                               messages={activeAgent.messages as MessageRecord[]}
                               isSubagentView={true}
                               isLoading={subagentTurnLive}
+                              workspaceDirName={workspaceRecord?.dir_name}
                             />
                           </MessageActionsProvider>
                         </div>
@@ -1761,9 +1794,11 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                         {t('chat.queuedSend')}
                       </div>
                     )}
+                    <SelectionChips chips={chartSelectionChips} />
                     <ChatInput
                       ref={chatInputRef}
                       onSend={handleSendWithAttachments}
+                      hasExternalContext={chartSelectionChips.length > 0}
                       disabled={isLoadingHistory || !workspaceId || !!pendingInterrupt}
                       onStop={handleStopButton}
                       isLoading={isLoading}
@@ -1819,7 +1854,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
             <DetailPanel
               toolCallProcess={detailToolCall}
               planData={detailPlanData}
-              onClose={handleCloseDetailPanel}
               onOpenFile={handleOpenFileFromChat}
               onOpenSubagentTask={handleOpenSubagentTask}
             />
@@ -1864,7 +1898,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
             initial={{ x: '100%' }}
             animate={{ x: 0 }}
             transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-            drag="x"
+            // A chart pans with the same rightward swipe, so a chart tab closes by its button.
+            drag={activeTabKind === 'chart' ? false : 'x'}
             dragConstraints={{ left: 0, right: 0 }}
             dragElastic={{ left: 0, right: 0.5 }}
             onDragEnd={(_: unknown, info: PanInfo) => {
@@ -1880,18 +1915,22 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
             <div className="flex-shrink-0 h-full" style={{ width: '100%' }}>
               <Suspense fallback={null}>
                 <WorkspaceProvider workspaceId={effectiveFileWorkspaceId || workspaceId} downloadFile={null}>
-                <RightPanel
+                <FilePanel
                   workspaceId={effectiveFileWorkspaceId || workspaceId}
                   threadId={panelThreadId}
+                  isActive={isActive}
                   onClose={() => { setRightPanelType(null); popPanelHistory(); }}
                   onDirtyChange={handleFilesDirtyChange}
-                  panelTarget={panelTarget}
+                  onActiveTabKindChange={handleActiveTabKindChange}
+                  target={panelTarget}
                   onTargetHandled={handleTargetHandled}
                   onTargetMemoryHandled={handleTargetMemoryHandled}
                   onTargetMemoHandled={handleTargetMemoHandled}
                   onOpenInMarketView={handleOpenInMarketView}
-                  sourcesRecords={sourcesRecords}
-                  allSourcesRecords={allSourcesRecords}
+                  onOpenSubagentTask={handleOpenSubagentTask}
+                  getToolCallProcess={getToolCallProcess}
+                  getSourcesRecords={getSourcesRecords}
+                  getAllSourcesRecords={getAllSourcesRecords}
                   marketWatch={marketWatch}
                   onOpenFile={handleOpenFileFromChat}
                   getRecentWritePaths={getRecentWritePaths}
@@ -1943,18 +1982,22 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                 <Suspense fallback={null}>
                   {rightPanelType === 'file' ? (
                     <WorkspaceProvider workspaceId={effectiveFileWorkspaceId || workspaceId} downloadFile={null}>
-                    <RightPanel
+                    <FilePanel
                       workspaceId={effectiveFileWorkspaceId || workspaceId}
                       threadId={panelThreadId}
+                      isActive={isActive}
                       onClose={() => { setRightPanelType(null); popPanelHistory(); }}
                       onDirtyChange={handleFilesDirtyChange}
-                      panelTarget={panelTarget}
+                      onActiveTabKindChange={handleActiveTabKindChange}
+                      target={panelTarget}
                       onTargetHandled={handleTargetHandled}
                       onTargetMemoryHandled={handleTargetMemoryHandled}
                       onTargetMemoHandled={handleTargetMemoHandled}
                       onOpenInMarketView={handleOpenInMarketView}
-                      sourcesRecords={sourcesRecords}
-                      allSourcesRecords={allSourcesRecords}
+                      onOpenSubagentTask={handleOpenSubagentTask}
+                      getToolCallProcess={getToolCallProcess}
+                      getSourcesRecords={getSourcesRecords}
+                      getAllSourcesRecords={getAllSourcesRecords}
                       marketWatch={marketWatch}
                       onOpenFile={handleOpenFileFromChat}
                       getRecentWritePaths={getRecentWritePaths}
@@ -1976,14 +2019,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       onCopyShareLink={isFlashMode ? null : handleCopyShareLink}
                     />
                     </WorkspaceProvider>
-                  ) : rightPanelType === 'detail' && (detailToolCall || detailPlanData) ? (
-                    <DetailPanel
-                      toolCallProcess={detailToolCall}
-                      planData={detailPlanData}
-                      onClose={handleCloseDetailPanel}
-                      onOpenFile={handleOpenFileFromChat}
-                      onOpenSubagentTask={handleOpenSubagentTask}
-                    />
                   ) : null}
                 </Suspense>
               </div>

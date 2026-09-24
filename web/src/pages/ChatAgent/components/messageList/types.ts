@@ -11,8 +11,7 @@ export type MessageRecord = Record<string, unknown>;
  * `process` keeps cards and activity summaries visible when there is no answer. */
 export type FoldState = 'unfolded' | 'live' | 'collapsed' | 'process' | 'expanded';
 
-/** Loosely typed tool call process record */
-export type ToolCallProcessRecord = Record<string, unknown>;
+export type { ToolCallProcessRecord } from '../ToolCallDetailView';
 
 /** Content segment from message data */
 export interface ContentSegmentRecord {

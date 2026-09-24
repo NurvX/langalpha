@@ -25,6 +25,7 @@ import { loadPref, savePref } from './utils/prefs';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 import { useStockData } from './hooks/useStockData';
+import { useStockQuoteModel } from './hooks/useStockQuoteModel';
 import { useChartAnnotationSync } from './hooks/useChartAnnotationSync';
 import { getOrFetchFlashWorkspaceId } from './utils/flashWorkspace';
 import { marketViewAnnotationContext } from './constants/annotationPrompt';
@@ -332,6 +333,19 @@ function MarketViewInner() {
   // belongs to the current symbol (prevents stale data flash when switching tickers).
   const realTimePriceMatch = realTimePrice?.symbol === selectedStock ? realTimePrice : null;
   const displayPrice = wsPrices.get(selectedStock) || realTimePriceMatch;
+  const wsHasData = !!wsPrices.get(selectedStock);
+  const quote = useStockQuoteModel({
+    symbol: selectedStock,
+    stockInfo,
+    realTimePrice: displayPrice,
+    quoteData: (overviewData as OverviewData | null)?.quote || null,
+    snapshot: snapshotData,
+    marketStatus,
+    wsStatus,
+    wsHasData,
+    marketPhase,
+    displayOverride: selectedStockDisplay,
+  });
 
   // A confirmed chart selection for the live chart rides on send (even with an
   // empty box), so let the mobile input treat it as sendable content.
@@ -614,21 +628,15 @@ function MarketViewInner() {
         <div className="market-mobile-layout">
           <StockHeader
             symbol={selectedStock}
-            stockInfo={stockInfo}
-            realTimePrice={displayPrice}
+            quote={quote}
             chartMeta={chartMeta}
-            displayOverride={selectedStockDisplay}
             onToggleOverview={() => setShowOverview(v => !v)}
             onSwitchSymbol={handleStockSearch}
             onOpenWatchlist={() => setMobileTab('watchlist')}
             wsStatus={wsStatus}
-            wsHasData={!!wsPrices.get(selectedStock)}
+            wsHasData={wsHasData}
             wsDataLevel={wsDataLevel}
             ginlixDataEnabled={ginlixDataEnabled}
-            quoteData={(overviewData as OverviewData | null)?.quote || null}
-            marketStatus={marketStatus}
-            snapshot={snapshotData}
-            marketPhase={marketPhase}
           />
 
           {/* Chart fills remaining space */}
@@ -744,20 +752,14 @@ function MarketViewInner() {
             <div className="market-left-panel">
               <StockHeader
                 symbol={selectedStock}
-                stockInfo={stockInfo}
-                realTimePrice={displayPrice}
+                quote={quote}
                 chartMeta={chartMeta}
-                displayOverride={selectedStockDisplay}
                 onToggleOverview={() => setShowOverview(v => !v)}
                 onSwitchSymbol={handleStockSearch}
                 wsStatus={wsStatus}
-                wsHasData={!!wsPrices.get(selectedStock)}
+                wsHasData={wsHasData}
                 wsDataLevel={wsDataLevel}
                 ginlixDataEnabled={ginlixDataEnabled}
-                quoteData={(overviewData as OverviewData | null)?.quote || null}
-                marketStatus={marketStatus}
-                snapshot={snapshotData}
-                marketPhase={marketPhase}
               />
               <div className="market-chart-area">
                 {showOverview && (

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { ArrowRight, ChevronRight, ExternalLink, FileText } from 'lucide-react';
-import { stripLineNumbers, parseTruncatedResult } from './toolDisplayConfig';
+import { isTaskTool, parseTruncatedResult, stripLineNumbers } from './toolDisplayConfig';
 import {
   StockPriceChart,
   CompanyOverviewCard,
@@ -79,13 +79,13 @@ export default function ToolCallDetailView({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const toolName = toolCallProcess.toolName || '';
-  const isTaskTool = toolName === 'Task' || toolName === 'task';
+  const isTask = isTaskTool(toolName);
   const artifact = toolCallProcess.toolCallResult?.artifact;
   const content = toolCallProcess.toolCallResult?.content;
 
-  const subagentType = isTaskTool ? ((toolCallProcess.toolCall?.args?.subagent_type as string) || 'general-purpose') : '';
-  const subagentDescription = isTaskTool ? ((toolCallProcess.toolCall?.args?.description as string) || '') : '';
-  const subagentId = isTaskTool ? toolCallProcess.toolCall?.id ?? null : null;
+  const subagentType = isTask ? ((toolCallProcess.toolCall?.args?.subagent_type as string) || 'general-purpose') : '';
+  const subagentDescription = isTask ? ((toolCallProcess.toolCall?.args?.description as string) || '') : '';
+  const subagentId = isTask ? toolCallProcess.toolCall?.id ?? null : null;
 
   return (
     <>
@@ -110,7 +110,7 @@ export default function ToolCallDetailView({
         className={`${isMobile && artifact?.type !== 'sec_filing' ? '' : 'flex-1'} px-4 py-4 overflow-x-hidden ${artifact?.type === 'sec_filing' ? 'flex flex-col overflow-hidden' : (isMobile ? '' : 'overflow-y-auto')}`}
         style={isMobile && artifact?.type !== 'sec_filing' ? undefined : { minHeight: 0 }}
       >
-        {isTaskTool ? (
+        {isTask ? (
           <TaskToolContent
             description={subagentDescription}
             type={subagentType}

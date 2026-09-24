@@ -18,9 +18,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from src.server.app.share_access import ShareScope
+from src.server.app.share_access import ShareScope, shared_path_visible
 from src.server.app.share_files import (
     download_shared_file,
+    list_shared_files,
+    read_shared_file,
     serve_shared_file,
 )
 from src.server.app.workspace_files._containment import (
@@ -496,6 +498,64 @@ def test_share_scope_contains() -> None:
     assert one_report.contains("work/report/charts/a.png")
     assert not one_report.contains("work/report-2/a.html")
     assert not one_report.contains("work/other.html")
+
+
+# --- the workspace's own notes file ---------------------------------------
+#
+# The agent keeps runtime context in ``agent.md`` at the folder root. A share
+# carries no folder name, so the shared page cannot tell it from a
+# deliverable; the routes leave it out instead. Only the root file: a nested
+# ``docs/agent.md`` is a file the user asked for.
+
+_SHARE_WARM = "src.server.app.share_files.warm_sandbox"
+
+
+def test_share_gate_hides_the_notes_file_at_the_folder_root_only() -> None:
+    whole = ShareScope(WS_ID, "")
+    assert not shared_path_visible(whole, "agent.md")
+    assert shared_path_visible(whole, "docs/agent.md")
+    assert shared_path_visible(whole, "work/report.html")
+    # A token minted for the notes file itself opens nothing.
+    assert not shared_path_visible(ShareScope(WS_ID, "agent.md"), "agent.md")
+
+
+@pytest.mark.asyncio
+async def test_shared_listing_leaves_out_the_notes_file(tree) -> None:
+    rows = [{"path": p} for p in ("agent.md", "docs/agent.md", "work/report.html")]
+    with (
+        patch(_SHARE_THREAD, AsyncMock(return_value=_shared_thread())),
+        patch(_SHARE_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_SHARE_WD, return_value=tree.root),
+        patch(_SHARE_WARM, return_value=None),
+        patch(_SHARE_FP) as fp,
+    ):
+        fp.get_file_tree = AsyncMock(return_value=rows)
+        listing = await list_shared_files("tok", path=".")
+    assert listing["files"] == ["docs/agent.md", "work/report.html"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "spelling", ["agent.md", "/agent.md", "./agent.md", "{root}/agent.md"]
+)
+async def test_shared_read_refuses_the_notes_file_before_any_lookup(
+    tree, spelling: str
+) -> None:
+    """404, the answer an absent path gets, and the manifest is never asked."""
+    with (
+        patch(_SHARE_THREAD, AsyncMock(return_value=_shared_thread())),
+        patch(_SHARE_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_SHARE_WD, return_value=tree.root),
+        patch(_SHARE_WARM, return_value=None),
+        patch(_SHARE_FP) as fp,
+    ):
+        fp.get_file_content = AsyncMock(return_value={"content": "notes"})
+        with pytest.raises(HTTPException) as exc:
+            await read_shared_file(
+                "tok", path=spelling.format(root=tree.root), offset=0, limit=100
+            )
+    assert exc.value.status_code == 404
+    fp.get_file_content.assert_not_called()
 
 
 @pytest.mark.asyncio

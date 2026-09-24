@@ -162,8 +162,9 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
   // Stable, because `ActivityBlock` is memoized and its other props survive a
   // render that only advanced the typewriter. A fresh closure here would hand
   // it a new identity on every streamed token and re-render every tool row.
+  // An activity row's id is its tool call id (see `toolActivity`).
   const onActivityToolClick = useCallback(
-    (item: ActivityItem) => onToolCallDetailClick?.({ ...item }),
+    (item: ActivityItem) => onToolCallDetailClick?.(item.id),
     [onToolCallDetailClick],
   );
 
@@ -286,7 +287,7 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
             <div key={block.key}>
               <ChartComponent
                 artifact={artifact!}
-                onClick={() => openCardTarget(artifact, onOpenChart, () => onToolCallDetailClick?.((block as CompactArtifactRenderBlock).proc))}
+                onClick={() => openCardTarget(artifact, onOpenChart, () => onToolCallDetailClick?.((block as CompactArtifactRenderBlock).toolCallId))}
               />
             </div>
           );
@@ -349,7 +350,8 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
         }
 
         if (block.type === 'plan_approval') {
-          const pd = planApprovals[(block as PlanApprovalRenderBlock).segment.planApprovalId!];
+          const planApprovalId = (block as PlanApprovalRenderBlock).segment.planApprovalId!;
+          const pd = planApprovals[planApprovalId];
           if (!pd) return null;
           return (
             <PlanApprovalCard
@@ -357,7 +359,7 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
               planData={pd as any} // TODO: type properly, PlanData not exported
               onApprove={readOnly ? undefined : onApprovePlan}
               onReject={readOnly ? undefined : onRejectPlan}
-              onDetailClick={readOnly ? undefined : () => onPlanDetailClick?.(pd)}
+              onDetailClick={readOnly ? undefined : () => onPlanDetailClick?.(planApprovalId, pd)}
             />
           );
         }

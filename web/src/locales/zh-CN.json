@@ -1316,7 +1316,8 @@
     "permissions": "权限",
     "allowFileBrowsing": "允许浏览文件",
     "allowFileDownload": "允许下载文件",
-    "anyoneWithLink": "任何拥有此链接的人都可以查看对话。"
+    "anyoneWithLink": "任何拥有此链接的人都可以查看对话。",
+    "signInForChart": "登录后可打开实时图表。"
   },
   "chat": {
     "backToWorkflow": "返回工作流",
@@ -1683,14 +1684,13 @@
     },
     "chartAnnotationCard": {
       "openAnnotatedChart": "打开标注图表",
-      "openInPanel": "在面板中打开",
+      "openChart": "打开图表",
       "loadingChart": "正在加载图表…",
       "previewUnavailable": "预览不可用",
-      "close": "关闭",
       "cardAria_one": "{{symbol}} {{timeframe}}，{{count}} 个标注。打开标注图表。",
       "cardAria_other": "{{symbol}} {{timeframe}}，{{count}} 个标注。打开标注图表。",
-      "dialogTitle_one": "{{symbol}} {{timeframe}} · {{count}} 个标注",
-      "dialogTitle_other": "{{symbol}} {{timeframe}} · {{count}} 个标注",
+      "cardAriaPricesOnly_one": "{{symbol}} {{timeframe}}，{{count}} 个标注。打开图表。",
+      "cardAriaPricesOnly_other": "{{symbol}} {{timeframe}}，{{count}} 个标注。打开图表。",
       "chipJumpTitle": "将图表切换到 {{symbol}} · {{timeframe}} 以显示这些标注",
       "chipShowTitle": "在图表上显示这些标注",
       "chipShownTitle": "已显示在图表上",
@@ -1754,6 +1754,14 @@
     "add": "添加"
   },
   "filePanel": {
+    "tabs": {
+      "files": "工作区",
+      "memory": "记忆",
+      "memo": "备忘录",
+      "status": "状态"
+    },
+    "planTab": "计划",
+    "sourcesTab": "来源（{{count}}）",
     "changedSinceRead": "打开后文件已变更",
     "closeTab": "关闭 {{name}}",
     "deleteConfirm": "删除 {{count}} 个？",
@@ -1920,16 +1928,6 @@
       "retry": "重试",
       "download": "改为下载"
     }
-  },
-  "rightPanel": {
-    "tabs": {
-      "files": "工作区",
-      "memory": "记忆",
-      "memo": "备忘录",
-      "sources": "数据来源",
-      "status": "状态"
-    },
-    "close": "关闭面板"
   },
   "memoryPanel": {
     "backToList": "返回记忆列表",
@@ -2247,6 +2245,8 @@
     "status": "状态",
     "planDetails": "计划详情",
     "noPlanDescription": "暂无计划描述。",
+    "toolCallGone": "此工具调用已不在对话中。请关闭标签页，或从对话中重新打开该调用。",
+    "toolCallGoneDialog": "此工具调用已不在对话中。请从对话中重新打开该调用。",
     "subagentTask": "子 Agent 任务",
     "instructions": "指令",
     "goToSubagentTab": "前往子 Agent 标签",
@@ -2740,6 +2740,22 @@
   },
   "marketView": {
     "companyOverview": "公司概览",
+    "quote": {
+      "live": "实时",
+      "closed": "已收盘",
+      "delayed": "延迟",
+      "source": "数据源：{{label}}",
+      "open": "开",
+      "high": "高",
+      "low": "低",
+      "close": "收",
+      "volume": "量",
+      "avgVolume3m": "3 个月均量",
+      "prevClose": "昨收",
+      "range52w": "52 周",
+      "change": "涨跌",
+      "changeExt": "涨跌（含盘前盘后）"
+    },
     "symbolSearch": {
       "switchSymbol": "切换标的，当前为 {{symbol}}",
       "changeSymbol": "更换股票",

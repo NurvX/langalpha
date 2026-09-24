@@ -1,7 +1,7 @@
 import React, { Suspense, useCallback, useMemo } from 'react';
 import { ExternalLink, TextSelect } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { HeaderPill } from '@/pages/MarketView/components/HeaderPill';
+import { ChartToolButton } from '@/pages/MarketView/components/ChartToolButton';
 import type { ChartTabSpec, ContextPayload } from './types';
 import type { FileTab, FileTabsApi } from './useFileTabs';
 import './ChartTab.css';
@@ -33,6 +33,8 @@ interface ChartTabProps {
 export function ChartTab({ tab, tabs, workspaceId, onAddContext, onOpenInMarketView }: ChartTabProps): React.ReactElement {
   const { t } = useTranslation();
   const { id, symbol, timeframe } = tab;
+  // An artifact from another workspace opens on that workspace's drawings.
+  const chartWorkspaceId = tab.workspaceId ?? workspaceId;
   const { patchTab, retargetChart } = tabs;
 
   // The chart is a live view, so the context it hands over is a pointer to
@@ -53,21 +55,23 @@ export function ChartTab({ tab, tabs, workspaceId, onAddContext, onOpenInMarketV
 
   const onSwitchSymbol = useCallback((next: string) => retargetChart(id, next), [retargetChart, id]);
 
-  const openInMarketView = useCallback(() => onOpenInMarketView?.({ symbol, timeframe }), [onOpenInMarketView, symbol, timeframe]);
+  // The page opens on the same drawings the tab shows.
+  const openInMarketView = useCallback(
+    () => onOpenInMarketView?.({ symbol, timeframe, workspaceId: tab.workspaceId }),
+    [onOpenInMarketView, symbol, timeframe, tab.workspaceId],
+  );
 
   const headerActions = useMemo(() => (
     <>
       {onAddContext && (
-        <HeaderPill onClick={addToContext} title={t('filePanel.addChartToContext')}>
-          <TextSelect size={13} />
-          {t('filePanel.addChartToContext')}
-        </HeaderPill>
+        <ChartToolButton onClick={addToContext} title={t('filePanel.addChartToContext')}>
+          <TextSelect size={14} />
+        </ChartToolButton>
       )}
       {onOpenInMarketView && (
-        <HeaderPill onClick={openInMarketView} title={t('filePanel.openInMarketView')}>
-          <ExternalLink size={13} />
-          {t('filePanel.openInMarketView')}
-        </HeaderPill>
+        <ChartToolButton onClick={openInMarketView} title={t('filePanel.openInMarketView')}>
+          <ExternalLink size={14} />
+        </ChartToolButton>
       )}
     </>
   ), [onAddContext, addToContext, onOpenInMarketView, openInMarketView, t]);
@@ -78,10 +82,13 @@ export function ChartTab({ tab, tabs, workspaceId, onAddContext, onOpenInMarketV
         <MarketChartSurface
           symbol={symbol}
           timeframe={timeframe}
-          workspaceId={workspaceId}
+          workspaceId={chartWorkspaceId}
           onIntervalChange={rememberInterval}
           onSwitchSymbol={onSwitchSymbol}
           headerActions={headerActions}
+          // Picks go out with the thread's composer, so only a host with one gets the tools.
+          selectionTools={onAddContext != null}
+          variant="compact"
         />
       </div>
     </Suspense>

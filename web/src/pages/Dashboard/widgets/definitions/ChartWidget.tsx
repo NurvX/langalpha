@@ -13,6 +13,10 @@ import {
   type ISeriesApi,
   type MouseEventParams,
   type UTCTimestamp,
+  AreaSeries,
+  CandlestickSeries,
+  HistogramSeries,
+  LineSeries,
 } from 'lightweight-charts';
 import { useSymbolSearch } from '@/hooks/useSymbolSearch';
 import { normalizeSymbolInput, readTypedTicker } from '@/lib/marketUtils';
@@ -34,8 +38,8 @@ import {
   WS_FOLD_INTERVALS,
   isUSEquity,
   fetchStockData,
-  centerLatestBarView,
   computeInitialLoadRange,
+  defaultBarsView,
   dedupeMergeByTime,
   rangeBeforeOldest,
   currencySymbol,
@@ -424,11 +428,11 @@ function ChartWidget({ instance, updateConfig }: WidgetRenderProps<ChartConfig>)
     setSummary({ first, last });
   }, []);
 
-  // --- Default view: mirror MarketView's convention — latest bar centered
-  // at `TARGET_BAR_SPACING[interval]` pixels per bar. Keeps the candlestick
-  // ratio and scroll feel consistent between the widget and the full chart
-  // page. Half the chart width is reserved as empty future-space on the
-  // right (same as `centerLatestBarView`).
+  // --- Default view: mirror MarketView's framing (`defaultBarsView`): the
+  // latest bar centered at `TARGET_BAR_SPACING[interval]` pixels per bar with
+  // room to the right while the widget is wide, the bars packed with a gutter
+  // once it is narrow. Keeps the candlestick ratio and scroll feel consistent
+  // between the widget and the full chart page.
   const applyDefaultView = useCallback(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -445,7 +449,7 @@ function ChartWidget({ instance, updateConfig }: WidgetRenderProps<ChartConfig>)
       containerRef.current?.clientWidth ||
       800;
     ts.setVisibleLogicalRange(
-      centerLatestBarView({ chartWidth, barSpacing, dataLen: bars.length }),
+      defaultBarsView({ defaultView: 'centered', chartWidth, barSpacing, dataLen: bars.length }),
     );
   }, []);
 
@@ -563,7 +567,7 @@ function ChartWidget({ instance, updateConfig }: WidgetRenderProps<ChartConfig>)
     });
     chartRef.current = chart;
 
-    const volume = chart.addHistogramSeries({
+    const volume = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
       color: 'rgba(128,128,128,0.3)',
@@ -713,7 +717,7 @@ function ChartWidget({ instance, updateConfig }: WidgetRenderProps<ChartConfig>)
 
     let next: ISeriesApi<'Candlestick'> | ISeriesApi<'Area'> | ISeriesApi<'Line'>;
     if (config.chartType === 'candle') {
-      next = chart.addCandlestickSeries({
+      next = chart.addSeries(CandlestickSeries, {
         upColor: ct.upColor,
         downColor: ct.downColor,
         borderVisible: false,
@@ -722,7 +726,7 @@ function ChartWidget({ instance, updateConfig }: WidgetRenderProps<ChartConfig>)
         priceFormat: priceFmt,
       });
     } else if (config.chartType === 'area') {
-      next = chart.addAreaSeries({
+      next = chart.addSeries(AreaSeries, {
         lineColor: changeColor,
         topColor: positive ? ct.baselineUpFill1 : ct.baselineDownFill2,
         bottomColor: positive ? ct.baselineUpFill2 : ct.baselineDownFill1,
@@ -732,7 +736,7 @@ function ChartWidget({ instance, updateConfig }: WidgetRenderProps<ChartConfig>)
         priceFormat: priceFmt,
       });
     } else {
-      next = chart.addLineSeries({
+      next = chart.addSeries(LineSeries, {
         color: changeColor,
         lineWidth: 2,
         priceLineVisible: false,

@@ -66,6 +66,15 @@ export function createDateFormatter(opts: Intl.DateTimeFormatOptions): (d: Date 
 // full; suffix style follows the active locale (en `K`, zh `万`, etc).
 export const compactNumber = createFormatter({ notation: 'compact', maximumFractionDigits: 1 });
 
+// The quote-strip variants. Two fixed decimals so a column of figures keeps
+// its width from one tick to the next; grouping off because a stock price
+// reads as one number (`1234.50`, not `1,234.50`). Null is the reader's
+// concern: these take a number, the caller decides what an absent one shows.
+export const fixed2 = createFormatter({ minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false });
+// `exceptZero` rather than `always`: a flat or sub-cent move prints `0.00`, not `-0.00`.
+export const signedFixed2 = createFormatter({ minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false, signDisplay: 'exceptZero' });
+export const compactNumberFixed2 = createFormatter({ notation: 'compact', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 function safeRelativeFormat(lang: string): Intl.RelativeTimeFormat {
   try {
     return new Intl.RelativeTimeFormat(lang, { numeric: 'auto', style: 'narrow' });

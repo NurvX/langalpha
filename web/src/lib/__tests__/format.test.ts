@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import i18n from '@/i18n';
-import { createFormatter, createDateFormatter, compactNumber } from '@/lib/format';
+import { createFormatter, createDateFormatter, compactNumber, compactNumberFixed2, fixed2, signedFixed2 } from '@/lib/format';
 
 describe('createFormatter', () => {
   beforeEach(() => {
@@ -69,6 +69,33 @@ describe('compactNumber', () => {
     expect(compactNumber(1234)).toMatch(/^1\.2K$/);
     expect(compactNumber(5142)).toMatch(/^5\.1K$/);
     expect(compactNumber(1_500_000)).toMatch(/^1\.5M$/);
+  });
+});
+
+describe('quote-strip formatters', () => {
+  beforeEach(() => {
+    i18n.changeLanguage('en-US');
+  });
+
+  it('fixed2 keeps two decimals and never groups a price', () => {
+    expect(fixed2(1234.5)).toBe('1234.50');
+    expect(fixed2(0)).toBe('0.00');
+    expect(fixed2(-4)).toBe('-4.00');
+  });
+
+  it('signedFixed2 signs every move and leaves a flat one unsigned', () => {
+    expect(signedFixed2(1.234)).toBe('+1.23');
+    expect(signedFixed2(-4)).toBe('-4.00');
+    expect(signedFixed2(0)).toBe('0.00');
+    // A sub-cent dip rounds to zero and must not print as `-0.00`.
+    expect(signedFixed2(-0.001)).toBe('0.00');
+  });
+
+  it('compactNumberFixed2 keeps two decimals so a volume column holds its width', () => {
+    expect(compactNumberFixed2(999)).toBe('999.00');
+    expect(compactNumberFixed2(1234)).toBe('1.23K');
+    expect(compactNumberFixed2(1_500_000)).toBe('1.50M');
+    expect(compactNumberFixed2(2_000_000_000)).toBe('2.00B');
   });
 });
 

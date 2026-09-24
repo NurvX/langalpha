@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, within } from '@testing-library/react';
+import { screen, fireEvent, within, waitFor } from '@testing-library/react';
 import { renderWithProviders } from '@/test/utils';
 
 vi.mock('@/pages/ChatAgent/utils/api', async (importOriginal) => {
@@ -65,6 +65,21 @@ beforeEach(() => {
 });
 
 describe('FilePanel chart tabs', () => {
+  it('tells its host what kind of tab is in front, from the first paint to the last', async () => {
+    // The host sizes the panel, and a chart has a floor the other kinds do
+    // not, so it hears every change and a null once the panel is gone.
+    const onActiveTabKindChange = vi.fn();
+    const { rerender, unmount } = renderWithProviders(panel({ onActiveTabKindChange }));
+    expect(onActiveTabKindChange).toHaveBeenLastCalledWith('empty');
+
+    rerender(panel({ onActiveTabKindChange, target: GOOGL }));
+    await screen.findByTestId('chart-surface');
+    expect(onActiveTabKindChange).toHaveBeenLastCalledWith('chart');
+
+    unmount();
+    expect(onActiveTabKindChange).toHaveBeenLastCalledWith(null);
+  });
+
   it('opens a chart target as a tab and mounts the chart on it', async () => {
     renderWithProviders(panel({ target: GOOGL }));
 
@@ -73,6 +88,17 @@ describe('FilePanel chart tabs', () => {
     expect(chart.dataset.timeframe).toBe('1day');
     expect(within(screen.getByRole('tablist')).getByText('GOOGL')).toBeTruthy();
     expect(surface).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'ws' }));
+  });
+
+  it('draws another workspace\'s chart when the ask names one, and the panel\'s otherwise', async () => {
+    const { rerender } = renderWithProviders(panel({ target: { ...GOOGL, workspaceId: 'ws-art' } }));
+    await screen.findByTestId('chart-surface');
+    expect(surface).toHaveBeenLastCalledWith(expect.objectContaining({ symbol: 'GOOGL', workspaceId: 'ws-art' }));
+
+    // The same symbol asked for from this workspace comes back to the one tab, retargeted.
+    rerender(panel({ target: { ...GOOGL, seq: 2 } }));
+    await waitFor(() => expect(surface).toHaveBeenLastCalledWith(expect.objectContaining({ symbol: 'GOOGL', workspaceId: 'ws' })));
+    expect(within(screen.getByRole('tablist')).getAllByRole('tab')).toHaveLength(1);
   });
 
   it('hands the chart to the composer as a one-line pointer, not its data', async () => {
@@ -135,6 +161,15 @@ describe('FilePanel chart tabs', () => {
 
     fireEvent.click(screen.getByTitle('Open in MarketView'));
     expect(onOpenInMarketView).toHaveBeenCalledWith({ symbol: 'GOOGL', timeframe: '1day' });
+  });
+
+  it('leaves for MarketView on the drawings it is showing, another workspace\'s included', async () => {
+    const onOpenInMarketView = vi.fn();
+    renderWithProviders(panel({ target: { ...GOOGL, workspaceId: 'ws-art' }, onOpenInMarketView }));
+    await screen.findByTestId('chart-surface');
+
+    fireEvent.click(screen.getByTitle('Open in MarketView'));
+    expect(onOpenInMarketView).toHaveBeenCalledWith({ symbol: 'GOOGL', timeframe: '1day', workspaceId: 'ws-art' });
   });
 
   it('turns an empty tab into a chart at once, on the last symbol looked at', async () => {
@@ -209,6 +244,22 @@ describe('FilePanel chart tabs', () => {
     expect(document.querySelector('.file-panel-crumbs')).toBeNull();
   });
 
+  it('brings a listing tab to the front when a folder is opened over a chart', async () => {
+    // The tree sits beside a file or the empty tab only, so a folder link
+    // clicked with a chart in front has to move off the chart first, or the
+    // click lands nowhere.
+    const { rerender } = renderWithProviders(panel({ target: GOOGL, files: ['notes.md', 'docs/index.md'] }));
+    await screen.findByTestId('chart-surface');
+
+    rerender(panel({ target: { kind: 'file', dir: 'docs', seq: 2 }, files: ['notes.md', 'docs/index.md'] }));
+
+    await waitFor(() => expect(document.querySelector('.file-panel-tree-list')).toBeTruthy());
+    expect(document.querySelector('.file-panel-tree-scope')?.textContent).toContain('docs/');
+    // The chart tab is still there; the listing opened beside it, not over it.
+    expect(within(screen.getByRole('tablist')).getByText('GOOGL')).toBeTruthy();
+    expect(screen.queryByTestId('chart-surface')).toBeNull();
+  });
+
   it('offers no chart on a read-only panel', () => {
     renderWithProviders(panel({ readOnly: true }));
     expect(screen.queryByText('Open a chart')).toBeNull();
@@ -226,5 +277,12 @@ describe('FilePanel chart tabs', () => {
 
     const chart = await screen.findByTestId('chart-surface');
     expect(chart.dataset.timeframe).toBe('1hour');
+  });
+});
+
+describe('FilePanel tool tabs', () => {
+  it('says the call is gone when its record has left the chat', async () => {
+    renderWithProviders(panel({ target: { kind: 'tool', toolCallId: 'call-1', seq: 1 }, getToolCallProcess: () => undefined }));
+    expect(await screen.findByText(/This tool call is no longer in the chat/)).toBeTruthy();
   });
 });

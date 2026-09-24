@@ -10,7 +10,7 @@
  */
 
 import { SYSTEM_DIR_PREFIXES } from '../components/filePanel/fileMeta';
-import { normalizeAgentPath, parseAgentPath } from './agentPaths';
+import { normalizeAgentPath, parseAgentPath, type AgentPathParts } from './agentPaths';
 
 /** The tools whose path argument names a file the agent created or changed. */
 export const WRITE_TOOLS = new Set(['Write', 'Edit']);
@@ -121,8 +121,15 @@ export interface TurnMessage {
  * has to reach the deliverables deck and the link resolver together or they
  * disagree about what the turn wrote.
  */
-export function writeCalls(message: TurnMessage): { id: string; path: string; call: ToolCallLike }[] {
-  const out: { id: string; path: string; call: ToolCallLike }[] = [];
+export interface WriteCall {
+  id: string;
+  /** The named path, read once; `parts.path` is its canonical form. */
+  parts: AgentPathParts;
+  call: ToolCallLike;
+}
+
+export function writeCalls(message: TurnMessage): WriteCall[] {
+  const out: WriteCall[] = [];
   const calls = Object.entries(message.toolCallProcesses ?? {})
     // A call still in flight when the turn stopped names a file nothing said
     // it wrote. `isComplete` is not that evidence: a stop and a steering
@@ -134,8 +141,8 @@ export function writeCalls(message: TurnMessage): { id: string; path: string; ca
     const args = call.toolCall?.args;
     const named = args?.file_path ?? args?.filePath ?? args?.path ?? args?.filename;
     if (typeof named !== 'string' || !named) continue;
-    const path = normalizeAgentPath(named);
-    if (path) out.push({ id, path, call });
+    const parts = parseAgentPath(named);
+    if (parts.path) out.push({ id, parts, call });
   }
   return out;
 }
@@ -158,7 +165,7 @@ export function collectWriteLog(messages: readonly TurnMessage[]): WriteEvent[] 
   for (let i = messages.length - 1; i >= 0 && out.length < RECENT_WRITE_LIMIT; i--) {
     const calls = writeCalls(messages[i] ?? {});
     for (let j = calls.length - 1; j >= 0 && out.length < RECENT_WRITE_LIMIT; j--) {
-      out.push({ id: calls[j].id, path: calls[j].path });
+      out.push({ id: calls[j].id, path: calls[j].parts.path });
     }
   }
   return out;
@@ -182,7 +189,7 @@ export function collectRecentWritePaths(messages: readonly TurnMessage[]): strin
   for (let i = messages.length - 1; i >= 0 && out.length < RECENT_WRITE_LIMIT; i--) {
     const calls = writeCalls(messages[i] ?? {});
     for (let j = calls.length - 1; j >= 0 && out.length < RECENT_WRITE_LIMIT; j--) {
-      const { path } = calls[j];
+      const { path } = calls[j].parts;
       if (seen.has(path)) continue;
       seen.add(path);
       out.push(path);

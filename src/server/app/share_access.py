@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from ptc_agent.core.paths import is_agent_notes_path
 from src.server.app.workspace_files._containment import contained_relative_path
 from src.server.app.workspace_files._shared import (
     _is_serve_blocked_path,
@@ -81,8 +82,16 @@ def shared_path_visible(scope: ShareScope, client_path: str) -> bool:
 
     Run on the path a sandbox read resolved to, not on the one that was asked
     for: a symlink is how an in-scope request turns into an out-of-scope file.
+
+    The workspace's notes file stays out too, whatever the scope: it is the
+    agent's own runtime context, and a shared page cannot tell it from a
+    deliverable because the share carries no folder name to recognise it by.
     """
-    return scope.contains(client_path) and not _is_serve_blocked_path(client_path)
+    return (
+        scope.contains(client_path)
+        and not _is_serve_blocked_path(client_path)
+        and not is_agent_notes_path(client_path)
+    )
 
 
 @dataclass(frozen=True)

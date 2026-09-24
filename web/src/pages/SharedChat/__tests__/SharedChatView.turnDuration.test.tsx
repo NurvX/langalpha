@@ -17,6 +17,7 @@ vi.mock('react-router-dom', () => ({
   Link: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
 }));
 
+vi.mock('../../../contexts/AuthContext', () => ({ useAuth: () => ({ isLoggedIn: false }) }));
 vi.mock('../../../contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: 'light' }),
 }));

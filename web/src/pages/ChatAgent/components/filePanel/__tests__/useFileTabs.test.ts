@@ -328,6 +328,31 @@ describe('useFileTabs persistence', () => {
     expect(paths(result.current.tabs)).toEqual([null]);
   });
 
+  it('keeps memory and memo across a reload, and lets the watch tab go', () => {
+    const first = renderHook(() => useFileTabs('ws'));
+    act(() => first.result.current.openMemory());
+    act(() => first.result.current.openMemo());
+    act(() => first.result.current.openStatus());
+
+    // A watch may be over by the next mount, so its tab is not written; the
+    // stores are always there to come back to.
+    expect(stored(tabsStorageKey('ws'))).toEqual({ tabs: [{ kind: 'memory' }, { kind: 'memo' }], active: 1 });
+    first.unmount();
+
+    const { result } = renderHook(() => useFileTabs('ws'));
+    expect(result.current.tabs.map((t) => t.kind)).toEqual(['memory', 'memo']);
+  });
+
+  it('opens each store once, and comes back to the tab it has', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openMemory());
+    act(() => result.current.openFile('a.md', { pin: true }));
+    act(() => result.current.openMemory());
+
+    expect(result.current.tabs.map((t) => t.kind)).toEqual(['memory', 'file']);
+    expect(result.current.activeTab.kind).toBe('memory');
+  });
+
   it('persists nothing for a share, which has no workspace of its own', () => {
     const { result } = renderHook(() => useFileTabs(''));
     act(() => result.current.openFile('a.md', { pin: true }));
@@ -368,6 +393,33 @@ describe('useFileTabs thread scope', () => {
     expect(paths(result.current.tabs)).toEqual(['a.md', 'b.md']);
     rerender({ thread: 't2' });
     expect(paths(result.current.tabs)).toEqual(['b.md']);
+  });
+
+  it('lets a hidden panel keep its strip without writing it over the one on screen', () => {
+    // The chat keeps recently visited threads mounted off screen; the seed is
+    // the strip shown last, and a hidden panel is not showing anything.
+    const hidden = renderHook(
+      ({ active }: { active: boolean }) => useFileTabs('ws', 't1', { active }),
+      { initialProps: { active: true } },
+    );
+    act(() => hidden.result.current.openFile('one.md', { pin: true }));
+    hidden.rerender({ active: false });
+
+    // The new thread seeds from the strip shown last and adds to it.
+    const shown = renderHook(() => useFileTabs('ws', 't2'));
+    act(() => shown.result.current.openFile('two.md', { pin: true }));
+    expect(stored(tabsStorageKey('ws')).tabs.map((t: { path: string }) => t.path)).toEqual(['one.md', 'two.md']);
+
+    // A change in the hidden strip stays in memory: nothing it does reaches the seed.
+    act(() => hidden.result.current.openFile('three.md', { pin: true }));
+    expect(paths(hidden.result.current.tabs)).toEqual(['one.md', 'three.md']);
+    expect(stored(tabsStorageKey('ws')).tabs.map((t: { path: string }) => t.path)).toEqual(['one.md', 'two.md']);
+    expect(stored(threadTabsStorageKey('ws', 't1')).tabs.map((t: { path: string }) => t.path)).toEqual(['one.md']);
+
+    // Back on screen, what it shows is the strip shown last.
+    hidden.rerender({ active: true });
+    expect(stored(tabsStorageKey('ws')).tabs.map((t: { path: string }) => t.path)).toEqual(['one.md', 'three.md']);
+    expect(stored(threadTabsStorageKey('ws', 't1')).tabs.map((t: { path: string }) => t.path)).toEqual(['one.md', 'three.md']);
   });
 
   it('does not write the outgoing thread’s strip over the incoming thread’s saved one', () => {
@@ -570,6 +622,32 @@ describe('useFileTabs chart retarget', () => {
     expect(result.current.activeTab).toMatchObject({ symbol: 'GOOGL', timeframe: '1hour' });
   });
 
+  it('keeps the drawings of the tab being switched when it folds into another', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    const wsA = '11111111-1111-4111-8111-111111111111';
+    const wsB = '22222222-2222-4222-8222-222222222222';
+    act(() => result.current.openChart({ symbol: 'NVDA', workspaceId: wsB }));
+    act(() => result.current.newTab());
+    act(() => result.current.openChart({ symbol: 'AAPL', workspaceId: wsA }));
+    act(() => result.current.retargetChart(result.current.activeId, 'NVDA'));
+    expect(result.current.activeTab).toMatchObject({ symbol: 'NVDA', workspaceId: wsA });
+
+    // A tab on the panel's own workspace folds in without the other's.
+    act(() => result.current.newTab());
+    act(() => result.current.openChart({ symbol: 'MSFT' }));
+    act(() => result.current.retargetChart(result.current.activeId, 'NVDA'));
+    expect(result.current.activeTab).toMatchObject({ symbol: 'NVDA' });
+    expect(result.current.activeTab).not.toHaveProperty('workspaceId');
+  });
+
+  it('takes the instrument forms the providers serve besides equities', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openChart({ symbol: 'eurusd=x' }));
+    expect(result.current.activeTab).toMatchObject({ kind: 'chart', symbol: 'EURUSD=X' });
+    act(() => result.current.retargetChart(result.current.activeId, 'X:BTCUSD'));
+    expect(result.current.activeTab).toMatchObject({ symbol: 'X:BTCUSD' });
+  });
+
   it('ignores a blank ticker', () => {
     const { result } = renderHook(() => useFileTabs('ws'));
     act(() => result.current.openChart({ symbol: 'GOOGL' }));
@@ -592,5 +670,108 @@ describe('useFileTabs chart retarget', () => {
     expect(lastChartSymbol('ws')).toBe('SPY');
     localStorage.setItem(lastChartStorageKey('ws'), 'amd');
     expect(lastChartSymbol('ws')).toBe('AMD');
+  });
+});
+
+describe('useFileTabs transcript tabs', () => {
+  const kinds = (tabs: FileTab[]) => tabs.map((t) => t.kind);
+
+  it('retargets the one loaned tool tab as rows are clicked through', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+    act(() => result.current.openTool({ toolCallId: 'b' }));
+
+    expect(kinds(result.current.tabs)).toEqual(['tool']);
+    expect(result.current.activeTab).toMatchObject({ kind: 'tool', toolCallId: 'b', preview: true });
+  });
+
+  it('keeps a pinned tool tab and opens the next row beside it', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+    act(() => result.current.pinTab(result.current.activeId));
+    act(() => result.current.openTool({ toolCallId: 'b' }));
+
+    expect(result.current.tabs.map((t) => (t.kind === 'tool' ? t.toolCallId : null))).toEqual(['a', 'b']);
+    expect(result.current.tabs[0]).toMatchObject({ preview: false });
+    expect(result.current.activeTab).toMatchObject({ toolCallId: 'b', preview: true });
+  });
+
+  it('comes back to the tab a tool call already has', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+    act(() => result.current.pinTab(result.current.activeId));
+    act(() => result.current.openTool({ toolCallId: 'b' }));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+
+    expect(result.current.tabs).toHaveLength(2);
+    expect(result.current.activeTab).toMatchObject({ toolCallId: 'a', preview: false });
+  });
+
+  it('holds a tool call by id only, so the tab reads the live record', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+
+    expect(result.current.activeTab).toEqual({ id: expect.any(String), kind: 'tool', toolCallId: 'a', preview: true });
+  });
+
+  it('never takes the file being browsed for a tool result', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openFile('a.md'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+
+    expect(kinds(result.current.tabs)).toEqual(['file', 'tool']);
+    expect(result.current.tabs[0]).toMatchObject({ path: 'a.md', preview: true });
+  });
+
+  it('shares the tool slot with a plan', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+    act(() => result.current.openPlan({ planId: 'p1', plan: { description: 'do things' } }));
+
+    expect(kinds(result.current.tabs)).toEqual(['plan']);
+  });
+
+  it('keeps one tab per plan, so a second plan never retargets a pinned one', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openPlan({ planId: 'p1', plan: { description: 'first' } }));
+    act(() => result.current.pinTab(result.current.activeId));
+    act(() => result.current.openPlan({ planId: 'p2', plan: { description: 'second' } }));
+    act(() => result.current.openPlan({ planId: 'p1', plan: { description: 'first' } }));
+
+    expect(result.current.tabs.map((t) => (t.kind === 'plan' ? t.planId : null))).toEqual(['p1', 'p2']);
+    expect(result.current.activeTab).toMatchObject({ kind: 'plan', planId: 'p1', preview: false });
+  });
+
+  it('opens one sources tab per turn in a slot of its own', () => {
+    const { result } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+    act(() => result.current.openSources('m1'));
+    act(() => result.current.openSources('m2'));
+
+    expect(kinds(result.current.tabs)).toEqual(['tool', 'sources']);
+    expect(result.current.activeTab).toMatchObject({ kind: 'sources', messageId: 'm2', preview: true });
+  });
+
+  it('stores none of them, and comes back on the stored tab before the one that was in front', () => {
+    const { result, unmount } = renderHook(() => useFileTabs('ws'));
+    act(() => result.current.openFile('a.md', { pin: true }));
+    act(() => result.current.openTool({ toolCallId: 'a' }));
+    act(() => result.current.openSources('m1'));
+    expect(stored(tabsStorageKey('ws'))).toEqual({ tabs: [{ kind: 'file', path: 'a.md', preview: false }], active: 0 });
+    unmount();
+
+    const { result: again } = renderHook(() => useFileTabs('ws'));
+    expect(kinds(again.current.tabs)).toEqual(['file']);
+    expect(again.current.activeTab).toMatchObject({ path: 'a.md' });
+  });
+
+  it('drops a stored tool or sources entry, should one turn up', () => {
+    localStorage.setItem(tabsStorageKey('ws'), JSON.stringify({
+      tabs: [{ kind: 'tool', toolCallId: 'a' }, { kind: 'file', path: 'a.md' }, { kind: 'sources', messageId: 'm' }],
+      active: 2,
+    }));
+    const { result } = renderHook(() => useFileTabs('ws'));
+    expect(paths(result.current.tabs)).toEqual(['a.md']);
+    expect(activePath(result.current)).toBe('a.md');
   });
 });

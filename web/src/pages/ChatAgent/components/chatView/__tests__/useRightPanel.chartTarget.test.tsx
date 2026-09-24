@@ -51,10 +51,24 @@ describe('a chart opened from chat', () => {
   it('clears once the panel has opened it', () => {
     const result = open(false);
     act(() => result.current.handleOpenChart({ symbol: 'GOOGL' }));
-    act(() => result.current.handleTargetHandled());
+    const { seq } = result.current.panelTarget as { seq: number };
+    act(() => result.current.handleTargetHandled(seq));
 
     expect(result.current.panelTarget).toBeNull();
     expect(result.current.rightPanelType).toBe('file');
+  });
+
+  it('keeps an ask that landed after the one the panel is clearing', () => {
+    // The panel consumes a target in an effect, so a second click can land
+    // between the first one's render and its clear; the clear names the ask
+    // it consumed and leaves the newer one for the next effect.
+    const result = open(false);
+    act(() => result.current.handleOpenChart({ symbol: 'GOOGL' }));
+    const { seq } = result.current.panelTarget as { seq: number };
+    act(() => result.current.handleOpenChart({ symbol: 'NVDA' }));
+    act(() => result.current.handleTargetHandled(seq));
+
+    expect(result.current.panelTarget).toMatchObject({ kind: 'chart', symbol: 'NVDA' });
   });
 
   it('goes to the MarketView page on mobile, which has no tab strip to land in', () => {

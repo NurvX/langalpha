@@ -607,6 +607,18 @@ def virtual_agent_path(path: str, *, workspace: str, root: str) -> str:
     return path
 
 
+def is_agent_notes_path(relative_path: str | None) -> bool:
+    """Whether a folder-relative path names the workspace's own notes file.
+
+    Only the file at the folder root: the agent keeps runtime context there for
+    itself, so it is not a deliverable, whereas a nested ``docs/agent.md`` is a
+    file the user asked for. Takes the folder-relative spelling, which is what
+    every route judges after folding an absolute sandbox path onto the folder,
+    so ``<dir_name>/agent.md`` here is a nested file and not the notes.
+    """
+    return (relative_path or "").lstrip("/") == WorkspaceLayout.AGENT_MD_FILE
+
+
 def workspace_relative_path(path: str | None, work_dir: str) -> str:
     """Agent spellings /agent.md, agent.md, and the absolute workspace path name one file.
 

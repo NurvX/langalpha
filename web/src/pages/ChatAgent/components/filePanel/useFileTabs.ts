@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { INTERVALS } from '@/lib/bars/chartConstants';
 import { readTypedTicker } from '@/lib/marketUtils';
 import type { FileLocation } from '../../utils/fileLocation';
-import { PREVIEW_PORT_MAX, PREVIEW_PORT_MIN, type ChartTabSpec, type PreviewSpec } from './types';
+import { isValidUuid } from '../../utils/uuid';
+import { PREVIEW_PORT_MAX, PREVIEW_PORT_MIN, type ChartTabSpec, type PlanTabSpec, type PreviewSpec, type ToolTabSpec } from './types';
 
 /**
  * What one tab shows. The empty tab is the panel's landing surface and its
@@ -14,6 +15,18 @@ import { PREVIEW_PORT_MAX, PREVIEW_PORT_MIN, type ChartTabSpec, type PreviewSpec
  * says the file is being worked with (a double click, entering edit mode,
  * adding it to the context) pins it. It is unrelated to `kind: 'preview'`,
  * which is a running app served from the sandbox.
+ *
+ * A tool, plan or sources tab is on loan the same way, each kind in a slot of
+ * its own: clicking through a turn's tool rows retargets one tool tab rather
+ * than opening one per row, and never takes the file being browsed. These
+ * three point into the transcript and are never stored: a tool or sources tab
+ * carries an id and reads the live record at render, a plan tab carries the
+ * one text a plan ever has.
+ *
+ * Settings, memory, memo and status are each the one tab of their kind, and
+ * carry nothing: the body is the store itself, or the live watch. The first
+ * three are kept across reloads like a file; status depends on a watch that
+ * may be over by then, so it is not.
  */
 type TabBody =
   | { kind: 'empty' }
@@ -27,6 +40,9 @@ type TabBody =
     locationSeq: number;
   }
   | { kind: 'settings' }
+  | { kind: 'memory' }
+  | { kind: 'memo' }
+  | { kind: 'status' }
   | {
     kind: 'preview';
     /** The sandbox port the dev server listens on. Identifies the tab. */
@@ -38,9 +54,30 @@ type TabBody =
     /** How the agent started the server, so a restored tab can restart an idle port. */
     command?: string;
   }
-  | { kind: 'chart'; symbol: string; timeframe: string };
+  | { kind: 'chart'; symbol: string; timeframe: string; workspaceId?: string }
+  | ({ kind: 'tool'; preview: boolean } & ToolTabSpec)
+  | ({ kind: 'plan'; preview: boolean } & PlanTabSpec)
+  | { kind: 'sources'; preview: boolean; messageId: string };
 
 export type FileTab = { id: string } & TabBody;
+
+/** The kinds that live only as long as the transcript, or the watch, they point into. */
+const EPHEMERAL_KINDS = ['tool', 'plan', 'sources', 'status'] as const satisfies readonly FileTab['kind'][];
+type EphemeralKind = (typeof EPHEMERAL_KINDS)[number];
+type PersistableTab = Exclude<FileTab, { kind: 'empty' | EphemeralKind }>;
+
+/** The kinds with one tab each, reopened by focusing it. */
+type SingletonKind = 'settings' | 'memory' | 'memo' | 'status';
+
+/** A tab the file tree can sit beside: the listing belongs to files and the empty tab, not to a chart, a tool result or an app. */
+export function isListingTab(tab: FileTab): boolean {
+  return tab.kind === 'file' || tab.kind === 'empty';
+}
+
+/** A tab that the next open of its kind may take over. */
+export function isOnLoan(tab: FileTab): tab is Extract<FileTab, { preview: boolean }> {
+  return (tab.kind === 'file' || tab.kind === 'tool' || tab.kind === 'plan' || tab.kind === 'sources') && tab.preview;
+}
 
 export interface OpenFileOptions {
   /** Open as a kept tab rather than the reused preview one. */
@@ -71,13 +108,18 @@ const INTERVAL_KEYS = new Set(INTERVALS.map(({ key }) => key));
 // The stored strip is names only: a file tab is its path, a preview tab its
 // port (the signed URL it runs on is short-lived and never stored), a chart
 // its symbol. Unknown keys are dropped, so entries written before a field
-// existed still load.
+// existed still load. A kind with no schema here (tool, plan, sources,
+// status) is never written and, should one turn up, dropped on read: its
+// body is a transcript record that a reload replays under a new identity, or
+// a watch that has ended.
 // One schema per kind, looked up by the entry's own `kind`, rather than a
 // discriminated union: the union is the one zod feature nothing on the first
 // load uses, and pulling it in charges the entry chunk for a lazy panel.
 const persistedTabSchemas = {
   file: z.object({ kind: z.literal('file'), path: z.string().min(1), preview: z.boolean().catch(false) }),
   settings: z.object({ kind: z.literal('settings') }),
+  memory: z.object({ kind: z.literal('memory') }),
+  memo: z.object({ kind: z.literal('memo') }),
   preview: z.object({
     kind: z.literal('preview'),
     // Outside the served range the tab would restore as a permanent error
@@ -100,6 +142,8 @@ const persistedTabSchemas = {
     // bars endpoint for a bucket it does not serve, so a restored tab would
     // come back blank rather than on the daily view.
     timeframe: z.string().refine((v) => INTERVAL_KEYS.has(v)).catch(DEFAULT_TIMEFRAME),
+    // A workspace gone or never an id would be asked for on every open.
+    workspaceId: z.string().refine(isValidUuid).optional().catch(undefined),
   }),
 };
 type PersistedTabKind = keyof typeof persistedTabSchemas;
@@ -166,9 +210,12 @@ function rememberChartSymbol(workspaceId: string, symbol: string): void {
   try { localStorage.setItem(lastChartStorageKey(workspaceId), symbol); } catch { /* not worth failing over */ }
 }
 
-/** The ticker as a tab knows it, or null for a blank the header should ignore. */
+/**
+ * The ticker as a tab knows it, or null for anything the persisted schema
+ * would drop on reload, so a tab and its restored copy never disagree.
+ */
 function chartTicker(symbol: string): string | null {
-  return symbol.trim().toUpperCase() || null;
+  return readTypedTicker(symbol);
 }
 
 function emptyTab(): FileTab {
@@ -189,7 +236,7 @@ function revive(t: PersistedTab): FileTab {
   return t.kind === 'file' ? { id: newId(), ...t, location: null, locationSeq: 0 } : { id: newId(), ...t };
 }
 
-function toPersisted({ id: _id, ...body }: Exclude<FileTab, { kind: 'empty' }>): PersistedTab {
+function toPersisted({ id: _id, ...body }: PersistableTab): PersistedTab {
   if (body.kind !== 'file') return body;
   const { location: _location, locationSeq: _seq, ...file } = body;
   return file;
@@ -241,20 +288,20 @@ function patchIn(state: TabsState, id: string, fn: (tab: FileTab) => FileTab): T
 /**
  * Land a tab: the one that already matches is remade in place and brought to
  * the front; else an empty active tab is filled; else a new tab opens beside
- * the active one. With `reusePreview` the active tab is also a target when it
- * is the on-loan file tab, and failing that whichever tab carries the loan,
- * so browsing never piles tabs up.
+ * the active one. With `loan` the active tab is also a target when it is the
+ * on-loan tab of the opener's kind, and failing that whichever tab carries
+ * that loan, so browsing never piles tabs up.
  */
 function place(
   state: TabsState,
   match: (tab: FileTab) => boolean,
   make: (existing: FileTab | null) => TabBody,
-  { reusePreview = false } = {},
+  { loan }: { loan?: (tab: FileTab) => boolean } = {},
 ): TabsState {
   const existing = state.tabs.find(match);
   if (existing) return replaceIn(state, existing.id, make(existing));
 
-  const onLoan = (t: FileTab) => reusePreview && t.kind === 'file' && t.preview;
+  const onLoan = (t: FileTab) => !!loan && isOnLoan(t) && loan(t);
   const active = state.tabs.find((t) => t.id === state.activeId);
   const slot = active && (active.kind === 'empty' || onLoan(active)) ? active : state.tabs.find(onLoan);
   if (slot) return replaceIn(state, slot.id, make(null));
@@ -294,11 +341,17 @@ function closeIn(state: TabsState, id: string): TabsState {
  * follows the real workspace, so it is rebuilt when the panel is pointed at
  * another one rather than showing the first workspace's tabs under the
  * second's id.
+ *
+ * `active: false` is a panel that is mounted but not on screen: it reads its
+ * strip and keeps it, but writes nothing while hidden. The seed is the strip
+ * shown last, and a hidden panel is not showing anything; a write from it
+ * would put its tabs under the next conversation in place of the ones the
+ * reader is looking at. It writes again once it is back on screen.
  */
 export function useFileTabs(
   workspaceId: string,
   threadId?: string | null,
-  { persist = true }: { persist?: boolean } = {},
+  { persist = true, active: onScreen = true }: { persist?: boolean; active?: boolean } = {},
 ) {
   // Which strip this is. No key for an adapter mount (a share has no workspace
   // of its own), so two shares cannot inherit each other's tab strip.
@@ -334,17 +387,23 @@ export function useFileTabs(
   // Written only once the strip on screen is the one this key names; the
   // render between a key change and the switch above still holds the old strip.
   useEffect(() => {
-    if (!store || state.key !== key) return;
-    const named = state.tabs.filter((t): t is Exclude<FileTab, { kind: 'empty' }> => t.kind !== 'empty');
+    if (!store || !onScreen || state.key !== key) return;
+    const named = state.tabs.filter((t): t is PersistableTab => t.kind !== 'empty' && !(EPHEMERAL_KINDS as readonly string[]).includes(t.kind));
     // -1 when the empty tab is active, so the strip comes back parked on it.
-    const active = named.findIndex((t) => t.id === state.activeId);
+    // A tab that is not stored comes back on the stored one before it, else
+    // the first, else parked: what it showed is gone with the transcript.
+    let active = named.findIndex((t) => t.id === state.activeId);
+    if (active < 0 && named.length && !state.tabs.some((t) => t.id === state.activeId && t.kind === 'empty')) {
+      const at = state.tabs.findIndex((t) => t.id === state.activeId);
+      active = Math.max(0, named.filter((t) => state.tabs.indexOf(t) < at).length - 1);
+    }
     const json = JSON.stringify({ tabs: named.map(toPersisted), active });
     try {
       localStorage.setItem(store, json);
       // The seed is whatever strip was shown last, in whichever thread.
       if (seedStore && seedStore !== store) localStorage.setItem(seedStore, json);
     } catch { /* a full or blocked store is not worth failing a render over */ }
-  }, [state, key, store, seedStore]);
+  }, [state, key, store, seedStore, onScreen]);
 
   const activate = useCallback((id: string) => {
     setState((prev) => (prev.activeId === id ? prev : { ...prev, activeId: id }));
@@ -352,6 +411,22 @@ export function useFileTabs(
 
   const newTab = useCallback(() => {
     setState((prev) => {
+      const tab = emptyTab();
+      return { ...prev, tabs: [...prev.tabs, tab], activeId: tab.id };
+    });
+  }, []);
+
+  /**
+   * Bring a tab the tree can show beside to the front, for a folder asked for
+   * with a chart or a tool result in front: the active tab if it already is
+   * one, else the last file or empty tab in the strip, else a new empty tab.
+   */
+  const showListing = useCallback(() => {
+    setState((prev) => {
+      const active = prev.tabs.find((t) => t.id === prev.activeId);
+      if (active && isListingTab(active)) return prev;
+      const listing = prev.tabs.findLast(isListingTab);
+      if (listing) return { ...prev, activeId: listing.id };
       const tab = emptyTab();
       return { ...prev, tabs: [...prev.tabs, tab], activeId: tab.id };
     });
@@ -377,14 +452,26 @@ export function useFileTabs(
         location: location ?? kept?.location ?? null,
         locationSeq: (kept?.locationSeq ?? 0) + (location ? 1 : 0),
       };
-    }, { reusePreview: !pin }));
+    }, { loan: pin ? undefined : (t) => t.kind === 'file' }));
   }, []);
 
-  /** The settings tab is the singleton of its kind. */
-  const openSettings = useCallback(
-    () => setState((prev) => place(prev, (t) => t.kind === 'settings', () => ({ kind: 'settings' }))),
-    [],
-  );
+  /** A second open of a singleton kind comes back to the tab it already has. */
+  const openSingleton = useCallback((kind: SingletonKind) => {
+    setState((prev) => place(prev, (t) => t.kind === kind, () => ({ kind })));
+  }, []);
+  const openSettings = useCallback(() => openSingleton('settings'), [openSingleton]);
+  const openMemory = useCallback(() => openSingleton('memory'), [openSingleton]);
+  const openMemo = useCallback(() => openSingleton('memo'), [openSingleton]);
+  /**
+   * `focus: false` is for a watch the agent started: the tab joins the end of
+   * the strip and the reader stays on what they were reading.
+   */
+  const openStatus = useCallback(({ focus = true }: { focus?: boolean } = {}) => {
+    if (focus) return openSingleton('status');
+    setState((prev) => (prev.tabs.some((t) => t.kind === 'status')
+      ? prev
+      : { ...prev, tabs: [...prev.tabs, { id: newId(), kind: 'status' }] }));
+  }, [openSingleton]);
 
   /**
    * One tab per port: a second open of a running app comes back to the tab it
@@ -403,9 +490,11 @@ export function useFileTabs(
   /**
    * One tab per symbol: asking for GOOGL again comes back to the GOOGL tab. A
    * re-open that names an interval moves the chart there; one that does not
-   * leaves the tab on whatever interval it was last looked at on.
+   * leaves the tab on whatever interval it was last looked at on. The
+   * workspace is the ask's each time, so the tab draws the annotations the
+   * card that opened it was about.
    */
-  const openChart = useCallback(({ symbol, timeframe }: ChartTabSpec) => {
+  const openChart = useCallback(({ symbol, timeframe, workspaceId: chartWorkspaceId }: ChartTabSpec) => {
     const ticker = chartTicker(symbol);
     if (!ticker) return;
     if (persist) rememberChartSymbol(workspaceId, ticker);
@@ -413,6 +502,7 @@ export function useFileTabs(
       kind: 'chart',
       symbol: ticker,
       timeframe: timeframe ?? (existing?.kind === 'chart' ? existing.timeframe : DEFAULT_TIMEFRAME),
+      ...(chartWorkspaceId && { workspaceId: chartWorkspaceId }),
     })));
   }, [workspaceId, persist]);
 
@@ -430,15 +520,53 @@ export function useFileTabs(
       if (tab?.kind !== 'chart') return prev;
       const other = prev.tabs.find((t) => t.kind === 'chart' && t.symbol === ticker && t.id !== id);
       if (other) {
-        const folded = patchIn(closeIn(prev, id), other.id, (t) => (t.kind === 'chart' ? { ...t, timeframe: tab.timeframe } : t));
+        // The switch is the reader's, so the tab keeps its interval and the
+        // drawings it was showing; the other tab's workspace goes with it.
+        const folded = patchIn(closeIn(prev, id), other.id, (t) => {
+          if (t.kind !== 'chart') return t;
+          const { workspaceId: _dropped, ...rest } = t;
+          return { ...rest, timeframe: tab.timeframe, ...(tab.workspaceId && { workspaceId: tab.workspaceId }) };
+        });
         return { ...folded, activeId: other.id };
       }
       return patchIn(prev, id, (t) => (t.kind === 'chart' ? { ...t, symbol: ticker } : t));
     });
   }, [workspaceId, persist]);
 
+  /**
+   * One tab per tool call: the row clicked again comes back to its tab. A
+   * first open lands on the loaned tool or plan tab, so reading through a
+   * turn's rows never piles tabs up.
+   */
+  const openTool = useCallback(({ toolCallId }: ToolTabSpec) => {
+    setState((prev) => place(prev, (t) => t.kind === 'tool' && t.toolCallId === toolCallId, (existing) => ({
+      kind: 'tool',
+      toolCallId,
+      preview: existing?.kind === 'tool' ? existing.preview : true,
+    }), { loan: (t) => t.kind === 'tool' || t.kind === 'plan' }));
+  }, []);
+
+  /** One tab per plan, sharing the tool slot: it is read the same way, between the rows it came from. */
+  const openPlan = useCallback(({ planId, plan }: PlanTabSpec) => {
+    setState((prev) => place(prev, (t) => t.kind === 'plan' && t.planId === planId, (existing) => ({
+      kind: 'plan',
+      planId,
+      plan,
+      preview: existing?.kind === 'plan' ? existing.preview : true,
+    }), { loan: (t) => t.kind === 'tool' || t.kind === 'plan' }));
+  }, []);
+
+  /** One tab per turn; a first open lands on the loaned sources tab. */
+  const openSources = useCallback((messageId: string) => {
+    setState((prev) => place(prev, (t) => t.kind === 'sources' && t.messageId === messageId, (existing) => ({
+      kind: 'sources',
+      messageId,
+      preview: existing?.kind === 'sources' ? existing.preview : true,
+    }), { loan: (t) => t.kind === 'sources' }));
+  }, []);
+
   const pinTab = useCallback((id: string) => {
-    patchTab(id, (t) => (t.kind === 'file' && t.preview ? { ...t, preview: false } : t));
+    patchTab(id, (t) => (isOnLoan(t) ? { ...t, preview: false } : t));
   }, [patchTab]);
 
   const closeTab = useCallback((id: string) => setState((prev) => closeIn(prev, id)), []);
@@ -466,15 +594,23 @@ export function useFileTabs(
     pinTab,
     closeTab,
     newTab,
+    showListing,
     openSettings,
+    openMemory,
+    openMemo,
+    openStatus,
     openPreview,
     openChart,
     retargetChart,
+    openTool,
+    openPlan,
+    openSources,
     patchTab,
     clearLocation,
   }), [
     state.tabs, activeTab, openPaths,
-    activate, openFile, pinTab, closeTab, newTab, openSettings, openPreview, openChart, retargetChart, patchTab, clearLocation,
+    activate, openFile, pinTab, closeTab, newTab, showListing, openSettings, openMemory, openMemo, openStatus,
+    openPreview, openChart, retargetChart, openTool, openPlan, openSources, patchTab, clearLocation,
   ]);
 }
 

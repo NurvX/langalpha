@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -9,38 +9,18 @@ import { useStableHandler } from '@/hooks/useStableHandler';
 import { isValidUuid } from '../../utils/uuid';
 import { clampPanelWidth as clampPanelWidthUtil } from '@/lib/panelUtils';
 import { buildMarketViewUrl } from '@/pages/MarketView/utils/marketRoute';
-import { isFilesPanelKind, stampTarget, type ChartTabSpec, type PanelTarget, type UnsequencedTarget } from '../filePanel/types';
+import { CHART_SURFACE_MIN_WIDTH } from '@/pages/MarketView/components/chartSurfaceLayout';
+import type { FileTab } from '../filePanel/useFileTabs';
+import { isOneShotKind, stampTarget, type ChartTabSpec, type PanelTarget, type PlanTabSpec, type UnsequencedTarget } from '../filePanel/types';
 import type { OpenFileHandler } from '../../utils/fileLocation';
 import type { PreviewData } from '../../hooks/utils/types';
 import type { ProvenanceRecord } from '@/types/chat';
-import type { PlanData, ToolCallProcessRecord } from './types';
+import type { PlanData } from './types';
+import { NO_TRANSCRIPTS, useToolCallLookup } from './toolCallLookup';
+import { DEFAULT_PANEL_WIDTH, PLAN_TAB_WIDTH, detailPanelWidth } from '../filePanel/detailWidth';
 
 // A running app or a live chart opens wide, so its toolbar has room.
 const PREVIEW_MAX_RATIO = 0.92;
-/** What the file panel opens at before a drag has said otherwise. */
-const DEFAULT_PANEL_WIDTH = 850;
-
-// Determine detail panel width based on content type
-function detailPanelWidth(toolCallProcess: ToolCallProcessRecord | null): number {
-  let desired = 650;
-  if (!toolCallProcess) { desired = 550; }
-  else {
-    const toolName = toolCallProcess.toolName || '';
-    const artifactType = toolCallProcess.toolCallResult?.artifact?.type;
-
-    // Wide: file reading, SEC filings, subagent results
-    if (artifactType === 'sec_filing') desired = 850;
-    else if (toolName === 'Read') desired = 850;
-    else if (toolName === 'Task' || toolName === 'task') desired = 750;
-    // Medium: charts, search results, default markdown
-    else if (artifactType === 'stock_prices' || artifactType === 'market_indices' || artifactType === 'sector_performance') desired = 650;
-    else if (toolName === 'WebSearch' || toolName === 'web_search') desired = 650;
-    // Slim: compact data cards
-    else if (artifactType === 'company_overview') desired = 480;
-    else if (artifactType === 'automations') desired = 480;
-  }
-  return desired;
-}
 
 /** Right-panel controller (carved out of ChatView, 5.9c): panel type/width,
  * target routing, tool-call/plan detail, multi-port preview resolution,
@@ -53,7 +33,11 @@ export function useRightPanel({
   isActive,
   containerRef,
   setFilePanelWorkspaceId,
+  filePanelWorkspaceId = null,
+  isFlashMode = false,
   messages,
+  subagentTranscripts = NO_TRANSCRIPTS,
+  watching = false,
 }: {
   isMobile: boolean;
   workspaceId: string;
@@ -63,7 +47,14 @@ export function useRightPanel({
   isActive: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
   setFilePanelWorkspaceId: Dispatch<SetStateAction<string | null>>;
+  /** The cross-workspace override; only Flash's panel shows it. */
+  filePanelWorkspaceId?: string | null;
+  isFlashMode?: boolean;
   messages: unknown[];
+  /** Each subagent's own messages, so a tool row clicked in its transcript resolves too. */
+  subagentTranscripts?: readonly (readonly unknown[])[];
+  /** A market watch is running, so a watch call's row opens its live Status tab. */
+  watching?: boolean;
 }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -71,13 +62,11 @@ export function useRightPanel({
   // Guards one-shot consumption of the ?file= deep link (report share / copy link).
   const fileDeepLinkConsumedRef = useRef(false);
 
-  // Single source of truth for what the RightPanel is pointed at. Exactly one
-  // target is ever set (file/preview/chart/memory/memo/sources/status); the
-  // panel derives the active tab, tab visibility, and snap-back from `.kind`.
-  // Sources/status stay set while their tab is open (tab chrome persistence)
-  // and are cleared on panel close by the effect below; file/preview/chart/
-  // memory/memo self-clear once the child panel consumes the pre-select (the
-  // handled callbacks).
+  // Single source of truth for what the file panel is pointed at. Exactly one
+  // target is ever set (file/preview/chart/tool/plan/sources/memory/memo/
+  // status); the panel opens or focuses the tab that owns `.kind`. Each
+  // self-clears once consumed (the handled callbacks): on arrival for most
+  // kinds, once the entry is selected for memory and memo.
   const [panelTarget, setPanelTarget] = useState<PanelTarget | null>(null);
   // Counts every ask, so the same folder, port or symbol asked for twice
   // arrives twice. See `PanelTarget`.
@@ -86,11 +75,13 @@ export function useRightPanel({
   // FilePanel. Inline arrows would create a new identity on every ChatView
   // render, re-triggering those effects on every streaming chunk (the
   // `targetKey == null` guard makes them no-ops, but the wakeup is wasted).
-  // Each clears the target only if it still matches the kind it consumed, so a
-  // fast follow-up open of a different kind isn't wiped by a late callback.
-  const handleTargetHandled = useCallback(() => setPanelTarget((pt) => (isFilesPanelKind(pt?.kind) ? null : pt)), []);
-  const handleTargetMemoryHandled = useCallback(() => setPanelTarget((pt) => (pt?.kind === 'memory' ? null : pt)), []);
-  const handleTargetMemoHandled = useCallback(() => setPanelTarget((pt) => (pt?.kind === 'memo' ? null : pt)), []);
+  // Each clears the target only if it is still the ask that was consumed. An
+  // ask lands between the consumer's commit and its callback (the panel's
+  // effect runs after render, the store bodies after a fetch), and a clear
+  // by kind alone would drop that newer ask unread.
+  const handleTargetHandled = useCallback((seq?: number) => setPanelTarget((pt) => (isOneShotKind(pt?.kind) && pt?.seq === seq ? null : pt)), []);
+  const handleTargetMemoryHandled = useCallback((seq?: number) => setPanelTarget((pt) => (pt?.kind === 'memory' && pt.seq === seq ? null : pt)), []);
+  const handleTargetMemoHandled = useCallback((seq?: number) => setPanelTarget((pt) => (pt?.kind === 'memo' && pt.seq === seq ? null : pt)), []);
 
   const isDraggingRef = useRef(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -103,13 +94,15 @@ export function useRightPanel({
   const dragCleanupRef = useRef<(() => void) | null>(null);
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
-  // Right panel management - can show 'file', 'detail', 'preview', or null (closed)
+  // Right panel management - can show 'file', 'detail', 'preview', or null
+  // (closed). 'detail' and 'preview' are the mobile sheets; the desktop column
+  // shows a tool result or a running app as a tab of the file view.
   const [rightPanelType, setRightPanelType] = useState<'file' | 'detail' | 'preview' | null>(null);
 
-  // The Files panel holds its drafts in memory, and any switch of the panel's
-  // type unmounts it. RightPanel guards its own chrome; this is the same
-  // question for the exits this hook owns. A ref, not state: nothing here
-  // renders on it, and a handler reads the current answer either way.
+  // The file panel holds its drafts in memory, and closing the panel unmounts
+  // it. The panel asks before its own close while a draft is open; this is
+  // the same guard for the exits this hook owns. A ref, not state: nothing
+  // here renders on it, and a handler reads the current answer either way.
   const { t } = useTranslation();
   const filesDirtyRef = useRef(false);
   const handleFilesDirtyChange = useCallback((dirty: boolean) => { filesDirtyRef.current = dirty; }, []);
@@ -118,6 +111,14 @@ export function useRightPanel({
     [t],
   );
   const [rightPanelWidth, setRightPanelWidth] = useState(750);
+  // What the file panel has in front, reported by the panel as it changes. A
+  // chart is the one tab with a width of its own: below the surface's floor
+  // its toolbar collides, so while a chart is in front the divider stops
+  // there and the panel grows to it on the way in. The container's own cap
+  // still wins on a screen too narrow for both.
+  const [activeTabKind, setActiveTabKind] = useState<FileTab['kind'] | null>(null);
+  const handleActiveTabKindChange = useCallback((kind: FileTab['kind'] | null) => setActiveTabKind(kind), []);
+  const panelMinWidth = activeTabKind === 'chart' ? CHART_SURFACE_MIN_WIDTH : 0;
   // Mobile-sheet-only preview state. On desktop a running app is a tab in the
   // file panel, which mints and refreshes its own URL; the bottom sheet has no
   // tab strip, shows one app at a time, and keeps this Map keyed by port in a
@@ -141,10 +142,10 @@ export function useRightPanel({
     setFilePanelWorkspaceId(null);
   }, [workspaceId, setFilePanelWorkspaceId]);
 
-  // Tool call detail panel state
-  const [detailToolCall, setDetailToolCall] = useState<ToolCallProcessRecord | null>(null);
-  // Plan detail panel state
-  const [detailPlanData, setDetailPlanData] = useState<PlanData | null>(null);
+  // What the mobile detail sheet shows; on desktop these land as tabs instead.
+  // A tool call is held by id and read live below, like a tab holds it.
+  const [detailToolCallId, setDetailToolCallId] = useState<string | null>(null);
+  const [detailPlan, setDetailPlan] = useState<PlanTabSpec | null>(null);
 
   // The cap the open content asked for. A running app opens past the default
   // cap on purpose, and the divider has to hold that width instead of snapping
@@ -156,6 +157,40 @@ export function useRightPanel({
     setRightPanelWidth(clampPanelWidthUtil(desired, containerRef.current?.offsetWidth || window.innerWidth, maxRatio));
   }, [containerRef]);
 
+  // Read by the landing below, which is called from handlers whose identity
+  // must not follow the panel type.
+  const rightPanelTypeRef = useRef(rightPanelType);
+  rightPanelTypeRef.current = rightPanelType;
+
+  /**
+   * Size the file panel for what is landing in it. A closed panel opens at
+   * the landing's own width and cap. An open one only widens: a reader who
+   * dragged it wide keeps that, and a tool result landing beside a chart does
+   * not fold the panel back to the tool's width. The cap holds for the same
+   * reason, since the wider one is still in the strip; every cap a landing
+   * asks for is wider than the default, so the higher of the two is the one
+   * to keep and "none asked" reads as the default.
+   */
+  const growPanelWidth = useCallback((desired: number, maxRatio?: number) => {
+    const open = rightPanelTypeRef.current === 'file';
+    const ratio = open ? (Math.max(panelMaxRatioRef.current ?? 0, maxRatio ?? 0) || undefined) : maxRatio;
+    panelMaxRatioRef.current = ratio;
+    const containerW = containerRef.current?.offsetWidth || window.innerWidth;
+    setRightPanelWidth((prev) => clampPanelWidthUtil(open ? Math.max(prev, desired) : desired, containerW, ratio));
+  }, [containerRef]);
+
+  // A chart coming to the front, by landing, by a click on its tab or by a
+  // strip restored with it in front, widens the panel to its floor and no
+  // further. Mobile shows the panel full width and has no divider.
+  // The cap rises with it, as a chart landing raises it, so the floor holds
+  // however the chart came to the front.
+  useEffect(() => {
+    if (isMobile || !panelMinWidth) return;
+    panelMaxRatioRef.current = Math.max(panelMaxRatioRef.current ?? 0, PREVIEW_MAX_RATIO);
+    const containerW = containerRef.current?.offsetWidth || window.innerWidth;
+    setRightPanelWidth((prev) => clampPanelWidthUtil(Math.max(prev, panelMinWidth), containerW, panelMaxRatioRef.current));
+  }, [isMobile, panelMinWidth, containerRef]);
+
   // Handle drag panel width: direct DOM manipulation for smooth, jank-free resize.
   // React state is only updated once on mouseup; during drag we bypass React/Framer.
   const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
@@ -166,6 +201,7 @@ export function useRightPanel({
     const startWidth = rightPanelWidth;
     const containerW = containerRef.current?.offsetWidth || window.innerWidth;
     const maxRatio = panelMaxRatioRef.current;
+    const minWidth = panelMinWidth;
 
     // Immediately disable pointer events on iframes to prevent them from
     // capturing mouse events during resize (can't wait for React re-render).
@@ -180,7 +216,8 @@ export function useRightPanel({
     const onMouseMove = (moveEvent: MouseEvent) => {
       if (!isDraggingRef.current) return;
       const delta = startX - moveEvent.clientX;
-      currentWidth = clampPanelWidthUtil(startWidth + delta, containerW, maxRatio);
+      // The floor goes in before the clamp so the container's cap still wins.
+      currentWidth = clampPanelWidthUtil(Math.max(startWidth + delta, minWidth), containerW, maxRatio);
       if (wrapperEl) wrapperEl.style.width = `${currentWidth}px`;
       if (innerEl) innerEl.style.width = `${currentWidth}px`;
     };
@@ -210,7 +247,7 @@ export function useRightPanel({
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
     dragCleanupRef.current = teardown;
-  }, [rightPanelWidth, containerRef]);
+  }, [rightPanelWidth, containerRef, panelMinWidth]);
 
   // Push a sentinel history entry when a panel opens so that the browser back
   // gesture closes the panel instead of navigating away from ChatView.
@@ -247,8 +284,8 @@ export function useRightPanel({
       if (panelHistoryPushedRef.current) {
         panelHistoryPushedRef.current = false;
         setRightPanelType(null);
-        setDetailToolCall(null);
-        setDetailPlanData(null);
+        setDetailToolCallId(null);
+        setDetailPlan(null);
         setPreviewData(null);
       }
     };
@@ -282,17 +319,18 @@ export function useRightPanel({
    * back gesture. Sizing is in one place so the divider reads the cap that was
    * asked for.
    */
-  const landInFilePanel = useCallback((target: UnsequencedTarget, opts?: { maxRatio?: number }) => {
+  const landInFilePanel = useCallback((target: UnsequencedTarget, opts?: { maxRatio?: number; width?: number }) => {
     setPanelTarget(stampTarget(target, ++targetSeqRef.current));
-    applyPanelWidth(DEFAULT_PANEL_WIDTH, opts?.maxRatio);
+    growPanelWidth(opts?.width ?? DEFAULT_PANEL_WIDTH, opts?.maxRatio);
     setRightPanelType('file');
     pushPanelHistory();
-  }, [applyPanelWidth, pushPanelHistory]);
+  }, [growPanelWidth, pushPanelHistory]);
 
   /**
-   * Routes a click on a tool-call artifact to the right panel tab that owns
-   * its domain. The pure decision is computed by computeAgentArtifactRouting;
-   * we apply the result atomically (clear everything, then set).
+   * Routes a click on a tool-call artifact to the panel tab that owns its
+   * domain. The pure decision is computed by computeAgentArtifactRouting;
+   * the result becomes the one panel target, which replaces whatever ask
+   * was pending.
    */
   const handleOpenFileFromChat = useCallback<OpenFileHandler>((rawPath, targetWorkspaceId, location, opts) => {
     const r = computeAgentArtifactRouting(
@@ -321,47 +359,50 @@ export function useRightPanel({
     } else {
       target = { kind: 'file', path: r.targetFile, location: location ?? null, pin: !!opts?.pin };
     }
+    // Another workspace's strip replaces this one's, drafts included. Only a
+    // change in the workspace the panel shows does that; clearing an unset
+    // override, or PTC's panel, which never shows it, keeps the strip.
+    const shown = (override: string | null) => (isFlashMode && override) || workspaceId;
+    const nextOverride = r.clearWorkspaceId ? null : (r.setWorkspaceId ?? filePanelWorkspaceId);
+    const switching = shown(nextOverride) !== shown(filePanelWorkspaceId);
+    if (switching && !confirmLeaveFiles()) return;
     if (r.clearWorkspaceId) {
       setFilePanelWorkspaceId(null);
     } else if (r.setWorkspaceId) {
       setFilePanelWorkspaceId(r.setWorkspaceId);
     }
     landInFilePanel(target);
-  }, [landInFilePanel, setFilePanelWorkspaceId, workspaceDirName]);
+  }, [landInFilePanel, setFilePanelWorkspaceId, workspaceDirName, confirmLeaveFiles, isFlashMode, workspaceId, filePanelWorkspaceId]);
 
-  // Opens the Sources tab for a turn by pinning the message id — the single
-  // target replaces any prior file/memory/memo/status one, so the panel snaps
-  // to Sources; it resolves live records from `messages`.
+  // A turn's sources open as a tab of the file view, one per turn; the tab
+  // reads its live records through `getSourcesRecords`.
   const handleOpenSourcesFromChat = useCallback((messageId: string) => {
     landInFilePanel({ kind: 'sources', messageId });
   }, [landInFilePanel]);
 
-  // Opens the Status tab (live market watch) from the persistent chip. The
-  // single 'status' target replaces any prior one, so the panel snaps to Status;
-  // it resolves live watch state from `marketWatch`.
+  // Opens the Status tab (live market watch) from the persistent chip; the
+  // tab reads the live watch state from `marketWatch`.
   const handleOpenStatusFromChat = useCallback(() => {
     landInFilePanel({ kind: 'status' });
   }, [landInFilePanel]);
 
-  // The message id whose provenance the Sources tab shows, when a sources target
-  // is active. Drives the two provenance memos below.
-  const sourcesMessageId = panelTarget?.kind === 'sources' ? panelTarget.messageId : null;
+  // The transcript accessors a tab reads through. Each is remade per
+  // transcript change and read at render, so a tab shows a call's result as
+  // it lands and a turn's sources as they stream in, without holding a copy of
+  // either (see useToolCallLookup for why a click-time copy would not do).
+  const getToolCallProcess = useToolCallLookup(messages, subagentTranscripts);
 
-  // Live provenance for the targeted turn — resolved from `messages` so the
-  // Sources panel updates as records stream in (live) or replay re-delivers
-  // them (reload). Recomputes on every `messages` change while the tab is open.
-  const sourcesRecords = useMemo<Record<string, ProvenanceRecord> | undefined>(() => {
-    if (!sourcesMessageId) return undefined;
-    const msg = messages.find((m) => (m as { id?: string }).id === sourcesMessageId);
+  const getSourcesRecords = useCallback((messageId: string): Record<string, ProvenanceRecord> | undefined => {
+    const msg = messages.find((m) => (m as { id?: string }).id === messageId);
     return (msg as { provenanceRecords?: Record<string, ProvenanceRecord> } | undefined)?.provenanceRecords;
-  }, [sourcesMessageId, messages]);
+  }, [messages]);
 
   // Thread-wide provenance: every turn's records merged in chronological order.
-  // The Sources panel dedups across turns (first occurrence wins) and offers a
+  // The sources tab dedups across turns (first occurrence wins) and offers a
   // "This turn / All sources" switch when this set is larger than the turn's.
-  // Gated on an open Sources tab so we don't merge on every unrelated render.
-  const allSourcesRecords = useMemo<Record<string, ProvenanceRecord> | undefined>(() => {
-    if (!sourcesMessageId) return undefined;
+  // A merge over every turn is only worth doing while that tab is showing,
+  // which is the reader's call, so this is a callback rather than a memo.
+  const getAllSourcesRecords = useCallback((): Record<string, ProvenanceRecord> => {
     const merged: Record<string, ProvenanceRecord> = {};
     for (const m of messages) {
       const recs = (m as { provenanceRecords?: Record<string, ProvenanceRecord> }).provenanceRecords;
@@ -373,25 +414,16 @@ export function useRightPanel({
       }
     }
     return merged;
-  }, [sourcesMessageId, messages]);
+  }, [messages]);
+
+  // The mobile sheet's tool call, read live the same way a tab reads it.
+  const detailToolCall = detailToolCallId ? getToolCallProcess(detailToolCallId) ?? null : null;
 
   // Read at click time rather than derived per render: the file panel only
   // needs this thread's Write/Edit paths when it resolves a reference, and a
   // memo over `messages` would rebuild on every streamed chunk.
   const getRecentWritePaths = useStableHandler(() => collectRecentWritePaths(messages as TurnMessage[]));
   const getWriteLog = useStableHandler(() => collectWriteLog(messages as TurnMessage[]));
-
-  // Drop a sticky sources/status target whenever the right panel is closed or
-  // switches to a non-file view (detail/preview), so a later file/memory click
-  // doesn't reopen that tab. These two are the only kinds that persist while
-  // their tab is open; file/preview/chart/memory/memo self-clear via the
-  // handled callbacks.
-  // The many close call sites all funnel through rightPanelType.
-  useEffect(() => {
-    if (rightPanelType !== 'file' && (panelTarget?.kind === 'sources' || panelTarget?.kind === 'status')) {
-      setPanelTarget(null);
-    }
-  }, [rightPanelType, panelTarget]);
 
   // One-shot ?file= deep link: opens the file panel targeting that file. Gated
   // on isActive so only the visible ChatView consumes it (ChatAgent keeps cached
@@ -478,15 +510,27 @@ export function useRightPanel({
     }
   }, [isMobile, landInFilePanel, applyPanelWidth, pushPanelHistory, workspaceId, resolveAndSetPreview]);
 
-  // The sheet is the only surface that shows a `preview` panel type; the desktop
-  // column shows a running app as a Files tab and renders nothing for that
-  // type. A viewport that widens with the sheet open would otherwise leave an
-  // empty column, so the app it was showing lands as a tab instead.
+  // The sheets are the only surfaces that show a `preview` or `detail` panel
+  // type; the desktop column shows a running app or a tool result as a Files
+  // tab and renders nothing for those types. A viewport that widens with a
+  // sheet open would otherwise leave an empty column, so what it was showing
+  // lands as a tab instead.
   const wasMobile = useRef(isMobile);
   useEffect(() => {
     const widened = wasMobile.current && !isMobile;
     wasMobile.current = isMobile;
-    if (!widened || rightPanelType !== 'preview') return;
+    if (!widened) return;
+    if (rightPanelType === 'detail') {
+      const toolCallId = detailToolCallId;
+      const plan = detailPlan;
+      setDetailToolCallId(null);
+      setDetailPlan(null);
+      if (toolCallId) landInFilePanel({ kind: 'tool', toolCallId }, { width: detailPanelWidth(getToolCallProcess(toolCallId) ?? null) });
+      else if (plan) landInFilePanel({ kind: 'plan', ...plan }, { width: PLAN_TAB_WIDTH });
+      else setRightPanelType(null);
+      return;
+    }
+    if (rightPanelType !== 'preview') return;
     const data = previewData;
     activePreviewPortRef.current = null;
     if (!data) {
@@ -497,14 +541,14 @@ export function useRightPanel({
       { kind: 'preview', port: data.port, title: data.title, path: data.path, command: data.command },
       { maxRatio: PREVIEW_MAX_RATIO },
     );
-  }, [isMobile, rightPanelType, previewData, landInFilePanel]);
+  }, [isMobile, rightPanelType, previewData, detailToolCallId, detailPlan, getToolCallProcess, landInFilePanel]);
 
   /** The full MarketView page on one symbol, with a way back to this chat. */
   const handleOpenInMarketView = useCallback((spec: ChartTabSpec) => {
     navigate(buildMarketViewUrl({
       symbol: spec.symbol,
       timeframe: spec.timeframe,
-      workspaceId,
+      workspaceId: spec.workspaceId ?? workspaceId,
       threadId: threadId && threadId !== '__default__' ? threadId : null,
       returnTo: location.pathname + location.search,
     }));
@@ -515,16 +559,30 @@ export function useRightPanel({
    * the files about the same company, sized like a preview so the toolbar has
    * room. Mobile has no tab strip and goes to the MarketView page itself.
    */
-  const handleOpenChart = useCallback((spec: ChartTabSpec) => {
+  const handleOpenChart = useCallback((ask: ChartTabSpec) => {
+    // The workspace comes off an agent artifact; one that is not an id would
+    // stick to the tab and be asked for on every open, so the panel's is used.
+    const spec = ask.workspaceId && !isValidUuid(ask.workspaceId) ? { ...ask, workspaceId: undefined } : ask;
     if (isMobile) {
       handleOpenInMarketView(spec);
       return;
     }
-    landInFilePanel({ kind: 'chart', symbol: spec.symbol, timeframe: spec.timeframe }, { maxRatio: PREVIEW_MAX_RATIO });
+    landInFilePanel({ kind: 'chart', ...spec }, { maxRatio: PREVIEW_MAX_RATIO });
   }, [isMobile, handleOpenInMarketView, landInFilePanel]);
 
-  // Open tool call detail in right panel (or preview panel for preview_url artifacts)
-  const handleToolCallDetailClick = useCallback((toolCallProcess: ToolCallProcessRecord) => {
+  /**
+   * Show a tool call's result. On desktop it lands as a tab in the file panel
+   * beside the files the call produced, sized for what it holds. Mobile keeps
+   * the bottom sheet. A published app opens as a preview instead.
+   */
+  const handleToolCallDetailClick = useCallback((toolCallId: string) => {
+    const toolCallProcess = getToolCallProcess(toolCallId);
+    if (!toolCallProcess) {
+      // A row whose record has left the transcript (a regenerated turn). The
+      // tab says so in its body; the sheet has nothing to show for it.
+      if (!isMobile) landInFilePanel({ kind: 'tool', toolCallId });
+      return;
+    }
     const artifact = toolCallProcess.toolCallResult?.artifact as Record<string, unknown> | undefined;
     if (artifact?.type === 'preview_url' && artifact.port && workspaceId) {
       const port = artifact.port as number;
@@ -546,31 +604,51 @@ export function useRightPanel({
       handleOpenPreview({ url: '', port, title, command, path, loading: true, reloadToken: token });
       return;
     }
-    if (!confirmLeaveFiles()) return;
-    setDetailToolCall(toolCallProcess);
-    setDetailPlanData(null);
+    // A watch the agent started already has its tab, which shows the prices
+    // live; the call's own record would be a second, frozen view of the same
+    // watch. A stop, or a watch since ended, has only the record to show.
+    const watchCall = (toolCallProcess.toolName ?? toolCallProcess.toolCall?.name) === 'watch_market' && toolCallProcess.toolCall?.args?.action !== 'unwatch';
+    if (watchCall && watching) {
+      landInFilePanel({ kind: 'status' });
+      return;
+    }
+    if (!isMobile) {
+      landInFilePanel({ kind: 'tool', toolCallId }, { width: detailPanelWidth(toolCallProcess) });
+      return;
+    }
+    setDetailToolCallId(toolCallId);
+    setDetailPlan(null);
     applyPanelWidth(detailPanelWidth(toolCallProcess));
     setRightPanelType('detail');
     pushPanelHistory();
-  }, [applyPanelWidth, pushPanelHistory, workspaceId, handleOpenPreview, confirmLeaveFiles]);
+  }, [isMobile, getToolCallProcess, landInFilePanel, applyPanelWidth, pushPanelHistory, workspaceId, handleOpenPreview, watching]);
 
-  // Open plan detail in right panel
-  const handlePlanDetailClick = useCallback((planData: PlanData) => {
-    if (!confirmLeaveFiles()) return;
-    setDetailPlanData(planData);
-    setDetailToolCall(null);
-    applyPanelWidth(550);
+  /** Show a plan's text: a tab on desktop, the sheet on mobile. */
+  const handlePlanDetailClick = useCallback((planId: string, plan: PlanData) => {
+    if (!isMobile) {
+      landInFilePanel({ kind: 'plan', planId, plan }, { width: PLAN_TAB_WIDTH });
+      return;
+    }
+    setDetailPlan({ planId, plan });
+    setDetailToolCallId(null);
+    applyPanelWidth(PLAN_TAB_WIDTH);
     setRightPanelType('detail');
     pushPanelHistory();
-  }, [applyPanelWidth, pushPanelHistory, confirmLeaveFiles]);
+  }, [isMobile, landInFilePanel, applyPanelWidth, pushPanelHistory]);
 
-  // Close detail panel (shared by MobileBottomSheet + DetailPanel onClose)
+  // Close the mobile detail sheet
   const handleCloseDetailPanel = useCallback(() => {
     setRightPanelType(null);
-    setDetailToolCall(null);
-    setDetailPlanData(null);
+    setDetailToolCallId(null);
+    setDetailPlan(null);
     popPanelHistory();
   }, [popPanelHistory]);
+
+  // A sheet reads its call live, so a record that leaves the transcript under
+  // it leaves the sheet open on nothing, with the back sentinel still pushed.
+  useEffect(() => {
+    if (isMobile && rightPanelType === 'detail' && !detailToolCall && !detailPlan) handleCloseDetailPanel();
+  }, [isMobile, rightPanelType, detailToolCall, detailPlan, handleCloseDetailPanel]);
 
   // Close preview panel (keep Map cache for instant reopen, but stop background state updates)
   const handleClosePreview = useCallback(() => {
@@ -618,6 +696,7 @@ export function useRightPanel({
   }, [rightPanelType, applyPanelWidth, pushPanelHistory, popPanelHistory, confirmLeaveFiles]);
 
   return {
+    activeTabKind,
     panelTarget,
     handleTargetHandled,
     handleTargetMemoryHandled,
@@ -641,14 +720,16 @@ export function useRightPanel({
     handleRefreshPreview,
     handleToggleFilePanel,
     handleFilesDirtyChange,
+    handleActiveTabKindChange,
     confirmLeaveFiles,
     handleOpenPreview,
     handleOpenChart,
     handleOpenInMarketView,
     detailToolCall,
-    detailPlanData,
-    sourcesRecords,
-    allSourcesRecords,
+    detailPlanData: detailPlan?.plan ?? null,
+    getToolCallProcess,
+    getSourcesRecords,
+    getAllSourcesRecords,
     getRecentWritePaths,
     getWriteLog,
   };

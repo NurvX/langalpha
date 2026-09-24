@@ -54,9 +54,14 @@ interface MessageListProps {
    *  its turn, so a steering continuation shows the continued turn's rating. */
   feedbackByTurn?: Record<number, FeedbackResult>;
   flashContext?: { threadId: string; workspaceId: string } | null;
+  /** The project folder the workspace lives in on a shared computer, when the
+   *  host knows it. The deck keeps the workspace's own notes file out on
+   *  every surface; this only lets it read the sandbox-rooted form of that
+   *  path under the folder. */
+  workspaceDirName?: string | null;
 }
 
-function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, readOnly, allowFiles, feedbackByTurn, flashContext }: MessageListProps): React.ReactElement | null {
+function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, readOnly, allowFiles, feedbackByTurn, flashContext, workspaceDirName }: MessageListProps): React.ReactElement | null {
   const isMobile = useIsMobile();
   const { onOpenFile } = useMessageActions();
 
@@ -83,7 +88,10 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
 
   // The deliverables strip reads the RAW projection: a turn's files are named
   // across its whole span, including a bubble the list never paints.
-  const filesByTurn = React.useMemo(() => turnFilesByTurn(projected), [projected]);
+  const filesByTurn = React.useMemo(
+    () => turnFilesByTurn(projected, workspaceDirName),
+    [projected, workspaceDirName],
+  );
 
   // Only the newest turn can still be running. A bubble's own `isStreaming`
   // is per model call, not per turn: the text handler drops it on every

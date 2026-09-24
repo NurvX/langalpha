@@ -1316,7 +1316,8 @@
     "permissions": "Permissions",
     "allowFileBrowsing": "Allow file browsing",
     "allowFileDownload": "Allow file download",
-    "anyoneWithLink": "Anyone with this link can view the conversation."
+    "anyoneWithLink": "Anyone with this link can view the conversation.",
+    "signInForChart": "Sign in to open the live chart."
   },
   "chat": {
     "backToWorkflow": "Back to workflow",
@@ -1685,14 +1686,13 @@
     },
     "chartAnnotationCard": {
       "openAnnotatedChart": "Open annotated chart",
-      "openInPanel": "Open in panel",
+      "openChart": "Open chart",
       "loadingChart": "Loading chart…",
       "previewUnavailable": "Preview unavailable",
-      "close": "Close",
       "cardAria_one": "{{symbol}} {{timeframe}}, {{count}} annotation. Open annotated chart.",
       "cardAria_other": "{{symbol}} {{timeframe}}, {{count}} annotations. Open annotated chart.",
-      "dialogTitle_one": "{{symbol}} {{timeframe}} — {{count}} annotation",
-      "dialogTitle_other": "{{symbol}} {{timeframe}} — {{count}} annotations",
+      "cardAriaPricesOnly_one": "{{symbol}} {{timeframe}}, {{count}} annotation. Open chart.",
+      "cardAriaPricesOnly_other": "{{symbol}} {{timeframe}}, {{count}} annotations. Open chart.",
       "chipJumpTitle": "Switch the chart to {{symbol}} · {{timeframe}} to show these annotations",
       "chipShowTitle": "Show these annotations on the chart",
       "chipShownTitle": "Shown on the chart",
@@ -1756,6 +1756,14 @@
     "add": "Add"
   },
   "filePanel": {
+    "tabs": {
+      "files": "Workspace",
+      "memory": "Memory",
+      "memo": "Memo",
+      "status": "Status"
+    },
+    "planTab": "Plan",
+    "sourcesTab": "Sources ({{count}})",
     "changedSinceRead": "Changed since you opened it",
     "closeTab": "Close {{name}}",
     "deleteConfirm": "Delete {{count}}?",
@@ -1927,16 +1935,6 @@
       "retry": "Try again",
       "download": "Download instead"
     }
-  },
-  "rightPanel": {
-    "tabs": {
-      "files": "Workspace",
-      "memory": "Memory",
-      "memo": "Memo",
-      "sources": "Sources",
-      "status": "Status"
-    },
-    "close": "Close panel"
   },
   "memoryPanel": {
     "backToList": "Back to memory list",
@@ -2261,6 +2259,8 @@
     "status": "Status",
     "planDetails": "Plan Details",
     "noPlanDescription": "No plan description.",
+    "toolCallGone": "This tool call is no longer in the chat. Close the tab, or open the call again from the conversation.",
+    "toolCallGoneDialog": "This tool call is no longer in the chat. Open the call again from the conversation.",
     "subagentTask": "Subagent Task",
     "instructions": "Instructions",
     "goToSubagentTab": "Go to subagent tab",
@@ -2766,6 +2766,22 @@
   },
   "marketView": {
     "companyOverview": "Company Overview",
+    "quote": {
+      "live": "Live",
+      "closed": "Closed",
+      "delayed": "Delayed",
+      "source": "Source: {{label}}",
+      "open": "O",
+      "high": "H",
+      "low": "L",
+      "close": "C",
+      "volume": "V",
+      "avgVolume3m": "Avg vol 3M",
+      "prevClose": "Prev",
+      "range52w": "52W",
+      "change": "Chg",
+      "changeExt": "Chg incl. ext"
+    },
     "symbolSearch": {
       "switchSymbol": "Change symbol, currently {{symbol}}",
       "changeSymbol": "Change symbol",

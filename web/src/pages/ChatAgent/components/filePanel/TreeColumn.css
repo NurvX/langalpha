@@ -268,6 +268,22 @@
   background-color: var(--color-bg-elevated);
 }
 
+/* ====== Pinned stores ======
+   Memory and memo, pinned above the listing as rows of it, with a hairline
+   under the group: they open a tab the way a file does, but they are not in
+   the tree and a search of it must not read as having hidden them. */
+.file-panel-store-group {
+  flex-shrink: 0;
+  padding: 2px 0 4px;
+  border-bottom: 1px solid var(--color-border-muted);
+}
+.file-panel-store-row {
+  width: 100%;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+
 /* ====== Running apps ======
    A dev server the agent started, listed above the tree and shown in a tab.
    The port is the identity, so it is mono and always on the row; the group

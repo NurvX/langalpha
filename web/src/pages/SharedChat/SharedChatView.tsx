@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, FolderOpen } from 'lucide-react';
+import { motion, type PanInfo } from 'framer-motion';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader } from '@/components/ui/loader';
 import MessageList from '../ChatAgent/components/MessageList';
@@ -10,9 +11,12 @@ import {
   type MessageActions,
 } from '../ChatAgent/components/messageList/MessageActionsContext';
 import FilePanel, { type PanelTarget } from '../ChatAgent/components/FilePanel';
-import { dirTarget, fileTarget } from '../ChatAgent/components/filePanel/types';
+import { dirTarget, fileTarget, stampTarget, type ChartTabSpec } from '../ChatAgent/components/filePanel/types';
+import type { FileTab } from '../ChatAgent/components/filePanel/useFileTabs';
+import { CHART_SURFACE_MIN_WIDTH } from '@/pages/MarketView/components/chartSurfaceLayout';
 import { WorkspaceProvider } from '../ChatAgent/contexts/WorkspaceContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/components/ui/use-toast';
 import logoLight from '../../assets/img/logo.svg';
@@ -46,6 +50,7 @@ import type { FileLocation } from '../ChatAgent/utils/fileLocation';
 import { computeAgentArtifactRouting } from '../ChatAgent/utils/agentPaths';
 import { collectRecentWritePaths, downloadTarget, type TurnMessage } from '../ChatAgent/utils/fileRefResolver';
 import { useStableHandler } from '@/hooks/useStableHandler';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 // Message record type compatible with historyEventHandlers
 type MessageRecord = Record<string, unknown>;
@@ -57,6 +62,12 @@ type SetMessages = (updater: (prev: MessageRecord[]) => MessageRecord[]) => void
 function updateMessage(messages: MessageRecord[], messageId: string, updater: (m: MessageRecord) => MessageRecord): MessageRecord[] {
   return messages.map((m) => (m.id === messageId ? updater(m) : m));
 }
+
+/** The divider's bounds: a floor any tab fits, and a share of the window the thread keeps. */
+const PANEL_MIN_WIDTH = 280;
+const PANEL_MAX_RATIO = 0.6;
+/** A chart opens wide, as it does beside the owner's chat, so its toolbar has room. */
+const CHART_MAX_RATIO = 0.92;
 
 /**
  * SharedChatView — Public read-only view of a shared conversation.
@@ -78,9 +89,23 @@ export default function SharedChatView() {
   const [showFilePanel, setShowFilePanel] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
+  // Where the one listing fetch stands, so a second opener (or a re-render
+  // while it is in flight) does not ask again. A failed fetch goes back to
+  // idle so the next open retries it.
+  // Which share the listing belongs to rides along, so a different token starts over.
+  const filesFetchRef = useRef<{ token: string | undefined; state: 'idle' | 'loading' | 'loaded' }>({ token: undefined, state: 'idle' });
   const [filePanelTarget, setFilePanelTarget] = useState<PanelTarget | null>(null);
   const filePanelTargetSeq = useRef(0);
+  const { isLoggedIn, isInitialized: authInitialized } = useAuth();
+  const isMobile = useIsMobile();
   const [rightPanelWidth, setRightPanelWidth] = useState(750);
+  // What the panel has in front: a chart holds the divider at its floor.
+  const [panelTabKind, setPanelTabKind] = useState<FileTab['kind'] | null>(null);
+  const panelMinWidth = panelTabKind === 'chart' ? CHART_SURFACE_MIN_WIDTH : PANEL_MIN_WIDTH;
+  const panelMaxRatio = panelTabKind === 'chart' ? CHART_MAX_RATIO : PANEL_MAX_RATIO;
+  useEffect(() => {
+    setRightPanelWidth((w) => Math.max(w, Math.min(panelMinWidth, window.innerWidth * panelMaxRatio)));
+  }, [panelMinWidth, panelMaxRatio]);
   const isDraggingRef = useRef(false);
   // Armed for the duration of a divider drag; unmount mid-drag would otherwise
   // strand document listeners and app-wide col-resize/no-select body styles.
@@ -381,20 +406,50 @@ export default function SharedChatView() {
   const canBrowseFiles = permissions.allow_files === true;
   const canDownload = permissions.allow_download === true;
 
-  // File panel handlers
-  const handleToggleFilePanel = useCallback(async () => {
-    if (!canBrowseFiles) return;
-    const next = !showFilePanel;
-    setShowFilePanel(next);
-    if (next && files.length === 0) {
-      setFilesLoading(true);
+  // The route keeps this view mounted from one share to the next, and the panel
+  // and its listing belong to the share they were opened on.
+  useEffect(() => {
+    setFiles([]);
+    setShowFilePanel(false);
+    setFilePanelTarget(null);
+  }, [shareToken]);
+
+  // The listing loads whenever the panel is showing on a share that permits
+  // browsing, whichever entry opened it. A chart card opens the panel too, and
+  // a tree that never loaded reads as an empty workspace once its tab closes.
+  useEffect(() => {
+    if (!showFilePanel || !canBrowseFiles) return;
+    const fetchState = filesFetchRef.current;
+    if (fetchState.token === shareToken && fetchState.state !== 'idle') return;
+    let cancelled = false;
+    filesFetchRef.current = { token: shareToken, state: 'loading' };
+    setFilesLoading(true);
+    (async () => {
       try {
         const result = await getSharedFiles(shareToken!);
-        setFiles(result.files || []);
-      } catch { /* ignore */ }
-      setFilesLoading(false);
-    }
-  }, [canBrowseFiles, showFilePanel, files.length, shareToken]);
+        if (cancelled) return;
+        const listed = result.files || [];
+        setFiles(listed);
+        // An empty listing is asked again on the next open, as it was before
+        // the load moved here: files can land after the share was made.
+        filesFetchRef.current = { token: shareToken, state: listed.length ? 'loaded' : 'idle' };
+      } catch {
+        if (!cancelled) filesFetchRef.current = { token: shareToken, state: 'idle' };
+      }
+      if (!cancelled) setFilesLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+      // Unmount mid-fetch: the result is dropped, so the state must not claim it.
+      if (filesFetchRef.current.state === 'loading') filesFetchRef.current = { token: shareToken, state: 'idle' };
+    };
+  }, [showFilePanel, canBrowseFiles, shareToken]);
+
+  // File panel handlers
+  const handleToggleFilePanel = useCallback(() => {
+    if (!canBrowseFiles) return;
+    setShowFilePanel((prev) => !prev);
+  }, [canBrowseFiles]);
 
   // Build API adapter for FilePanel — wraps public endpoints. buildServedUrl
   // points the HTML preview iframe at the public serve URL (no workspace UUID).
@@ -423,7 +478,7 @@ export default function SharedChatView() {
   );
 
   // Open file from chat (tool call artifacts, file mention cards)
-  const handleOpenFile = useCallback(async (filePath: string, _workspaceId?: string, location?: FileLocation, opts?: { pin?: boolean }) => {
+  const handleOpenFile = useCallback((filePath: string, _workspaceId?: string, location?: FileLocation, opts?: { pin?: boolean }) => {
     if (!canBrowseFiles) return;
     setShowFilePanel(true);
     const dir = computeAgentArtifactRouting(filePath).targetDirectory;
@@ -431,16 +486,30 @@ export default function SharedChatView() {
     // string, so the same folder clicked twice arrives twice here too.
     const seq = ++filePanelTargetSeq.current;
     setFilePanelTarget(dir == null ? fileTarget(filePath, { location, pin: opts?.pin }, seq) : dirTarget(dir, seq));
-    // Ensure files are loaded
-    if (files.length === 0) {
-      setFilesLoading(true);
-      try {
-        const result = await getSharedFiles(shareToken!);
-        setFiles(result.files || []);
-      } catch { /* ignore */ }
-      setFilesLoading(false);
+  }, [canBrowseFiles]);
+
+  // A chart card opens the symbol as a chart tab here, prices only. The card
+  // names the owner's workspace, whose drawings and events the share does not
+  // reach, so the tab is opened with none: the surface then asks nothing of
+  // any workspace. No file permission is needed for a chart, so the panel
+  // opens for it either way and, without files to browse, holds just this tab.
+  // Market data is served per account, so a signed-out reader would get a
+  // chart that never loads; they are told why and stay on the thread. Until
+  // the session has resolved, signed-out is not yet known, so the tab opens
+  // and the chart surface itself fails soft if the data is refused.
+  const handleOpenChart = useCallback(({ symbol, timeframe }: ChartTabSpec) => {
+    if (authInitialized && !isLoggedIn) {
+      toast({ description: t('share.signInForChart') });
+      return;
     }
-  }, [canBrowseFiles, files.length, shareToken]);
+    setShowFilePanel(true);
+    setFilePanelTarget(stampTarget({ kind: 'chart', symbol, timeframe }, ++filePanelTargetSeq.current));
+  }, [authInitialized, isLoggedIn, t]);
+
+  // Clears only the ask it names, so one landed in between is kept.
+  const handleTargetHandled = useCallback((seq?: number) => {
+    setFilePanelTarget((prev) => (prev?.seq === seq ? null : prev));
+  }, []);
 
   // This thread's writes break ties between namesakes, the same tiebreak the
   // owner view passes. Identity-stable, so the actions memo below does not
@@ -454,6 +523,7 @@ export default function SharedChatView() {
   const readOnlyActions = useMemo<MessageActions>(() => ({
     ...READ_ONLY_MESSAGE_ACTIONS,
     onOpenFile: handleOpenFile,
+    onOpenChart: handleOpenChart,
     // A copy-link share grants allow_files without allow_download, so the
     // deliverable card offers Download only where the share actually permits
     // saving the bytes.
@@ -485,7 +555,7 @@ export default function SharedChatView() {
           }
         }
       : undefined,
-  }), [handleOpenFile, canDownload, shareToken, getRecentWritePaths, t]);
+  }), [handleOpenFile, handleOpenChart, canDownload, shareToken, getRecentWritePaths, t]);
 
   // Deep link: `?file=<path>` opens that report directly once metadata + file
   // permission are known. One-shot — the share-link target from §1.3b.
@@ -508,7 +578,8 @@ export default function SharedChatView() {
     const onMouseMove = (moveEvent: MouseEvent) => {
       if (!isDraggingRef.current) return;
       const delta = startX - moveEvent.clientX;
-      const newWidth = Math.max(280, Math.min(startWidth + delta, window.innerWidth * 0.6));
+      // The floor goes in before the cap so a narrow window still wins.
+      const newWidth = Math.max(PANEL_MIN_WIDTH, Math.min(Math.max(startWidth + delta, panelMinWidth), window.innerWidth * panelMaxRatio));
       setRightPanelWidth(newWidth);
     };
 
@@ -528,7 +599,27 @@ export default function SharedChatView() {
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
     dragCleanupRef.current = teardown;
-  }, [rightPanelWidth]);
+  }, [rightPanelWidth, panelMinWidth, panelMaxRatio]);
+
+  // One panel for both layouts; only its container differs by viewport.
+  const filePanel = (
+    <FilePanel
+      readOnly
+      canDownload={canDownload}
+      workspaceId=""
+      apiAdapter={fileApiAdapter}
+      // No files to browse means no tree, and the panel goes with its last tab.
+      singleFileMode={!canBrowseFiles}
+      onActiveTabKindChange={setPanelTabKind}
+      onClose={() => setShowFilePanel(false)}
+      files={files}
+      filesLoading={filesLoading}
+      target={filePanelTarget}
+      onTargetHandled={handleTargetHandled}
+      onOpenFile={handleOpenFile}
+      getRecentWritePaths={getRecentWritePaths}
+    />
+  );
 
   // Error state
   if (error) {
@@ -556,7 +647,7 @@ export default function SharedChatView() {
 
   return (
     <div
-      className="flex h-screen w-full overflow-hidden"
+      className="relative flex h-screen w-full overflow-hidden"
       style={{ backgroundColor: 'var(--color-bg-page)' }}
     >
       {/* Left Side: Topbar + Chat Window — identical structure to ChatView */}
@@ -679,27 +770,39 @@ export default function SharedChatView() {
         </div>
       </div>
 
-      {/* Right Side: File Panel — reuses real FilePanel in readOnly mode */}
-      {showFilePanel && canBrowseFiles && (
+      {/* Right Side: File Panel — reuses real FilePanel in readOnly mode. Only
+          a permitted file open or a chart card sets it showing, so the flag
+          alone is the gate. A phone has no room beside the thread, so there the
+          panel is a full-screen sheet over it, as the owner's view does, and
+          closing it returns to the chat. */}
+      {showFilePanel && (isMobile ? (
+        <motion.div
+          key="file"
+          initial={{ x: '100%' }}
+          animate={{ x: 0 }}
+          transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+          // A chart pans with the same rightward swipe, so a chart tab closes by its button.
+          drag={panelTabKind === 'chart' ? false : 'x'}
+          dragConstraints={{ left: 0, right: 0 }}
+          dragElastic={{ left: 0, right: 0.5 }}
+          onDragEnd={(_: unknown, info: PanInfo) => {
+            if (info.velocity.x > 300 || info.offset.x > 120) setShowFilePanel(false);
+          }}
+          className="flex overflow-hidden mobile-panel-overlay"
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 30, backgroundColor: 'var(--color-bg-page)' }}
+        >
+          <div className="flex-shrink-0 h-full" style={{ width: '100%' }}>
+            {filePanel}
+          </div>
+        </motion.div>
+      ) : (
         <>
           <div className="chat-split-divider" onMouseDown={handleDividerMouseDown} />
           <div className="flex-shrink-0" style={{ width: rightPanelWidth }}>
-            <FilePanel
-              readOnly
-              canDownload={canDownload}
-              workspaceId=""
-              apiAdapter={fileApiAdapter}
-              onClose={() => setShowFilePanel(false)}
-              files={files}
-              filesLoading={filesLoading}
-              target={filePanelTarget}
-              onTargetHandled={() => setFilePanelTarget(null)}
-              onOpenFile={handleOpenFile}
-              getRecentWritePaths={getRecentWritePaths}
-            />
+            {filePanel}
           </div>
         </>
-      )}
+      ))}
     </div>
   );
 }

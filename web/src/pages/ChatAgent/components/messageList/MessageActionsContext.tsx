@@ -14,7 +14,7 @@
  * fallback for isolated renders in tests, not a supported host configuration.
  */
 import React from 'react';
-import type { FeedbackResult, SubagentInfo, ToolCallProcessRecord } from './types';
+import type { FeedbackResult, SubagentInfo } from './types';
 import type { ToolApprovalPosition } from '@/types/chat';
 import type { OpenFileHandler } from '../../utils/fileLocation';
 import type { ChartTabSpec } from '../filePanel/types';
@@ -34,10 +34,12 @@ export interface MessageActions {
   onOpenSources?: (messageId: string) => void;
   /** Opens a live chart for a symbol beside the chat; absent where there is no panel to land in. */
   onOpenChart?: (spec: ChartTabSpec) => void;
-  onToolCallDetailClick?: (proc: ToolCallProcessRecord) => void;
+  /** Opens a tool call's result by id; the host reads the live record. */
+  onToolCallDetailClick?: (toolCallId: string) => void;
   onApprovePlan?: () => void;
   onRejectPlan?: () => void;
-  onPlanDetailClick?: (planData: Record<string, unknown>) => void;
+  /** Opens a plan's text; the approval id keeps one tab per plan. */
+  onPlanDetailClick?: (planApprovalId: string, planData: Record<string, unknown>) => void;
   onAnswerQuestion?: (answer: string, questionId: string, interruptId: string) => void;
   onSkipQuestion?: (questionId: string, interruptId: string) => void;
   onApproveCreateWorkspace?: (proposalData: Record<string, unknown>) => void;

@@ -1,10 +1,13 @@
 import React, { useCallback, useRef } from 'react';
-import { ArrowLeft, CandlestickChart, FolderOpen, Globe, PanelRight, Plus, Settings, X, type LucideIcon } from 'lucide-react';
+import { Activity, ArrowLeft, BookMarked, BookOpen, CandlestickChart, FolderOpen, Globe, PanelRight, Plus, ScrollText, Settings, X, XCircle, Zap, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { fileGlyph } from './fileMeta';
-import type { FileTab } from './useFileTabs';
+import { getCompletedRowTitle, getCompletedSummary, getToolIcon, isTaskTool } from '../toolDisplayConfig';
+import { isOnLoan, type FileTab } from './useFileTabs';
+import { isToolCallFailed } from './toolCallFailure';
+import type { ToolCallProcessRecord } from '../ToolCallDetailView';
 import './TabStrip.css';
 
 interface TabStripProps {
@@ -17,23 +20,68 @@ interface TabStripProps {
   onNewTab: (() => void) | null;
   /** The file changed under this tab since it last read it: the amber dot. */
   hasChanged: (path: string) => boolean;
+  /** How many distinct sources a turn cites, as its pill counts them. */
+  sourceCount?: (messageId: string) => number;
+  /** The live record behind a tool tab, which names it the way its row is named. */
+  getToolCallProcess?: (toolCallId: string) => ToolCallProcessRecord | undefined;
   treeOpen: boolean;
   /** Null where the panel is locked to one file and has no tree to show. */
   onToggleTree: (() => void) | null;
+  /** The reader's stores, offered here only where the tree that pins them
+   *  never renders: a panel locked to one file has no other way to them. */
+  onOpenMemory?: (() => void) | null;
+  onOpenMemo?: (() => void) | null;
   /** The panel's own close, where the surface around it does not own one. */
   onPanelClose: (() => void) | null;
   /** Mobile leaves the panel by a back arrow rather than an X. */
   backArrow?: boolean;
 }
 
+/** The transcript reads a tool or sources tab is named from; the tab itself holds only an id. */
+interface Lookups {
+  sourceCount?: (messageId: string) => number;
+  getToolCallProcess?: (toolCallId: string) => ToolCallProcessRecord | undefined;
+}
+
+/** A tool tab's summary past this is cut with an ellipsis; the hover card carries the whole of it. */
+const TOOL_SUMMARY_MAX = 28;
+
 /**
  * How a tab reads on the strip. `name` is the pill; `detail` is what the pill
  * leaves out and the hover card gives back underneath in a quieter voice:
  * where the file lives, which port the app answers on, which interval the
  * chart is on. A running app with no title is named by its port, the only
- * thing that tells two of them apart; a chart is named by its ticker.
+ * thing that tells two of them apart; a chart is named by its ticker; a tool
+ * tab is named the way its row is, and a sources tab by its count. `failed`
+ * is the one status a tab carries: the tool behind it did not succeed.
  */
-function describe(tab: FileTab, t: TFunction): { name: string; Glyph: LucideIcon; detail: string | null } {
+interface TabReading {
+  name: string;
+  Glyph: LucideIcon;
+  detail: string | null;
+  failed?: boolean;
+}
+
+// The strip re-reads on every streamed chunk, but a call's record is replaced,
+// never edited, when the call changes, so a tool tab's reading is kept per record.
+const toolReadings = new WeakMap<ToolCallProcessRecord, { t: TFunction; reading: TabReading }>();
+
+function readToolCall(proc: ToolCallProcessRecord, t: TFunction): TabReading {
+  const toolName = proc.toolName || '';
+  const call = proc.toolCall ? { ...proc.toolCall } : undefined;
+  const artifact = proc.toolCallResult?.artifact;
+  const title = isTaskTool(toolName) ? t('toolArtifact.subagentTask') : getCompletedRowTitle(toolName, call, t, artifact);
+  const summary = getCompletedSummary(toolName, call, t);
+  const short = summary && summary.length > TOOL_SUMMARY_MAX ? `${summary.slice(0, TOOL_SUMMARY_MAX - 1)}…` : summary;
+  return {
+    name: short ? `${title} · ${short}` : title,
+    Glyph: getToolIcon(toolName, call?.args),
+    detail: summary && summary !== short ? summary : null,
+    failed: isToolCallFailed(proc),
+  };
+}
+
+function describe(tab: FileTab, t: TFunction, { sourceCount, getToolCallProcess }: Lookups): TabReading {
   switch (tab.kind) {
     case 'empty':
       return { name: t('filePanel.openFile'), Glyph: FolderOpen, detail: null };
@@ -43,10 +91,31 @@ function describe(tab: FileTab, t: TFunction): { name: string; Glyph: LucideIcon
     }
     case 'settings':
       return { name: t('chat.workspaceSettings'), Glyph: Settings, detail: null };
+    case 'memory':
+      return { name: t('filePanel.tabs.memory'), Glyph: BookMarked, detail: null };
+    case 'memo':
+      return { name: t('filePanel.tabs.memo'), Glyph: ScrollText, detail: null };
+    case 'status':
+      return { name: t('filePanel.tabs.status'), Glyph: Activity, detail: null };
     case 'preview':
       return { name: tab.title || `:${tab.port}`, Glyph: Globe, detail: [`:${tab.port}`, tab.previewPath].filter(Boolean).join(' ') };
     case 'chart':
       return { name: tab.symbol, Glyph: CandlestickChart, detail: `${t('filePanel.chartTab')} · ${tab.timeframe}` };
+    case 'tool': {
+      // Named the way its row is, so the tab is found by what was clicked. A
+      // record the transcript no longer holds leaves the tab with a plain name.
+      const proc = getToolCallProcess?.(tab.toolCallId);
+      if (!proc) return { name: t('toolArtifact.toolCall'), Glyph: getToolIcon('', undefined), detail: null };
+      const kept = toolReadings.get(proc);
+      if (kept?.t === t) return kept.reading;
+      const reading = readToolCall(proc, t);
+      toolReadings.set(proc, { t, reading });
+      return reading;
+    }
+    case 'plan':
+      return { name: t('filePanel.planTab'), Glyph: Zap, detail: null };
+    case 'sources':
+      return { name: t('filePanel.sourcesTab', { count: sourceCount?.(tab.messageId) ?? 0 }), Glyph: BookOpen, detail: null };
   }
 }
 
@@ -65,8 +134,12 @@ export function TabStrip({
   onPin,
   onNewTab,
   hasChanged,
+  sourceCount,
+  getToolCallProcess,
   treeOpen,
   onToggleTree,
+  onOpenMemory = null,
+  onOpenMemo = null,
   onPanelClose,
   backArrow = false,
 }: TabStripProps): React.ReactElement {
@@ -111,10 +184,10 @@ export function TabStrip({
       <TooltipProvider delayDuration={350} skipDelayDuration={600}>
       <div className="file-panel-tabs clips-focus-ring" role="tablist" aria-label={t('filePanel.openFiles')} ref={listRef}>
         {tabs.map((tab) => {
-          const { name, Glyph, detail } = describe(tab, t);
+          const { name, Glyph, detail, failed } = describe(tab, t, { sourceCount, getToolCallProcess });
           const hasHint = detail != null || tab.kind === 'file';
           const active = tab.id === activeId;
-          const onLoan = tab.kind === 'file' && tab.preview;
+          const onLoan = isOnLoan(tab);
           const pill = (
             <div
               key={tab.id}
@@ -130,6 +203,9 @@ export function TabStrip({
             >
               <Glyph className="h-3.5 w-3.5 flex-shrink-0" />
               <span className="file-panel-tab-name">{name}</span>
+              {failed && (
+                <XCircle className="h-3.5 w-3.5 flex-shrink-0 file-panel-tab-failed" role="img" aria-label={t('toolArtifact.a11y.toolCallFailed')} />
+              )}
               {tab.kind === 'file' && hasChanged(tab.path) && (
                 <span className="file-panel-tab-dot" title={t('filePanel.changedSinceRead')} aria-hidden="true" />
               )}
@@ -165,6 +241,16 @@ export function TabStrip({
       )}
 
       <div className="file-panel-strip-right">
+        {onOpenMemory && (
+          <button type="button" onClick={onOpenMemory} className="file-panel-icon-btn" title={t('filePanel.tabs.memory')} aria-label={t('filePanel.tabs.memory')}>
+            <BookMarked className="h-4 w-4" />
+          </button>
+        )}
+        {onOpenMemo && (
+          <button type="button" onClick={onOpenMemo} className="file-panel-icon-btn" title={t('filePanel.tabs.memo')} aria-label={t('filePanel.tabs.memo')}>
+            <ScrollText className="h-4 w-4" />
+          </button>
+        )}
         {onToggleTree && (
           <button
             type="button"

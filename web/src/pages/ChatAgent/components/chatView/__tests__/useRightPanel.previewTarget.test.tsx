@@ -62,7 +62,7 @@ describe('a running app opened from chat', () => {
   it('clears once the panel has opened it, so a later file click is not overruled', () => {
     const result = open(false);
     act(() => result.current.handleOpenPreview(APP));
-    act(() => result.current.handleTargetHandled());
+    act(() => result.current.handleTargetHandled((result.current.panelTarget as { seq: number }).seq));
 
     expect(result.current.panelTarget).toBeNull();
     expect(result.current.rightPanelType).toBe('file');

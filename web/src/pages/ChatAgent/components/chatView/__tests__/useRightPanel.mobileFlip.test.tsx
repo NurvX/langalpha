@@ -8,21 +8,49 @@ import { useRightPanel } from '../useRightPanel';
 const { getPreviewUrl } = vi.hoisted(() => ({ getPreviewUrl: vi.fn() }));
 vi.mock('../../../utils/api', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), getPreviewUrl }));
 
+const TOOL_CALL = { toolName: 'WebFetch', toolCall: { id: 'tc1', args: {} }, isInProgress: true };
+const MESSAGES = [{ id: 'm1', toolCallProcesses: { tc1: TOOL_CALL } }];
+
 function open(isMobile: boolean) {
   // Hoisted out of the render callback: a fresh identity per render would
   // re-run the workspace-reset effect and wipe the state under test.
   const setFilePanelWorkspaceId = vi.fn();
-  return renderHook((props: { isMobile: boolean }) => useRightPanel({
+  return renderHook((props: { isMobile: boolean; messages?: unknown[] }) => useRightPanel({
     isMobile: props.isMobile,
     workspaceId: 'ws',
     isActive: true,
     containerRef: { current: null },
     setFilePanelWorkspaceId,
-    messages: [],
-  }), { initialProps: { isMobile }, wrapper: ({ children }) => <MemoryRouter>{children}</MemoryRouter> });
+    messages: props.messages ?? MESSAGES,
+  }), { initialProps: { isMobile } as { isMobile: boolean; messages?: unknown[] }, wrapper: ({ children }) => <MemoryRouter>{children}</MemoryRouter> });
 }
 
 const APP = { url: '', port: 8050, title: 'Dashboard', command: 'python app.py', path: '/timeline.html', loading: true };
+
+describe('the detail sheet', () => {
+  it('reads the tool call live rather than holding the record it was opened on', () => {
+    const { result, rerender } = open(true);
+    act(() => result.current.handleToolCallDetailClick('tc1'));
+    expect(result.current.rightPanelType).toBe('detail');
+    expect(result.current.detailToolCall).toMatchObject({ isInProgress: true });
+
+    const settled = { ...TOOL_CALL, isInProgress: false, isComplete: true, toolCallResult: { content: 'done' } };
+    act(() => rerender({ isMobile: true, messages: [{ id: 'm1', toolCallProcesses: { tc1: settled } }] }));
+
+    expect(result.current.detailToolCall).toMatchObject({ isComplete: true, toolCallResult: { content: 'done' } });
+  });
+
+  it('lands the call it was showing as a tool tab when the viewport widens', () => {
+    const { result, rerender } = open(true);
+    act(() => result.current.handleToolCallDetailClick('tc1'));
+
+    act(() => rerender({ isMobile: false }));
+
+    expect(result.current.rightPanelType).toBe('file');
+    expect(result.current.panelTarget).toMatchObject({ kind: 'tool', toolCallId: 'tc1' });
+    expect(result.current.detailToolCall).toBeNull();
+  });
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
