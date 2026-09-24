@@ -1354,16 +1354,14 @@
       "markdown": "文档引用",
       "script": "脚本引用"
     },
-    "unavailableTitle": "此链接不可用",
-    "unavailableBody": "它可能已被关闭，或者从未存在。",
+    "unavailableTitle": "你没有访问权限，或此链接不可用",
+    "unavailableBody": "它可能仅对所有者可见、已被关闭，或已不存在。",
     "unavailableSignInBody": "如果这是你的链接，请登录后打开。",
     "loadFailedTitle": "无法加载此链接",
     "loadFailedBody": "加载过程中出了点问题，请稍后重试。",
     "retry": "重试",
     "signIn": "登录",
-    "goToLangAlpha": "前往 LangAlpha",
-    "noPreview": "此文件类型没有预览。",
-    "fileLoadFailed": "无法加载文件。"
+    "goToLangAlpha": "前往 LangAlpha"
   },
   "chat": {
     "backToWorkflow": "返回工作流",

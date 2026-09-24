@@ -1354,16 +1354,14 @@
       "markdown": "in document",
       "script": "in script"
     },
-    "unavailableTitle": "This link isn't available",
-    "unavailableBody": "It may have been turned off, or it never existed.",
+    "unavailableTitle": "You don't have access, or this link is unavailable",
+    "unavailableBody": "It may be private to its owner, turned off, or no longer exist.",
     "unavailableSignInBody": "If this is your link, sign in to open it.",
     "loadFailedTitle": "Couldn't load this link",
     "loadFailedBody": "Something went wrong on the way. Try again in a moment.",
     "retry": "Retry",
     "signIn": "Sign in",
-    "goToLangAlpha": "Go to LangAlpha",
-    "noPreview": "This file type has no preview.",
-    "fileLoadFailed": "Couldn't load the file."
+    "goToLangAlpha": "Go to LangAlpha"
   },
   "chat": {
     "backToWorkflow": "Back to workflow",

@@ -66,7 +66,8 @@ export const queryKeys = {
   // question: the owner gets a different answer for the same code.
   share: {
     all:      ['share'],
-    metadata: (code: string, asVisitor: boolean) => [...queryKeys.share.all, 'metadata', code, asVisitor],
+    metadata: (code: string, viewer: string | null, asVisitor: boolean, path: string | null) =>
+      [...queryKeys.share.all, 'metadata', code, viewer, asVisitor, path],
   },
   // One projection of a machine: the list. A detail entry would be a second
   // place for a status to disagree with itself, and every surface that shows a
