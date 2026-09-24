@@ -187,6 +187,7 @@ class FlashAgent:
             "flash_system.md.j2",
             tools=tools,
             direct_tool_summary=direct_tool_summary,
+            ask_user_enabled=True,
             **guidance_template_vars(guidance),
         )
 
