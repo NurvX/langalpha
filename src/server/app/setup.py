@@ -619,6 +619,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start WorkspaceFileGCService: {e}")
 
+    # A multipart upload the process died holding is never aborted by us;
+    # only the bucket's own expiry rule reclaims its parts. The check only
+    # feeds a warning, so an unresponsive store must not hold up startup.
+    try:
+        from src.utils.storage import has_multipart_cleanup_rule
+
+        if (
+            await asyncio.wait_for(
+                asyncio.to_thread(has_multipart_cleanup_rule), timeout=5
+            )
+            is False
+        ):
+            logger.warning(
+                "Storage bucket has no rule expiring incomplete multipart uploads; "
+                "parts of an upload interrupted mid-transfer will be kept and billed. "
+                "Add an AbortIncompleteMultipartUpload lifecycle rule (e.g. 1 day)."
+            )
+    except Exception as e:
+        logger.info(f"Skipped the multipart cleanup rule check: {e!r}")
+
     # Confirm the runtime credit gate can reach its lease service, and on
     # terms its refresher can work with. Both failures it catches are silent
     # at request time.
@@ -1011,8 +1031,23 @@ class MalformedIdDiagnosticMiddleware:
         await self.app(scope, receive, send)
 
 
+class _GZipExceptFileDownloads(GZipMiddleware):
+    """GZip, except the workspace file download.
+
+    That body is the file's own bytes, often already compressed, and can be
+    gigabytes streamed from a sandbox: compressing it spends a worker's CPU
+    for little, and drops the Content-Length the client's progress bar needs.
+    """
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"].endswith("/files/download"):
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
 # Register GZip compression middleware (compresses JSON responses >= 1KB)
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(_GZipExceptFileDownloads, minimum_size=1000)
 
 # TEMP (malformed-id-diag): log malformed workspace/thread ids + Referer so the next
 # real prod occurrence names the SPA route that built the bad request.

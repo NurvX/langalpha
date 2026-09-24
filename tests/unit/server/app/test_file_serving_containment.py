@@ -134,6 +134,20 @@ class _FsSandbox:
         except OSError:
             return None
 
+    async def astream_file_bytes(self, filepath: str):
+        self.reads.append(filepath)
+        if not Path(filepath).is_file():
+            return None
+
+        async def body():
+            # Read lazily, like a real stream: what the file holds when the
+            # client reads it, not when the download opened.
+            data = Path(filepath).read_bytes()
+            for start in range(0, len(data), 3):
+                yield data[start : start + 3]
+
+        return body()
+
 
 @pytest.fixture
 def tree(tmp_path: Path) -> SimpleNamespace:
@@ -774,6 +788,76 @@ async def test_workspace_download_denies_a_symlink_out_of_the_root(tree) -> None
         patch(_CRUD_OWNER, MagicMock()),
         patch(_CRUD_WD, return_value=tree.root),
         patch(_CRUD_ACQUIRE, AsyncMock(return_value=tree.sandbox)),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await download_workspace_file(
+                WS_ID, OWNER, _json_request(), path="work/escape/secret.txt"
+            )
+    assert exc.value.status_code == 404
+    assert tree.sandbox.reads == []
+
+
+_EXEC_CAP = "src.server.app.workspace_files._containment.EXEC_READ_MAX_BYTES"
+_CRUD_STORAGE = "src.server.app.workspace_files.crud.is_storage_enabled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("storage_on", [False, True])
+async def test_workspace_download_past_the_exec_limit_uses_the_provider(
+    tree, storage_on
+) -> None:
+    """A file too large for the exec read streams from the provider, fetched at
+    the path the containment check resolved, with or without a store: the
+    store's link is only an optimization over this route."""
+    request = MagicMock()
+    request.headers = {}
+    with (
+        patch(_CRUD_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_CRUD_OWNER, MagicMock()),
+        patch(_CRUD_WD, return_value=tree.root),
+        patch(_CRUD_ACQUIRE, AsyncMock(return_value=tree.sandbox)),
+        patch(_EXEC_CAP, 4),
+        patch(_CRUD_STORAGE, return_value=storage_on),
+    ):
+        response = await download_workspace_file(WS_ID, OWNER, request, path="work/chart.png")
+        body = b"".join([chunk async for chunk in response.body_iterator])
+    assert body == b"\x89PNG\r\n\x1a\n\xff\xfe"
+    assert response.headers["content-length"] == str(len(body))
+    assert tree.sandbox.reads == [f"{tree.root}/work/chart.png"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_download_fails_the_send_when_the_file_grows(tree) -> None:
+    """A file that outgrows the size sent as Content-Length breaks the download
+    rather than handing the client a silent prefix of it."""
+    request = MagicMock()
+    request.headers = {}
+    with (
+        patch(_CRUD_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_CRUD_OWNER, MagicMock()),
+        patch(_CRUD_WD, return_value=tree.root),
+        patch(_CRUD_ACQUIRE, AsyncMock(return_value=tree.sandbox)),
+        patch(_EXEC_CAP, 4),
+        patch(_CRUD_STORAGE, return_value=False),
+    ):
+        response = await download_workspace_file(WS_ID, OWNER, request, path="work/chart.png")
+        with Path(tree.root, "work/chart.png").open("ab") as f:
+            f.write(b"appended by an agent")
+        with pytest.raises(Exception, match="grew past"):
+            _ = [chunk async for chunk in response.body_iterator]
+
+
+@pytest.mark.asyncio
+async def test_workspace_download_past_the_exec_limit_still_denies_an_escape(
+    tree,
+) -> None:
+    with (
+        patch(_CRUD_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_CRUD_OWNER, MagicMock()),
+        patch(_CRUD_WD, return_value=tree.root),
+        patch(_CRUD_ACQUIRE, AsyncMock(return_value=tree.sandbox)),
+        patch(_EXEC_CAP, 1),
+        patch(_CRUD_STORAGE, return_value=False),
     ):
         with pytest.raises(HTTPException) as exc:
             await download_workspace_file(

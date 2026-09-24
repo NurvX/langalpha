@@ -97,6 +97,10 @@ async def _sync_with_empty_sandbox(incomplete):
             "src.server.services.persistence.backup.delete_removed_files",
             new=AsyncMock(return_value=7),
         ) as deleter,
+        patch(
+            "src.server.services.persistence.backup.get_workspace_total_size",
+            new=AsyncMock(return_value=0),
+        ),
     ):
         result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
     return result, deleter
@@ -108,7 +112,7 @@ async def test_empty_listing_while_flagged_deletes_nothing():
     against it erases the entire manifest — the whole file list, not one row."""
     result, deleter = await _sync_with_empty_sandbox(True)
     deleter.assert_not_awaited()
-    assert result["deleted"] == 0
+    assert result.deleted == 0
 
 
 @pytest.mark.asyncio
@@ -116,7 +120,7 @@ async def test_empty_listing_when_not_flagged_still_prunes():
     """A user who really did delete everything must still see it reflected."""
     result, deleter = await _sync_with_empty_sandbox(False)
     deleter.assert_awaited_once()
-    assert result["deleted"] == 7
+    assert result.deleted == 7
 
 
 @pytest.mark.asyncio
@@ -177,8 +181,8 @@ async def _sync_with_one_unchanged_file(incomplete: bool):
 async def test_flagged_workspace_keeps_the_row_for_a_missing_file():
     result, deleter = await _sync_with_one_unchanged_file(True)
     deleter.assert_not_awaited()
-    assert result["deleted"] == 0
-    assert result["skipped"] == 1
+    assert result.deleted == 0
+    assert result.skipped == 1
 
 
 @pytest.mark.asyncio
@@ -186,7 +190,7 @@ async def test_unflagged_workspace_prunes_the_row_for_a_missing_file():
     result, deleter = await _sync_with_one_unchanged_file(False)
     deleter.assert_awaited_once()
     assert deleter.await_args.args[1] == {"keep.txt"}
-    assert result["deleted"] == 1
+    assert result.deleted == 1
 
 
 async def _sync_with_one_restamped_file(incomplete: bool, stamp_failure=None):
@@ -224,7 +228,7 @@ async def test_a_stamp_write_that_fails_is_counted_as_an_error():
     stop reads the backup as clean and tears the sandbox down with the new
     mode unrecorded."""
     result, _ = await _sync_with_one_restamped_file(False, RuntimeError("db away"))
-    assert result["errors"] == 1
+    assert result.errors == 1
 
 
 @pytest.mark.asyncio
@@ -233,7 +237,7 @@ async def test_flagged_workspace_leaves_a_moved_stamp_unrecorded():
     stamp. Recording it makes the wrong mode the one the retry restores."""
     result, stamps = await _sync_with_one_restamped_file(True)
     stamps.assert_not_awaited()
-    assert result["skipped"] == 1
+    assert result.skipped == 1
 
 
 @pytest.mark.asyncio
@@ -270,7 +274,7 @@ async def test_prune_is_fenced_to_rows_untouched_since_the_scan_began():
     assert deleter.await_args.kwargs["untouched_since"] == CLOCK
     # And fenced to the folder this scan actually walked.
     assert deleter.await_args.kwargs["walked_dir_name"] == DIR_NAME
-    assert result["deleted"] == 1
+    assert result.deleted == 1
 
 
 @pytest.mark.asyncio
@@ -279,7 +283,7 @@ async def test_unreadable_root_does_not_wipe_the_manifest():
     same signature as an emptied workspace. It must keep every row."""
     result, deleter = await _sync(_scan(errors=[{"path": ".", "error": "EIO"}]))
     deleter.assert_not_awaited()
-    assert result["deleted"] == 0 and result["errors"] == 1
+    assert result.deleted == 0 and result.errors == 1
 
 
 @pytest.mark.asyncio
@@ -287,7 +291,7 @@ async def test_any_scan_read_error_withholds_pruning():
     entry = ScanEntry(path="reports", kind="dir", size=0, mtime_ns=MTIME_NS, mode=0o755, sha256=None, symlink_target=None, is_binary=None)
     result, deleter = await _sync(_scan(entry, errors=[{"path": "reports/q3", "error": "EACCES"}]))
     deleter.assert_not_awaited()
-    assert result["errors"] == 1
+    assert result.errors == 1
 
 
 @pytest.mark.asyncio
@@ -296,7 +300,7 @@ async def test_a_file_that_vanished_mid_scan_does_not_withhold_pruning():
     read: absent for the right reason. It is not data at risk either."""
     result, deleter = await _sync(_scan(errors=[{"path": "reports/q3", "error": "ENOENT", "errno": 2}]))
     deleter.assert_awaited_once()
-    assert result["errors"] == 0
+    assert result.errors == 0
 
 
 @pytest.mark.asyncio
@@ -306,8 +310,8 @@ async def test_a_missing_root_still_withholds_pruning():
     empty listing it yields must not prune anything."""
     result, deleter = await _sync(_scan(errors=[{"path": ".", "error": "ENOENT", "errno": 2}]))
     deleter.assert_not_awaited()
-    assert result["deleted"] == 0 and result["errors"] == 0
-    assert result["root_missing"] is True
+    assert result.deleted == 0 and result.errors == 0
+    assert result.root_missing is True and result.unsaved == []
 
 
 # --- a directory that stopped being one -------------------------------------
@@ -347,7 +351,7 @@ async def test_a_flagged_workspace_still_drops_children_of_a_decayed_directory()
     deleter.assert_not_awaited()
     rows_deleter.assert_awaited_once()
     assert rows_deleter.await_args.args[1] == ["a/child"]
-    assert result["deleted"] == 1
+    assert result.deleted == 1
 
 
 @pytest.mark.asyncio
@@ -355,7 +359,7 @@ async def test_an_unflagged_workspace_counts_both_prunes():
     result, rows_deleter, deleter = await _sync_dir_turned_symlink(False)
     rows_deleter.assert_awaited_once()
     deleter.assert_awaited_once()
-    assert result["deleted"] == 2
+    assert result.deleted == 2
 
 
 async def _sync_legacy_child_under_new_symlink():
@@ -389,4 +393,4 @@ async def test_children_with_no_parent_row_are_still_dropped_under_a_new_symlink
     result, rows_deleter, deleter = await _sync_legacy_child_under_new_symlink()
     deleter.assert_not_awaited()
     assert sorted(rows_deleter.await_args.args[1]) == ["a/child", "a/sub/deep"]
-    assert result["deleted"] == 2
+    assert result.deleted == 2

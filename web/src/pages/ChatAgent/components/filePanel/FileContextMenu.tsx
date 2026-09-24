@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Download, FolderOpen, PanelRight, RefreshCw, ScrollText, TextSelect } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ContextMenuData } from './types';
+import { downloadLabel, type DownloadState } from '../../utils/downloadNotice';
 
 export type FileMenuAction = 'add-context' | 'add-to-memo' | 'open' | 'open-new-tab' | 'download' | 'download-many';
 
@@ -15,6 +16,8 @@ interface FileContextMenuProps {
   /** Null where this file cannot go in the memo store at all. */
   memoState: 'absent' | 'present' | null;
   canDownload: boolean;
+  /** This file's save is still being prepared, so Download would only join it. */
+  downloadState?: DownloadState;
   /** How many files a bulk save would cover, counting only a selection this file is in. */
   selectedCount: number;
 }
@@ -41,7 +44,7 @@ const items = (menu: HTMLElement) => Array.from(menu.querySelectorAll<HTMLElemen
 
 /** The tree's right-click menu: what can be done with one file without opening it. */
 export function FileContextMenu({
-  menu, onAction, onClose, canAddContext, memoState, canDownload, selectedCount,
+  menu, onAction, onClose, canAddContext, memoState, canDownload, downloadState = 'idle', selectedCount,
 }: FileContextMenuProps): React.ReactElement {
   const { t } = useTranslation();
   const { ref, pos } = useClampedPosition(menu.x, menu.y);
@@ -68,8 +71,14 @@ export function FileContextMenu({
     all[(at + step + all.length) % all.length]?.focus();
   };
 
-  const item = (action: FileMenuAction, icon: React.ReactNode, label: string) => (
-    <button type="button" role="menuitem" className="file-panel-context-menu-item" onClick={() => onAction(action, menu.filePath)}>
+  const item = (action: FileMenuAction, icon: React.ReactNode, label: string, disabled = false) => (
+    <button
+      type="button"
+      role="menuitem"
+      className="file-panel-context-menu-item"
+      disabled={disabled}
+      onClick={() => onAction(action, menu.filePath)}
+    >
       {icon}
       {label}
     </button>
@@ -91,7 +100,12 @@ export function FileContextMenu({
       {memoState === 'absent' && item('add-to-memo', <ScrollText {...ICON} />, t('context.addToMemo'))}
       {item('open', <FolderOpen {...ICON} />, t('context.openFile'))}
       {item('open-new-tab', <PanelRight {...ICON} />, t('filePanel.openInNewTab'))}
-      {canDownload && item('download', <Download {...ICON} />, t('filePanel.download'))}
+      {canDownload && item(
+        'download',
+        <Download {...ICON} />,
+        downloadLabel(downloadState, t('filePanel.download')),
+        downloadState !== 'idle',
+      )}
       {canDownload && selectedCount > 1
         && item('download-many', <Download {...ICON} />, t('filePanel.downloadCount', { count: selectedCount }))}
     </div>,

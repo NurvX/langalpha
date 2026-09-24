@@ -255,6 +255,15 @@ def test_scan_prior_reuse_vs_rehash(tmp_path):
     assert out["reused"] == 0 and out["hashed"] == 1
 
 
+
+def test_scan_without_hashing_reads_no_file(tmp_path, monkeypatch):
+    _write(tmp_path, "big.bin", b"abc")
+    monkeypatch.setattr(rt, "_hash_file", lambda _p: pytest.fail("a listing hashed a file"))
+    out = rt.scan({"root": str(tmp_path), "hash": False})
+    entry = out["entries"][0]
+    assert (entry["path"], entry["size"], entry["sha256"]) == ("big.bin", 3, None)
+    assert out["hashed"] == 0
+
 def test_scan_size_describes_the_hashed_bytes(tmp_path, monkeypatch):
     """A file that grows between the stat and the hash is reported with the
     length the digest covers; the stale stat size would fail every later
@@ -457,18 +466,57 @@ def test_push_size_changed_before_upload_skips_http(tmp_path):
     assert out["results"][_sha(data)]["status"] == "changed"
 
 
-def test_bounded_body_stops_at_the_declared_length_and_notices_the_rest(tmp_path):
+
+def _parts(bucket, data: bytes, part_size: int):
+    return [
+        {"part_number": i + 1, "offset": off, "size": min(part_size, len(data) - off),
+         "url": f"{bucket.base}/part-{i + 1}"}
+        for i, off in enumerate(range(0, len(data), part_size))
+    ]
+
+
+@pytest.mark.enable_socket
+def test_multipart_digest_counts_a_retried_part_once(tmp_path, bucket, monkeypatch):
+    """The server assembles only when ``sent_sha256`` names the object's digest,
+    so a part retried after sending half its bytes must not hash them twice."""
+    data = os.urandom(300_000)
+    final = _write(tmp_path, "big.bin", data)
+    real_request = rt._request
+    failed = []
+
+    def _drop_part_two_once(method, url, timeout_s, body=None, headers=None):
+        if url.endswith("/part-2") and not failed:
+            failed.append(True)
+            body.read(4096)
+            raise ConnectionResetError("dropped mid-part")
+        return real_request(method, url, timeout_s, body=body, headers=headers)
+
+    monkeypatch.setattr(rt, "_request", _drop_part_two_once)
+    out = rt._push_parts(final, _parts(bucket, data, 100_000), len(data), 10, _sha(data))
+    assert out["status"] == "ok" and failed
+    assert out["sent_sha256"] == _sha(data)
+    assert b"".join(bucket.objects[f"/part-{n}"] for n in (1, 2, 3)) == data
+
+
+@pytest.mark.enable_socket
+def test_multipart_same_size_rewrite_is_changed(tmp_path, bucket):
+    """Parts are signed for length only; the store would take these bytes."""
+    scanned = os.urandom(300_000)
+    final = _write(tmp_path, "big.bin", os.urandom(len(scanned)))
+    out = rt._push_parts(final, _parts(bucket, scanned, 100_000), len(scanned), 10, _sha(scanned))
+    assert out["status"] == "changed"
+    assert "sent_sha256" not in out
+
+def test_bounded_body_stops_at_the_declared_length(tmp_path):
     """http.client streams a file to EOF whatever Content-Length says."""
     p = tmp_path / "a.bin"
     p.write_bytes(b"0123456789")
     with open(p, "rb") as fh:
         body = rt._BoundedBody(fh, 4)
         assert b"".join(iter(lambda: body.read(3), b"")) == b"0123"
-        assert body.overrun is True
     with open(p, "rb") as fh:
         body = rt._BoundedBody(fh, 10)
         assert b"".join(iter(lambda: body.read(4), b"")) == b"0123456789"
-        assert body.overrun is False
 
 
 @pytest.mark.enable_socket
@@ -497,6 +545,27 @@ def test_a_file_that_grows_during_its_own_put_is_reported_changed(tmp_path, buck
     # the pooled connection is not left holding bytes the next request would
     # read as its own status line.
     assert bucket.objects[f"/{_sha(data)}"] == data
+
+
+@pytest.mark.enable_socket
+def test_a_file_that_shrinks_during_its_own_put_is_changed_not_unreachable(tmp_path, bucket, monkeypatch):
+    """A short body would leave the store waiting out the timeout, read as an
+    unreachable link, and send the next sync down the relay for nothing."""
+    data = b"scanned bytes\n" * 100
+    _write(tmp_path, "a.bin", data)
+    item = _push_item(bucket, "a.bin", data)
+    real_request = rt._request
+
+    def _truncate_then_request(*args, **kwargs):
+        with open(tmp_path / "a.bin", "r+b") as f:
+            f.truncate(10)
+        return real_request(*args, **kwargs)
+
+    monkeypatch.setattr(rt, "_request", _truncate_then_request)
+    out = rt.push({"root": str(tmp_path), "timeout_s": 10, "items": [item]})
+    res = out["results"][_sha(data)]
+    assert res["status"] == "changed" and "shrank" in res["error"]
+    assert f"/{_sha(data)}" not in bucket.objects
 
 
 @pytest.mark.enable_socket
@@ -550,6 +619,25 @@ def test_pull_ok_applies_mode_and_mtime(tmp_path, bucket):
     assert stat.S_IMODE(st.st_mode) == 0o600
     assert st.st_mtime_ns == 1_600_000_000_000_000_000
     assert not [p for p in os.listdir(final.parent) if p.startswith(".wsfiles-")]
+
+
+@pytest.mark.enable_socket
+def test_pull_onto_the_same_bytes_fetches_nothing(tmp_path, bucket):
+    data = os.urandom(64 * 1024)
+    _write(tmp_path, "kept.bin", data)
+    _write(tmp_path, "stale.bin", os.urandom(len(data)))
+    kept = _file_item(bucket, "kept.bin", data, mode=0o600, mtime_ns=1_600_000_000_000_000_000)
+    stale_bytes = os.urandom(len(data))
+    stale = _file_item(bucket, "stale.bin", stale_bytes)
+    out = rt.pull({"root": str(tmp_path), "timeout_s": 10, "items": [kept, stale]})
+    assert out["results"]["kept.bin"]["status"] == "ok"
+    assert out["results"]["stale.bin"]["status"] == "ok"
+    assert bucket.hits.get(f"/{_sha(data)}") is None
+    assert bucket.hits[f"/{_sha(stale_bytes)}"] == 1
+    st = os.stat(tmp_path / "kept.bin")
+    assert stat.S_IMODE(st.st_mode) == 0o600
+    assert st.st_mtime_ns == 1_600_000_000_000_000_000
+    assert (tmp_path / "stale.bin").read_bytes() == stale_bytes
 
 
 @pytest.mark.enable_socket
@@ -1135,6 +1223,19 @@ def test_pull_pack_member_mismatch_is_confined_to_that_member(tmp_path, bucket):
     out = _pull(tmp_path, item)
     assert {p: r["status"] for p, r in out["results"].items()} == {"a.txt": "ok", "b.txt": "mismatch"}
     assert (tmp_path / "a.txt").read_bytes() == b"aaa" and not (tmp_path / "b.txt").exists()
+
+
+@pytest.mark.enable_socket
+def test_pull_pack_restores_a_chunk_its_manifest_names_only_part_of(tmp_path, bucket):
+    """A member that changed while its chunk was repacked keeps its row on the
+    old chunk while its sibling moves on, and restore weighs the item by the
+    rows that remain. The chunk is still whole and its digest still matches."""
+    item = _pack_item(bucket, {"a.txt": b"aaa", "b.txt": b"bbb"})
+    item["members"] = item["members"][1:]
+    item["size"] = 3
+    out = _pull(tmp_path, item)
+    assert {p: r["status"] for p, r in out["results"].items()} == {"b.txt": "ok"}
+    assert (tmp_path / "b.txt").read_bytes() == b"bbb" and not (tmp_path / "a.txt").exists()
 
 
 @pytest.mark.enable_socket

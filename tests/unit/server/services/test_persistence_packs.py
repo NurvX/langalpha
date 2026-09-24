@@ -18,7 +18,7 @@ import pytest
 from ptc_agent.core.paths import SandboxLayout
 from src.server.services.persistence import backup, blobs, resolve, restore
 from src.server.services.persistence.resolve import resolve_file_bytes
-from src.server.services.persistence.transfer import PACK_CUTOFF, ScanEntry, ScanResult
+from src.server.services.persistence.transfer import PACK_CUTOFF, PACK_MAX_BYTES, ScanEntry, ScanResult
 from src.server.database.workspace_file import micros_to_datetime
 
 
@@ -104,13 +104,18 @@ def db():
     def _ok(sandbox, items, *, layout=None):
         return {i["sha256"]: {"status": "ok"} for i in items}
 
+    _upsert = AsyncMock(side_effect=lambda ws, rows, conn=None: len(rows))
     with (
         patch.object(backup, "manifest_clock", new=AsyncMock(return_value=CLOCK)),
         patch.object(backup, "get_file_metadata_for_sync", new=AsyncMock(return_value={})) as meta,
         patch.object(backup, "files_restore_incomplete", new=AsyncMock(return_value=False)),
         patch.object(backup, "delete_removed_files", new=AsyncMock(return_value=0)),
         patch.object(backup, "get_workspace_total_size", new=AsyncMock(return_value=0)),
-        patch.object(backup, "bulk_upsert_files", new=AsyncMock(side_effect=lambda ws, rows, conn=None: len(rows))) as upsert,
+        # The inline path writes its own batches from blobs; both names are
+        # the same seam, so a test asserts on the rows, not on which module
+        # carried them.
+        patch.object(backup, "bulk_upsert_files", new=_upsert) as upsert,
+        patch.object(blobs, "bulk_upsert_files", new=_upsert),
         patch.object(backup, "bulk_update_file_stamps", new=AsyncMock()),
         patch.object(backup, "is_storage_enabled", return_value=True),
         patch.object(backup, "workspace_owner", new=AsyncMock(return_value=USER)),
@@ -125,7 +130,11 @@ def db():
 
 
 def _rows(db):
-    return {r["file_path"]: r for r in db["upsert"].await_args.args[1]}
+    return {
+        r["file_path"]: r
+        for call in db["upsert"].await_args_list
+        for r in call.args[1]
+    }
 
 
 # --- sync ---------------------------------------------------------------------
@@ -149,7 +158,7 @@ async def test_files_at_or_below_the_cutoff_pack_and_larger_ones_go_per_object(d
     assert rows["big.bin"]["blob_sha256"] == _sha(BIG) and rows["big.bin"]["pack_sha256"] is None
     registered = {sha for c in db["register"].await_args_list for sha, _ in c.args[1]}
     assert registered == {CHUNK, _sha(BIG)}
-    assert result["synced"] == 3 and result["errors"] == 0
+    assert result.synced == 3 and result.errors == 0
 
 
 @pytest.mark.asyncio
@@ -159,7 +168,7 @@ async def test_an_unchanged_pack_set_is_a_skip_without_the_pack_op(db):
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
     db["pack"].assert_not_awaited()
     db["push"].assert_not_awaited()
-    assert result["skipped"] == 2 and result["synced"] == 0
+    assert result.skipped == 2 and result.synced == 0
 
 
 @pytest.mark.asyncio
@@ -171,7 +180,7 @@ async def test_a_moved_stamp_on_an_unchanged_member_refreshes_the_row_without_by
     rows = _rows(db)
     assert set(rows) == {"a.txt"}
     assert rows["a.txt"]["permissions"] == "0600" and rows["a.txt"]["pack_sha256"] == CHUNK
-    assert result["skipped"] == 2
+    assert result.skipped == 2
 
 
 @pytest.mark.asyncio
@@ -184,7 +193,7 @@ async def test_a_moved_stamp_is_left_unrecorded_while_pruning_is_withheld(db):
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
     db["pack"].assert_not_awaited()
     db["upsert"].assert_not_awaited()
-    assert result["skipped"] == 2
+    assert result.skipped == 2
 
 
 @pytest.mark.asyncio
@@ -220,7 +229,7 @@ async def test_a_member_absent_while_pruning_is_withheld_does_not_rewrite_the_se
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
     db["pack"].assert_not_awaited()
     db["push"].assert_not_awaited()
-    assert result["skipped"] == 1 and result["synced"] == 0 and result["deleted"] == 0
+    assert result.skipped == 1 and result.synced == 0 and result.deleted == 0
 
 
 @pytest.mark.asyncio
@@ -246,7 +255,8 @@ async def test_a_chunk_the_store_rejected_withholds_its_members_rows(db):
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
     rows = _rows(db)
     assert set(rows) == {"big.bin"}
-    assert result["errors"] == 2 and result["synced"] == 1
+    assert result.errors == 2 and result.synced == 1
+    assert {(f.path, f.reason) for f in result.unsaved} == {("a.txt", "failed"), ("b.txt", "failed")}
 
 
 @pytest.mark.asyncio
@@ -254,7 +264,8 @@ async def test_members_that_changed_during_packing_count_as_errors(db):
     db["scan"].return_value = _scan(_entry("a.txt", A), _entry("b.txt", B))
     db["pack"].return_value = {"chunks": [_chunk([("a.txt", A)])], "changed": ["b.txt"]}
     result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
-    assert set(_rows(db)) == {"a.txt"} and result["errors"] == 1
+    assert set(_rows(db)) == {"a.txt"} and result.errors == 1
+    assert [(f.path, f.reason) for f in result.unsaved] == [("b.txt", "changed")]
 
 
 @pytest.mark.asyncio
@@ -318,7 +329,7 @@ async def test_restore_pulls_a_pack_as_one_item_with_its_members(restore_db):
     packs = [i for i in items if i.get("kind") == "pack"]
     assert len(packs) == 1 and len(items) == 2
     pack = packs[0]
-    assert pack["sha256"] == CHUNK and pack["url"] == f"https://get/blobs/{USER}/{CHUNK}" and pack["size"] == 8
+    assert pack["sha256"] == CHUNK and pack["url"] == f"https://get/blobs/{USER}/{CHUNK}" and pack["size"] == PACK_MAX_BYTES
     by_path = {m["path"]: m for m in pack["members"]}
     assert by_path["a.txt"] == {"path": "a.txt", "offset": 0, "size": 3, "sha256": _sha(A), "mode": 0o600, "mtime_ns": (NS // 1000) * 1000}
     assert by_path["b.txt"]["offset"] == 3
@@ -456,7 +467,7 @@ async def test_a_chunk_the_sandbox_could_not_upload_is_relayed_out_of_the_sandbo
     # What the runtime kept, the server removes once it has the bytes.
     unlink.assert_awaited_once_with(sb, [chunk_path], layout=MACHINE_LAYOUT)
     assert _rows(db)["a.txt"]["pack_sha256"] == CHUNK
-    assert result["errors"] == 0
+    assert result.errors == 0
 
 
 @pytest.mark.asyncio
@@ -471,7 +482,7 @@ async def test_relay_rejects_bytes_whose_length_disagrees_with_the_scan(db):
         result = await backup.sync_to_db(WS, sb, layout=LAYOUT)
     store.assert_not_awaited()
     db["upsert"].assert_not_awaited()
-    assert result["errors"] == 1
+    assert result.errors == 1
 
 
 @pytest.mark.asyncio

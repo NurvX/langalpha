@@ -3,6 +3,7 @@ CRUD (`crud.py`) and serving (`serve.py`) routers."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from urllib.parse import unquote
@@ -26,6 +27,12 @@ from ptc_agent.core.paths import (
     USER_PROFILE_PREFERENCE_FILE,
     USER_PROFILE_WATCHLIST_FILE,
 )
+from ptc_agent.core.sandbox.runtime import STREAM_CHUNK_BYTES
+from src.server.database.blob_keys import RELAY_MAX_BYTES
+from src.server.services.persistence.transfer import (
+    INPROCESS_MAX_INFLIGHT_BYTES,
+    ByteBudget,
+)
 from src.server.services.workspace_manager import WorkspaceManager
 from src.server.services.workspace_layout import (
     WorkspaceLayoutUnavailable,
@@ -34,6 +41,7 @@ from src.server.services.workspace_layout import (
 from src.server.services.persistence.resolve import (
     FileBytesUnavailable,
     resolve_file_bytes,
+    too_large_to_serve,
 )
 from src.server.services import user_data_io
 from src.server.utils.error_sanitization import (
@@ -43,6 +51,8 @@ from src.server.utils.error_sanitization import (
 from src.observability import safe_record, workspace_fs_bytes
 
 logger = logging.getLogger(__name__)
+
+TOO_LARGE_DETAIL = "This file is too large to open here. Download it instead."
 
 
 async def http_file_bytes(file_record: dict[str, Any], *, user_id: str) -> bytes:
@@ -61,6 +71,8 @@ async def http_file_bytes(file_record: dict[str, Any], *, user_id: str) -> bytes
     The underlying error is logged rather than returned; its message names the
     object key, which the client has no business seeing.
     """
+    if too_large_to_serve(file_record):
+        raise HTTPException(status_code=413, detail=TOO_LARGE_DETAIL)
     try:
         content = await resolve_file_bytes(file_record, user_id=user_id)
     except FileBytesUnavailable as e:
@@ -145,7 +157,58 @@ _ALWAYS_HIDDEN_DIR_SEGMENTS = tuple(f"/{d}/" for d in ALWAYS_HIDDEN_DIR_NAMES)
 
 # Generous but bounded defaults.
 DEFAULT_READ_LIMIT_LINES = 20_000
-MAX_UPLOAD_BYTES = 250 * 1024 * 1024  # 250MB
+
+# This route buffers the whole body in the server before handing it to the
+# sandbox, which is the same constraint the relay transfer path has, so it
+# takes the same number rather than restating one. It is a ceiling, not the
+# limit: the route also asks what the next backup could store and takes
+# whichever is tighter, so an upload is never accepted only to be dropped.
+MAX_UPLOAD_BYTES = RELAY_MAX_BYTES
+
+_FILES_HELD_AT_ONCE = 8
+_held_budgets: dict[asyncio.AbstractEventLoop, ByteBudget] = {}
+# A streamed download holds about one ranged read at a time, but it holds it
+# for as long as its client takes to read, so it is bounded by count.
+_STREAMS_AT_ONCE = 16
+_stream_budgets: dict[asyncio.AbstractEventLoop, ByteBudget] = {}
+
+
+def held_bytes_budget() -> ByteBudget:
+    """This worker's allowance for whole files held in memory at once.
+
+    Upload bodies are read whole before they reach the sandbox, and nothing
+    else bounds how many a worker holds at once.
+
+    Memory is the one thing a worker owns alone, so the bound is per process
+    by design. Keyed by loop because an asyncio primitive belongs to the loop
+    that first waits on it.
+    """
+    loop = asyncio.get_running_loop()
+    budget = _held_budgets.get(loop)
+    if budget is None:
+        _held_budgets.clear()
+        budget = _held_budgets[loop] = ByteBudget(
+            INPROCESS_MAX_INFLIGHT_BYTES, _FILES_HELD_AT_ONCE
+        )
+    return budget
+
+
+def streamed_download_budget() -> ByteBudget:
+    """This worker's allowance for downloads streamed from a sandbox at once.
+
+    Apart from the held-bytes budget because a stream's memory does not grow
+    with its file: sharing that one would let a few slow clients stall every
+    upload. Per loop for the same reason as ``held_bytes_budget``.
+    """
+    loop = asyncio.get_running_loop()
+    budget = _stream_budgets.get(loop)
+    if budget is None:
+        _stream_budgets.clear()
+        budget = _stream_budgets[loop] = ByteBudget(
+            _STREAMS_AT_ONCE * STREAM_CHUNK_BYTES, _STREAMS_AT_ONCE
+        )
+    return budget
+
 
 # Known binary file extensions that cannot be read as text
 _BINARY_EXTENSIONS = frozenset(

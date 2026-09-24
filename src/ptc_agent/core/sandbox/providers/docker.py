@@ -19,6 +19,7 @@ import re
 import shlex
 import tarfile
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any
 
 import structlog
@@ -46,6 +47,7 @@ from ptc_agent.core.sandbox.runtime import (
     SandboxRuntime,
     SandboxTransientError,
     SessionCommandResult,
+    STREAM_CHUNK_BYTES,
 )
 
 logger = structlog.get_logger(__name__)
@@ -316,6 +318,16 @@ class DockerRuntime(SandboxRuntime):
         if self._dev_mode and self._host_work_dir:
             return self._host_read(path)
         return await self._exec_download(path)
+
+    async def download_file_stream(self, path: str) -> AsyncIterator[bytes]:
+        if not (self._dev_mode and self._host_work_dir):
+            async for chunk in super().download_file_stream(path):
+                yield chunk
+            return
+        host_path = self._host_resolve(path)
+        with open(host_path, "rb") as f:
+            while chunk := await asyncio.to_thread(f.read, STREAM_CHUNK_BYTES):
+                yield chunk
 
     async def list_files(self, directory: str) -> list[dict[str, Any]]:
         resolved = directory if os.path.isabs(directory) else f"{self._working_dir}/{directory}"

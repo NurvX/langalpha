@@ -25,6 +25,7 @@ from src.server.models.computer import ComputerStatus
 # import would land while the patch is live and keep the mock for the rest of
 # the session.
 from src.server.services import platform_secret_rollout  # noqa: F401
+from src.server.services.persistence.sync_result import SyncResult, UnsavedFile
 from src.server.services.workspace_manager import WorkspaceManager
 from tests.computer_manager_patch import cm_patch
 from tests.unit.server.services.conftest import (
@@ -581,7 +582,7 @@ class TestStopWorkspace:
     async def test_stop_running_workspace(self, mock_file_svc, mock_db_get):
         ws_id = str(uuid.uuid4())
         mock_db_get.return_value = _make_workspace(workspace_id=ws_id, status="stopped")
-        mock_file_svc.sync_to_db = AsyncMock(return_value={"synced": 1, "errors": 0})
+        mock_file_svc.sync_to_db = AsyncMock(return_value=SyncResult(synced=1))
 
         config = _make_config()
         wm = WorkspaceManager(config)
@@ -1050,18 +1051,50 @@ class TestBackupFilesStrict:
     @pytest.mark.asyncio
     @patch(f"{_PROVISIONING}.FilePersistenceService")
     async def test_strict_aborts_when_sync_leaves_files_unsaved(self, mock_file_svc):
-        """``sync_to_db`` counts per-file failures instead of raising, so a clean
+        """``sync_to_db`` reports per-file failures instead of raising, so a clean
         return is not proof the backup is complete. The strict caller is about to
         delete the sandbox, which makes a nonzero count unrecoverable data loss.
         """
         wm = WorkspaceManager(_make_config())
         ws_id = str(uuid.uuid4())
         wm._machine(_STUB_COMPUTER_ID).session = _make_mock_session()
-        mock_file_svc.sync_to_db = AsyncMock(return_value={"synced": 3, "errors": 2})
+        mock_file_svc.sync_to_db = AsyncMock(
+            return_value=SyncResult(
+                synced=3,
+                unsaved=[
+                    UnsavedFile("data/q3.parquet", "too_large", 300 * 1024**2),
+                    UnsavedFile("notes.md", "changed", 12),
+                ],
+            )
+        )
 
         with _patch_backup_identity():
-            with pytest.raises(RuntimeError, match="left 2 file\\(s\\) unsaved"):
+            with pytest.raises(RuntimeError, match="left 2 file\\(s\\) unsaved") as raised:
                 await self._backup(wm, ws_id, strict=True)
+        assert "data/q3.parquet" in str(raised.value)
+
+    @pytest.mark.asyncio
+    @patch(f"{_PROVISIONING}.FilePersistenceService")
+    async def test_strict_abort_names_only_a_few_paths_per_reason(self, mock_file_svc):
+        """The message becomes an HTTP error detail, so a tree that failed
+        wholesale must not turn it into thousands of paths."""
+        wm = WorkspaceManager(_make_config())
+        ws_id = str(uuid.uuid4())
+        wm._machine(_STUB_COMPUTER_ID).session = _make_mock_session()
+        mock_file_svc.sync_to_db = AsyncMock(
+            return_value=SyncResult(
+                unsaved=[UnsavedFile(f"cache/{i}", "unreadable") for i in range(1000)]
+            )
+        )
+
+        with _patch_backup_identity():
+            with pytest.raises(RuntimeError) as raised:
+                await self._backup(wm, ws_id, strict=True)
+        assert (
+            "1000 unreadable in the sandbox: cache/0, cache/1, cache/2, +997 more"
+            in str(raised.value)
+        )
+        assert len(str(raised.value)) < 300
 
     @pytest.mark.asyncio
     @patch(f"{_PROVISIONING}.FilePersistenceService")
@@ -1070,7 +1103,9 @@ class TestBackupFilesStrict:
         ws_id = str(uuid.uuid4())
         wm._machine(_STUB_COMPUTER_ID).session = _make_mock_session()
         mock_file_svc.sync_to_db = AsyncMock(
-            return_value={"synced": 3, "errors": 0, "oversized": 1}
+            return_value=SyncResult(
+                synced=3, unsaved=[UnsavedFile("big.bin", "too_large", 2 * 1024**3)]
+            )
         )
 
         with _patch_backup_identity():
@@ -1090,7 +1125,7 @@ class TestBackupFilesStrict:
         wm._machine(
             _STUB_COMPUTER_ID
         ).session = _make_mock_session()  # on 'sandbox-abc'
-        mock_file_svc.sync_to_db = AsyncMock(return_value={"synced": 1, "errors": 0})
+        mock_file_svc.sync_to_db = AsyncMock(return_value=SyncResult(synced=1))
 
         with _patch_backup_identity(sandbox_id="sandbox-REPLACED"):
             await self._backup(wm, ws_id)  # best-effort: warns, no raise
@@ -1117,7 +1152,7 @@ class TestBackupFilesStrict:
                 computer_id=_STUB_COMPUTER_ID, root_dir="/persisted/root"
             )
         )
-        mock_file_svc.sync_to_db = AsyncMock(return_value={"synced": 1, "errors": 0})
+        mock_file_svc.sync_to_db = AsyncMock(return_value=SyncResult(synced=1))
 
         with _patch_backup_identity():
             await wm.backup_project_files(ws_id)
@@ -1135,7 +1170,7 @@ class TestBackupFilesStrict:
         wm.resolve_binding = AsyncMock(return_value=SimpleNamespace(
             computer_id=_STUB_COMPUTER_ID, root_dir="/persisted/root"
         ))
-        mock_file_svc.sync_to_db = AsyncMock(return_value={"synced": 1, "errors": 0})
+        mock_file_svc.sync_to_db = AsyncMock(return_value=SyncResult(synced=1))
 
         with _patch_backup_identity():
             await self._backup(wm, ws_id, strict=True)
@@ -1151,7 +1186,7 @@ class TestBackupFilesStrict:
         wm = WorkspaceManager(_make_config())
         ws_id = str(uuid.uuid4())
         wm._machine(_STUB_COMPUTER_ID).session = _make_mock_session()
-        mock_file_svc.sync_to_db = AsyncMock(return_value={"synced": 1, "errors": 0})
+        mock_file_svc.sync_to_db = AsyncMock(return_value=SyncResult(synced=1))
 
         identity = AsyncMock()
         with cm_patch("db_get_workspace_identity", identity):
@@ -1168,7 +1203,7 @@ class TestBackupFilesStrict:
         wm = WorkspaceManager(_make_config())
         asked, sibling = str(uuid.uuid4()), str(uuid.uuid4())
         wm._machine(_STUB_COMPUTER_ID).session = _make_mock_session()
-        mock_file_svc.sync_to_db = AsyncMock(return_value={"synced": 1, "errors": 0})
+        mock_file_svc.sync_to_db = AsyncMock(return_value=SyncResult(synced=1))
 
         with _patch_live_ids(asked, sibling):
             await wm._backup_machine_files_to_db(
@@ -1191,7 +1226,7 @@ class TestBackupFilesStrict:
         asked count as complete is what let a stop log a backup that never ran."""
         wm = WorkspaceManager(_make_config())
         asked, sibling = str(uuid.uuid4()), str(uuid.uuid4())
-        mock_file_svc.sync_to_db = AsyncMock(return_value={"synced": 1, "errors": 0})
+        mock_file_svc.sync_to_db = AsyncMock(return_value=SyncResult(synced=1))
 
         with _patch_live_ids(asked, sibling):
             skipped = await wm._backup_machine_files_to_db(
@@ -1213,7 +1248,7 @@ class TestBackupFilesStrict:
         wm = WorkspaceManager(_make_config())
         asked = str(uuid.uuid4())
         wm._machine(_STUB_COMPUTER_ID).session = _make_mock_session()
-        mock_file_svc.sync_to_db = AsyncMock(return_value={"synced": 1, "errors": 0})
+        mock_file_svc.sync_to_db = AsyncMock(return_value=SyncResult(synced=1))
 
         with _patch_live_ids(side_effect=RuntimeError("no pool")):
             with pytest.raises(RuntimeError, match="unmirrored"):
@@ -1267,7 +1302,7 @@ class TestDeleteWorkspace:
         mock_db_get.return_value = _make_workspace(
             workspace_id=ws_id, status="running", dir_name="test-ab12"
         )
-        mock_file_svc.sync_to_db = AsyncMock(return_value={"synced": 1, "errors": 0})
+        mock_file_svc.sync_to_db = AsyncMock(return_value=SyncResult(synced=1))
 
         config = _make_config()
         wm = WorkspaceManager(config)
@@ -4138,6 +4173,21 @@ class TestEntitledTier:
         ):
             assert await manager._entitled_tier(binding, "user-1") == "max"
         mock_set_tier.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_small_sibling_projects_reserve_only_their_own_size(self):
+        """A project's restore stages at most its own bytes, so five tiny
+        projects must not each reserve a full staging window."""
+        manager = self._make_manager()
+        mod = "src.server.services.workspace_entitlements"
+        with (
+            patch(
+                f"{mod}.get_live_workspace_ids_for_computer",
+                AsyncMock(return_value=[f"ws-{i}" for i in range(5)]),
+            ),
+            patch(f"{mod}.get_workspace_total_size", AsyncMock(return_value=1024)),
+        ):
+            await manager._assert_machine_disk_fits(_STUB_COMPUTER_ID, 2)
 
 
 # ---------------------------------------------------------------------------

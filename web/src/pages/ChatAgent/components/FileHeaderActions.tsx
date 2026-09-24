@@ -15,6 +15,7 @@ import { toast } from '@/components/ui/use-toast';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { fileExtension } from '../utils/filePaths';
+import { useDownloadState, workspaceDownloadKey } from '../utils/downloadNotice';
 import { exportServedPdf } from './viewers/html/useHtmlActions';
 
 const PDF_SCALE_CHOICES = [0.8, 1, 1.25];
@@ -103,6 +104,9 @@ function FileHeaderActions({
   onCancelEdit,
 }: FileHeaderActionsProps) {
   const { t } = useTranslation();
+  const downloadPending = useDownloadState(
+    selectedFile ? workspaceDownloadKey(workspaceId, selectedFile) : null,
+  ) !== 'idle';
   const [copied, setCopied] = useState(false);
   // Server PDF renders take seconds; ignore re-entry while one is in flight.
   const pdfInFlight = useRef(false);
@@ -223,7 +227,7 @@ function FileHeaderActions({
             <FileText className="h-3.5 w-3.5" />
             {t('filePanel.downloadAsPdf')}
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={download}>
+          <DropdownMenuItem onSelect={download} disabled={downloadPending}>
             <Download className="h-3.5 w-3.5" />
             {t('filePanel.downloadAsMarkdown')}
           </DropdownMenuItem>
@@ -238,7 +242,7 @@ function FileHeaderActions({
       // stays open while the user composes the export.
       return (
         <>
-          <DropdownMenuItem onSelect={download}>
+          <DropdownMenuItem onSelect={download} disabled={downloadPending}>
             <Download className="h-3.5 w-3.5" />
             {t('filePanel.download')}
           </DropdownMenuItem>
@@ -294,7 +298,7 @@ function FileHeaderActions({
       // Non-markdown text file: Download + Copy to clipboard
       return (
         <>
-          <DropdownMenuItem onSelect={download}>
+          <DropdownMenuItem onSelect={download} disabled={downloadPending}>
             <Download className="h-3.5 w-3.5" />
             {t('filePanel.download')}
           </DropdownMenuItem>
@@ -314,7 +318,7 @@ function FileHeaderActions({
 
     // Binary file: Download only
     return (
-      <DropdownMenuItem onSelect={download}>
+      <DropdownMenuItem onSelect={download} disabled={downloadPending}>
         <Download className="h-3.5 w-3.5" />
         {t('filePanel.download')}
       </DropdownMenuItem>

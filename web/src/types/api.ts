@@ -294,17 +294,35 @@ export interface WriteFileResponse {
   size: number;
 }
 
+export type UnsavedReason = 'too_large' | 'unreadable' | 'changed' | 'failed';
+
+export interface UnsavedFile {
+  path: string;
+  reason: UnsavedReason;
+  size?: number | null;
+}
+
 export interface BackupResponse {
+  workspace_id: string;
   synced: number;
   skipped: number;
   deleted: number;
   errors: number;
+  oversized: number;
   total_size: number;
+  max_file_bytes: number | null;
+  /** At most the first 100; `unsaved_count` is the full total. */
+  unsaved: UnsavedFile[];
+  unsaved_count: number;
 }
 
 export interface BackupStatusResponse {
-  persisted_files: Record<string, string>;
-  total_size: number;
+  workspace_id: string;
+  backed_up: string[];
+  modified: string[];
+  untracked: string[];
+  total_backed_up_size: number;
+  files_restore_incomplete: boolean;
 }
 
 // --- Subagent ---

@@ -218,6 +218,7 @@ async def test_sync_holds_the_lock_across_the_scan_and_the_writes():
         patch.object(backup, "files_restore_incomplete", new=AsyncMock(return_value=False)),
         patch.object(backup, "scan_workspace", new=_scan),
         patch.object(backup, "delete_removed_files", new=_delete),
+        patch.object(backup, "get_workspace_total_size", new=AsyncMock(return_value=0)),
     ):
         await backup.sync_to_db("ws-1", sandbox, layout=LAYOUT)
 

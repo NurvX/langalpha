@@ -13,6 +13,7 @@ import { imageMime, type FileBody } from './fileBody';
 import { FileErrorDisplay, type FileError } from './fileErrors';
 import { DocumentErrorFallback, DocumentLoadingFallback } from './fallbacks';
 import type { useFileFocus } from './useFileFocus';
+import type { DownloadState } from '../../utils/downloadNotice';
 
 const PdfViewer = React.lazy(() => import('../viewers/PdfViewer'));
 const CsvViewer = React.lazy(() => import('../viewers/CsvViewer'));
@@ -30,6 +31,8 @@ export interface FileViewerProps {
   /** Offered where the viewer failed; a toast reports its own failure. */
   onDownloadInFallback?: () => void;
   onDownload?: () => void;
+  /** A save of this file is being prepared. */
+  downloadState?: DownloadState;
 
   workspaceId: string;
   focus: ReturnType<typeof useFileFocus>;
@@ -99,13 +102,13 @@ export function FileViewer(props: FileViewerProps): React.ReactElement {
   }
 
   if (error) {
-    return <FileErrorDisplay error={error} onRetry={props.onRetry} onDownload={props.onDownload} />;
+    return <FileErrorDisplay error={error} onRetry={props.onRetry} onDownload={props.onDownload} downloadState={props.downloadState} />;
   }
 
   if (body?.mime === 'pdf') {
     return (
       <Suspense fallback={<DocumentLoadingFallback />}>
-        <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={props.onDownloadInFallback} />}>
+        <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={props.onDownloadInFallback} downloadState={props.downloadState} />}>
           <PdfViewer data={body.buffer!} focusPage={props.focus.focusPage} focusSeq={props.focus.seq} onPageCount={props.onPageCount} />
         </DocumentErrorBoundary>
       </Suspense>
@@ -115,7 +118,7 @@ export function FileViewer(props: FileViewerProps): React.ReactElement {
   if (body?.mime === 'excel') {
     return (
       <Suspense fallback={<DocumentLoadingFallback />}>
-        <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={props.onDownloadInFallback} />}>
+        <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={props.onDownloadInFallback} downloadState={props.downloadState} />}>
           <ExcelViewer
             // The parse is async and keeps the last workbook's cells until it
             // lands, so a second workbook gets its own instance rather than
@@ -135,7 +138,7 @@ export function FileViewer(props: FileViewerProps): React.ReactElement {
   if (ext === 'csv') {
     return isEditing ? editor : (
       <Suspense fallback={<DocumentLoadingFallback />}>
-        <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={props.onDownloadInFallback} />}>
+        <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={props.onDownloadInFallback} downloadState={props.downloadState} />}>
           <CsvViewer content={body?.content ?? ''} />
         </DocumentErrorBoundary>
       </Suspense>
@@ -145,7 +148,7 @@ export function FileViewer(props: FileViewerProps): React.ReactElement {
   if (ext === 'html' || ext === 'htm') {
     return (
       <Suspense fallback={<DocumentLoadingFallback />}>
-        <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={props.onDownloadInFallback} />}>
+        <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={props.onDownloadInFallback} downloadState={props.downloadState} />}>
           <HtmlViewer
             content={body?.content ?? ''}
             fileName={fileName}

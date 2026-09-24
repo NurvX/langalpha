@@ -23,6 +23,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 
+from src.server.services.persistence.sync_result import BackupIncomplete
 from src.server.utils.api import CurrentUserId, require_workspace_owner
 from src.server.dependencies.usage_limits import (
     ALWAYS_ON_QUOTA,
@@ -87,6 +88,10 @@ async def _workspace_action_errors(action: str, workspace_id: str):
         raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except BackupIncomplete as e:
+        # The ids and causes are the operator's; the person asking gets files.
+        logger.warning(f"Refused to {action}: {e}")
+        raise HTTPException(status_code=400, detail=e.user_message) from None
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

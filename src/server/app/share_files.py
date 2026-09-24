@@ -25,6 +25,7 @@ from src.server.app.workspace_files._containment import (
     contained_listing_path,
     contained_relative_path,
     contained_sandbox_path,
+    FileTooLargeToServe,
     is_within,
 )
 from src.server.app.workspace_files._shared import (
@@ -123,6 +124,9 @@ async def _shared_file_bytes(
                 work_dir=target.work_dir,
                 visible=target.visible,
             )
+        except FileTooLargeToServe:
+            # Present but past an exec read; the persisted copy below holds it.
+            pass
         except Exception as e:
             _log_sandbox_miss("file", workspace_id, e)
         else:

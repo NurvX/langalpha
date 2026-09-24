@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 
 from ptc_agent.core.sandbox.runtime import SandboxGoneError, SandboxTransientError
+from src.server.services.persistence.sync_result import BackupIncomplete
 from src.server.app.background_starts import schedule_start
 from src.server.app.status_stream import (
     SSE_HEADERS,
@@ -94,6 +95,10 @@ async def _computer_action_errors(action: str, computer_id: str):
         raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except BackupIncomplete as e:
+        # The ids and causes are the operator's; the person asking gets files.
+        logger.warning(f"Refused to {action}: {e}")
+        raise HTTPException(status_code=400, detail=e.user_message) from None
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

@@ -13,12 +13,15 @@ denylist by design, and this exchange is the server's, not the agent's.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
 import shlex
 import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +39,8 @@ from ptc_agent.core.sandbox._shared import (
 )
 from ptc_agent.core.sandbox.wsfiles_transfer_runtime import RESULT_MARKER
 from ptc_agent.core.sandbox.retry import RetryPolicy
+from src.server.database.blob_keys import INLINE_MAX_BYTES, RELAY_MAX_BYTES
+from src.utils.storage import get_blob_transfer_mode
 
 logger = logging.getLogger(__name__)
 
@@ -76,12 +81,19 @@ EXCLUDE_BASENAMES: frozenset[str] = frozenset({".DS_Store", "Thumbs.db"})
 
 SYNC_MARKER_NAME = ".file_sync_marker"
 
+# Bounded by the disk rather than the workspace's history: a scan hashes only
+# what changed, the sandbox hashes at ~1.5 GB/s, and a tier's writable layer
+# is the most it can ever hold, so even a cold tenth of that rate fits.
 SCAN_TIMEOUT_S = 300
 # Transfer timeouts scale with bytes at a floor bandwidth so a large workspace
-# on a slow link is not cut off, while an idle exchange still ends.
+# on a slow link is not cut off, while an idle exchange still ends. The floor
+# is deliberately pessimistic against a measured ~210 ms per PUT, so the
+# ceiling is what an exchange this side has stopped believing in rather than
+# what a legitimate transfer could need: at the floor it covers 7 GiB, and at
+# the bandwidth actually seen, far more than any workspace holds.
 TRANSFER_FLOOR_BYTES_PER_S = 1024 * 1024
 TRANSFER_MIN_TIMEOUT_S = 300
-TRANSFER_MAX_TIMEOUT_S = 3600
+TRANSFER_MAX_TIMEOUT_S = 7200
 
 # The sandbox runs on a one-CPU quota, and the runtime's CPU per item grows
 # with its thread count (a 300-file pull: 1.0 s of CPU at 16 threads, 3.5 s
@@ -89,6 +101,12 @@ TRANSFER_MAX_TIMEOUT_S = 3600
 # These are the measured knees; wider pools throttle, and the tail grows.
 PUSH_CONCURRENCY = 16
 PULL_CONCURRENCY = 32
+# What a pull may hold in temp files at once inside the sandbox. Every
+# download lands beside its target and is renamed in only once it verifies,
+# so a restore's transient disk cost is what is in flight, not what it
+# finally places. The count alone bounded that at concurrency x file size,
+# which no longer bounds anything now that the file size does not.
+PULL_MAX_INFLIGHT_BYTES = 512 * 1024 * 1024
 
 # Files at or below the cutoff travel as members of a pack: one object per
 # chunk of the workspace instead of one per file. The transfer cost is per
@@ -97,8 +115,114 @@ PULL_CONCURRENCY = 32
 # what a restore holds in flight; chunks are written under PACK_DIR, which the
 # scan already excludes, and are removed once pushed.
 PACK_CUTOFF = 256 * 1024
+#: Must stay under MULTIPART_THRESHOLD_BYTES below. A chunk is unlinked in the
+#: sandbox the moment the store has it, and only a whole PUT is stored that
+#: early: raising this past the threshold would drop the sandbox's only copy
+#: of a chunk whose parts the server has yet to assemble.
 PACK_MAX_BYTES = 32 * 1024 * 1024
 PACK_DIR = SandboxLayout.PACKS_DIR
+
+# What one transfer may hold in memory at once on the paths that move bytes
+# through this process. The direct path caps no file, so a count alone bounds
+# nothing that matters: eight files is eight files whether they are 4 KiB or
+# 256 MiB apiece. Each backup or restore takes its own budget, so a worker
+# running several at once may hold a multiple of this.
+INPROCESS_MAX_INFLIGHT_BYTES = 512 * 1024 * 1024
+
+# A file at or above this is uploaded in parts rather than as one PUT.
+# Nothing here is about what the store can hold in one object: a single PUT
+# has no resume, so an interrupted one starts again from zero, and the larger
+# the file the more likely it is interrupted. The store picks the part size
+# against its own limits; this is only the point where splitting starts to
+# pay for itself.
+MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024
+# The S3 API's ceiling on one PUT; above it only a multipart upload stores.
+SINGLE_PUT_MAX_BYTES = 5 * 1024**3
+
+
+def transfer_mode(sandbox: Any) -> str:
+    # PTCSandbox holds the whole CoreConfig; the provider name is on its
+    # sandbox section. Anything else (a mock, a foreign runtime) reads as
+    # an unknown provider and relays.
+    config = getattr(sandbox, "config", None)
+    section = getattr(config, "sandbox", None)
+    provider = getattr(section, "provider", None)
+    if not isinstance(provider, str):
+        provider = None
+    return get_blob_transfer_mode(provider)
+
+
+def scan_cap_bytes(sandbox: Any, *, blobs_on: bool) -> int | None:
+    """Largest file this deployment could store, or ``None`` when nothing bounds it.
+
+    The limit belongs to the route the bytes take, not to the file: direct
+    streams sandbox-to-store and is bounded only by the workspace disk, while
+    the two paths that materialize the file in this process are bounded by
+    whatever holds it. A scan cap is therefore a statement about the current
+    deployment, and a file it rejects can never be stored *here*, which is
+    what separates it from a push that merely failed this pass.
+    """
+    if not blobs_on:
+        return INLINE_MAX_BYTES
+    if transfer_mode(sandbox) == "direct":
+        return None
+    return RELAY_MAX_BYTES
+
+
+class ByteBudget:
+    """Admission for files held whole in this process, by weight and by count.
+
+    Both bind and the tighter one wins: weight alone would admit thousands of
+    tiny files and exhaust everything that is per-request rather than
+    per-byte, while count alone is the bound that let an uncapped file
+    through. A file too large for the whole budget runs alone rather than
+    deadlocking behind a budget it can never fit.
+
+    The sandbox runtime carries a twin of this by hand, since it ships as a
+    stdlib-only script and cannot import it.
+    """
+
+    def __init__(self, max_bytes: int, max_files: int) -> None:
+        self._max_bytes = max(1, int(max_bytes))
+        self._max_files = max(1, int(max_files))
+        self._bytes = 0
+        self._files = 0
+        # The count bound queues in FIFO order ahead of the byte check, so at
+        # most ``max_files`` holders ever wait on the condition. Callers gather
+        # every item at once, and waking all of them on each release made a
+        # large transfer quadratic in its file count.
+        self._slots = asyncio.Semaphore(self._max_files)
+        self._cv = asyncio.Condition()
+
+    @asynccontextmanager
+    async def hold(self, size: int | None) -> AsyncIterator[None]:
+        # An unknown weight is charged the whole budget, not nothing: a bound
+        # that admits freely whenever it cannot measure an item is not a
+        # bound. A measured zero still costs zero.
+        want = (
+            self._max_bytes
+            if size is None
+            else min(max(int(size), 0), self._max_bytes)
+        )
+        async with self._slots:
+            async with self._cv:
+                while self._files and self._bytes + want > self._max_bytes:
+                    await self._cv.wait()
+                self._files += 1
+                self._bytes += want
+            try:
+                yield
+            finally:
+                # Released before any await: a cancelled holder (a client
+                # that disconnected) can be cancelled again at the lock, and
+                # a release lost there leaks its weight for the process's life.
+                self._files -= 1
+                self._bytes -= want
+                await asyncio.shield(self._wake())
+
+    async def _wake(self) -> None:
+        async with self._cv:
+            self._cv.notify_all()
 
 
 class TransferRuntimeError(Exception):
@@ -140,7 +264,7 @@ def transfer_timeout_s(total_bytes: int) -> int:
     return int(min(max(scaled, TRANSFER_MIN_TIMEOUT_S), TRANSFER_MAX_TIMEOUT_S))
 
 
-def exclusion_spec(max_file_bytes: int) -> dict[str, Any]:
+def exclusion_spec(max_file_bytes: int | None) -> dict[str, Any]:
     return {
         "exclude_dir_names": sorted(EXCLUDE_DIR_NAMES),
         "exclude_rel_dirs": list(EXCLUDE_REL_DIRS),
@@ -272,10 +396,14 @@ async def scan_workspace(
     sandbox: Any,
     prior: dict[str, tuple[int, int, str]],
     *,
-    max_file_bytes: int,
+    max_file_bytes: int | None,
     layout: WorkspaceLayout,
+    hash_files: bool = True,
 ) -> ScanResult:
     """Walk and hash one project folder. ``prior`` lets unchanged files skip hashing.
+
+    ``hash_files=False`` lists without reading contents: a changed file then
+    carries no digest, which suits only a caller that never stores the entry.
 
     The walk root is the project's folder rather than the machine: several
     projects share the root, each syncs under its own advisory lock, and a walk
@@ -285,6 +413,8 @@ async def scan_workspace(
     spec = exclusion_spec(max_file_bytes)
     spec["root"] = layout.workspace
     spec["prior"] = {p: list(v) for p, v in prior.items()}
+    if not hash_files:
+        spec["hash"] = False
     out = await run_transfer_op(sandbox, "scan", spec, timeout_s=SCAN_TIMEOUT_S)
     # A runtime that predates the exact-name key reports the marker as a
     # file; a manifest row for it would restore a "populated" claim into a
@@ -309,6 +439,36 @@ async def scan_workspace(
         errors=out.get("errors", []),
         hashed=int(out.get("hashed") or 0),
         reused=int(out.get("reused") or 0),
+    )
+
+
+async def hash_one_file(
+    sandbox: Any,
+    path: str,
+    *,
+    prior: tuple[int, int, str] | None,
+    layout: WorkspaceLayout,
+) -> ScanEntry | None:
+    """Stat and hash one file under the project folder; None when it is not a file.
+
+    ``path`` is relative to ``layout.workspace``. ``prior`` is the manifest's
+    (size, mtime_ns, sha256) and lets an unchanged file skip the read.
+    """
+    spec: dict[str, Any] = {**_transfer_roots(layout), "path": path}
+    if prior is not None:
+        spec["prior"] = list(prior)
+    out = await run_transfer_op(sandbox, "hash", spec, timeout_s=SCAN_TIMEOUT_S)
+    if out.get("status") != "ok" or not out.get("sha256"):
+        return None
+    return ScanEntry(
+        path=path,
+        kind="file",
+        size=int(out.get("size") or 0),
+        mtime_ns=int(out.get("mtime_ns") or 0),
+        mode=int(out.get("mode") or 0),
+        sha256=out["sha256"],
+        symlink_target=None,
+        is_binary=out.get("is_binary"),
     )
 
 
@@ -353,6 +513,7 @@ async def pull_direct(
     spec = {
         **_transfer_roots(layout),
         "concurrency": PULL_CONCURRENCY,
+        "max_inflight_bytes": PULL_MAX_INFLIGHT_BYTES,
         "timeout_s": TRANSFER_MIN_TIMEOUT_S,
         "items": items,
     }

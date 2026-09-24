@@ -29,6 +29,7 @@ from src.utils.mime import resolve_content_type
 from ._containment import (
     contained_absolute_path,
     contained_relative_path,
+    FileTooLargeToServe,
     read_contained_sandbox_file,
 )
 from ._shared import (
@@ -267,7 +268,16 @@ async def warm_sandbox_bytes(
     candidate = contained_absolute_path(normalized_path, work_dir)
     if candidate is None or not sandbox.validate_path(candidate):
         return None
-    resolved = await read_contained_sandbox_file(sandbox, candidate, work_dir=work_dir)
+    try:
+        resolved = await read_contained_sandbox_file(
+            sandbox, candidate, work_dir=work_dir
+        )
+    except FileTooLargeToServe as too_large:
+        # Judged like any other read before the caller falls back to the
+        # persisted copy, which may still hold what a symlink replaced.
+        if not visible(_to_client_path(sandbox, too_large.canonical, work_dir)):
+            return None
+        raise
     if resolved is None:
         return None
     canonical, content = resolved
@@ -303,6 +313,10 @@ async def _resolve_serve_bytes(
     try:
         resolved = await warm_sandbox_bytes(
             sandbox, normalized_path, work_dir=work_dir, visible=visible
+        )
+    except FileTooLargeToServe:
+        return await _db_fallback_bytes(
+            workspace, workspace_id, normalized_path, extension_mime
         )
     except RuntimeError as e:
         # Deliberate residual: an unreachable sandbox is indistinguishable from a

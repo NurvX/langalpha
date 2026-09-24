@@ -31,6 +31,10 @@ export interface MessageActions {
    *  may grant reading without granting download: a copy-link share does. Its
    *  absence is what hides the deliverable card's Download item. */
   onDownloadFile?: (path: string, workspaceId?: string) => void;
+  /** The key a card's save is tracked under. The host builds it because only
+   *  the host knows which workspace a card without its own names, and the
+   *  click and the card's busy state must agree on it. */
+  downloadKeyFor?: (path: string, workspaceId?: string) => string;
   onOpenSources?: (messageId: string) => void;
   /** Opens a live chart for a symbol beside the chat; absent where there is no panel to land in. */
   onOpenChart?: (spec: ChartTabSpec) => void;
