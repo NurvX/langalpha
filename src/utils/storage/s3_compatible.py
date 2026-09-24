@@ -23,6 +23,8 @@ Environment Variables:
     STORAGE_ADDRESSING_STYLE  - Bucket addressing: virtual (default) | path | auto
     STORAGE_BROWSER_ENDPOINT_URL - Endpoint browsers reach for signed download
                                    links, when it differs from STORAGE_ENDPOINT_URL
+    STORAGE_KEY_PREFIX        - Namespace for every key this process stores, for
+                                environments that share one bucket (default: none)
 
 Endpoint / addressing:
     AWS S3:        No endpoint needed, just credentials + bucket + region
@@ -61,6 +63,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from src.utils.mime import resolve_content_type
+from src.utils.storage.key_prefix import KEY_PREFIX, full_key
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +213,17 @@ def _build_client(*, endpoint_url: str | None = None, **config_overrides: Any) -
     }
     if endpoint_url or StorageConfig.ENDPOINT_URL:
         kwargs["endpoint_url"] = endpoint_url or StorageConfig.ENDPOINT_URL
-    return boto3.client("s3", **kwargs)
+    client = boto3.client("s3", **kwargs)
+    if KEY_PREFIX:
+        # On the client rather than at each call, so no operation, presigned
+        # or not, can reach the bucket outside the namespace.
+        client.meta.events.register("before-parameter-build.s3", _prefix_object_key)
+    return client
+
+
+def _prefix_object_key(params: dict[str, Any], **_: Any) -> None:
+    if "Key" in params:
+        params["Key"] = full_key(params["Key"])
 
 
 def _reset_client_for_test() -> None:
@@ -400,7 +413,7 @@ def delete_object(key: str) -> bool:
 
 def get_public_url(key: str) -> str:
     """Get the public URL for an uploaded object."""
-    return f"{StorageConfig.get_public_url_base()}/{key}"
+    return f"{StorageConfig.get_public_url_base()}/{full_key(key)}"
 
 
 def get_signed_upload_url(
