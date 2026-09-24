@@ -9,10 +9,11 @@ import base64
 import hashlib
 import shlex
 import textwrap
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from contextlib import AbstractAsyncContextManager
 from typing import Any
 
+import anyio
 import structlog
 
 from src.observability import (
@@ -235,6 +236,72 @@ async def adownload_file_bytes(sandbox: "PTCSandbox", filepath: str) -> bytes | 
     except Exception as e:
         await _raise_normalized(sandbox, e, op="download_file", path=filepath)
         return None
+
+
+async def astream_file_bytes(
+    sandbox: "PTCSandbox", filepath: str
+) -> AsyncIterator[bytes] | None:
+    """Open a download that yields the file in chunks, or None if it is absent.
+
+    The first chunk is read here, so a missing file answers None before a
+    caller commits to a response. Nothing retries: once a chunk has left for
+    the client, a failure can only end the stream. The caller closes it.
+    """
+    await sandbox._wait_ready()
+    stream = sandbox.runtime.download_file_stream(filepath)
+    try:
+        first = await anext(stream, b"")
+    except Exception as e:
+        await stream.aclose()
+        await _raise_normalized(sandbox, e, op="download_file_stream", path=filepath)
+        return None
+
+    async def body() -> AsyncIterator[bytes]:
+        sent = len(first)
+        try:
+            yield first
+            async for chunk in stream:
+                sent += len(chunk)
+                yield chunk
+        except Exception as e:
+            await _raise_normalized(
+                sandbox, e, op="download_file_stream", path=filepath
+            )
+            # Absent mid-stream: the file went away after it started.
+            raise SandboxTransientError(f"{filepath} vanished mid-download") from e
+        finally:
+            # A server that cancels on disconnect re-raises at every await in
+            # scope, so an unshielded close would leave the provider's read open.
+            with anyio.CancelScope(shield=True):
+                await stream.aclose()
+            safe_record(workspace_fs_bytes, sent, {"op": "read"})
+
+    # Advanced to its first yield here: closing a generator that never ran
+    # skips its finally, which would leave the provider's read open when a
+    # client leaves before the body starts.
+    gen = body()
+    await anext(gen)
+    return _Started(gen, first)
+
+
+class _Started:
+    """A started generator that replays the chunk it was advanced past."""
+
+    def __init__(self, gen: Any, first: bytes) -> None:
+        self._gen = gen
+        self._first: bytes | None = first or None
+
+    def __aiter__(self) -> "_Started":
+        return self
+
+    async def __anext__(self) -> bytes:
+        if self._first is not None:
+            chunk, self._first = self._first, None
+            return chunk
+        return await anext(self._gen)
+
+    async def aclose(self) -> None:
+        await self._gen.aclose()
 
 
 async def aread_file_text(sandbox: "PTCSandbox", filepath: str) -> str | None:

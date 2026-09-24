@@ -1,7 +1,9 @@
 """Abstract runtime and provider interfaces for sandbox backends."""
 
+import base64
+import shlex
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -106,6 +108,11 @@ class CodeRunResult:
     stderr: str
     exit_code: int
     artifacts: list[Artifact] = field(default_factory=list)
+
+
+# One ranged read of a streamed download. Large enough that a file costs few
+# execs, small enough that a stream holds little memory at any moment.
+STREAM_CHUNK_BYTES = 8 * 1024 * 1024
 
 
 class SandboxRuntime(ABC):
@@ -227,6 +234,32 @@ class SandboxRuntime(ABC):
     async def download_file(self, path: str) -> bytes:
         """Download a file from the sandbox."""
         ...
+
+    async def download_file_stream(self, path: str) -> AsyncIterator[bytes]:
+        """Yield a file's bytes in order without ever holding the whole file.
+
+        The default reads one range per exec, which every runtime can run and
+        which keeps each exec's output far below any provider's output limit.
+        A provider with a native streaming download should override it.
+        """
+        quoted = shlex.quote(path)
+        offset = 0
+        while True:
+            result = await self.exec(
+                f"test -f {quoted} && tail -c +{offset + 1} {quoted} 2>/dev/null"
+                f" | head -c {STREAM_CHUNK_BYTES} | base64",
+                timeout=120,
+            )
+            if result.exit_code != 0:
+                if offset == 0:
+                    raise FileNotFoundError(f"File not found or unreadable: {path}")
+                raise RuntimeError(f"Ranged read of {path} failed at byte {offset}")
+            chunk = base64.b64decode(result.stdout)
+            if chunk:
+                yield chunk
+            if len(chunk) < STREAM_CHUNK_BYTES:
+                return
+            offset += len(chunk)
 
     @abstractmethod
     async def list_files(self, directory: str) -> list[dict[str, Any]]:

@@ -5,7 +5,7 @@ import contextvars
 import hashlib
 import json
 import shlex
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import structlog
@@ -71,6 +71,9 @@ _STATE_MAP: dict[str, RuntimeState] = {
 # Override the SDK's 30-min default so a hung toolbox connection surfaces
 # as a transient error within the _runtime_call retry envelope.
 _FS_TIMEOUT_S = 60
+# A streamed download is paced by the client that receives it, so it gets far
+# longer than a whole-file read; a client that stops reading ends it sooner.
+_STREAM_TIMEOUT_S = 60 * 60
 
 
 class DaytonaRuntime(SandboxRuntime):
@@ -243,6 +246,19 @@ class DaytonaRuntime(SandboxRuntime):
     async def download_file(self, path: str) -> bytes:
         # SDK's download_file uses *args dispatch; pass timeout positionally.
         return await self._sandbox.fs.download_file(path, _FS_TIMEOUT_S)
+
+    async def download_file_stream(self, path: str) -> AsyncIterator[bytes]:
+        stream = await self._sandbox.fs.download_file_stream(
+            path, timeout=_STREAM_TIMEOUT_S
+        )
+        try:
+            async for chunk in stream:
+                yield chunk
+        finally:
+            # Closes the SDK's connection when the reader stops early.
+            aclose = getattr(stream, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
     async def list_files(self, directory: str) -> list[dict[str, Any]]:
         result = await self._sandbox.fs.list_files(directory)

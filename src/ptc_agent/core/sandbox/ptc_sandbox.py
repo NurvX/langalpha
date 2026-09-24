@@ -6,7 +6,7 @@ import secrets
 import posixpath
 import shlex
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -1587,6 +1587,9 @@ class PTCSandbox:
 
     async def adownload_file_bytes(self, filepath: str) -> bytes | None:
         return await _files.adownload_file_bytes(self, filepath)
+
+    async def astream_file_bytes(self, filepath: str) -> AsyncIterator[bytes] | None:
+        return await _files.astream_file_bytes(self, filepath)
 
     async def aread_file_text(self, filepath: str) -> str | None:
         return await _files.aread_file_text(self, filepath)
