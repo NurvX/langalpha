@@ -22,6 +22,11 @@ const CodeEditor = React.lazy(() => import('../viewers/CodeEditor'));
 
 const ExcelViewer = React.lazy(() => import('../viewers/ExcelViewer'));
 
+/** Where a reference into the file lands, per viewer. */
+type FileViewerFocus = Pick<ReturnType<typeof useFileFocus>, 'lineRange' | 'focusPage' | 'htmlAnchor' | 'focusCell' | 'seq'>;
+
+const NO_FOCUS: FileViewerFocus = { lineRange: null, focusPage: null, htmlAnchor: null, focusCell: null, seq: null };
+
 export interface FileViewerProps {
   path: string;
   body: FileBody | null;
@@ -35,29 +40,33 @@ export interface FileViewerProps {
   downloadState?: DownloadState;
 
   workspaceId: string;
-  focus: ReturnType<typeof useFileFocus>;
-  onPageCount: (pages: number) => void;
-
-  isEditing: boolean;
-  editContent: string | null;
-  originalContent: string | null;
-  showDiff: boolean;
-  editorRef: React.RefObject<unknown>;
-  onEditorChange: (value: string) => void;
-  onUndoRedoChange: (state: { canUndo: boolean; canRedo: boolean }) => void;
-  onEditorTextSelect: (data: EditorTextSelectData | null) => void;
-
-  onAddContext: ((ctx: ContextPayload) => void) | null;
-  onContentMouseUp: () => void;
-  onViewerLink: OpenFileHandler;
   onAnchorLink: (fragment: string) => void;
-  servedUrl?: string;
-  onCopyShareLink?: ((filePath: string) => void) | null;
+
+  // The panel's own surface. A viewer outside it (a shared file's page) has
+  // no reference to land, no editor and no workspace to link into.
+  focus?: FileViewerFocus;
+  onPageCount?: (pages: number) => void;
+
+  isEditing?: boolean;
+  editContent?: string | null;
+  originalContent?: string | null;
+  showDiff?: boolean;
+  editorRef?: React.RefObject<unknown>;
+  onEditorChange?: (value: string) => void;
+  onUndoRedoChange?: (state: { canUndo: boolean; canRedo: boolean }) => void;
+  onEditorTextSelect?: (data: EditorTextSelectData | null) => void;
+
+  onAddContext?: ((ctx: ContextPayload) => void) | null;
+  onContentMouseUp?: () => void;
+  /** Left out, a link to another workspace file renders as plain text. */
+  onViewerLink?: OpenFileHandler;
+  /** The serve prefix a share was handed; omitted, the owner's grant serves HTML. */
+  servePrefix?: string;
 }
 
 /** The open file, rendered by whichever viewer its bytes belong to. */
 export function FileViewer(props: FileViewerProps): React.ReactElement {
-  const { path, body, loading, error, isEditing } = props;
+  const { path, body, loading, error, isEditing = false, focus = NO_FOCUS } = props;
   const { t } = useTranslation();
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const ext = getFileExtension(path);
@@ -109,7 +118,7 @@ export function FileViewer(props: FileViewerProps): React.ReactElement {
     return (
       <Suspense fallback={<DocumentLoadingFallback />}>
         <DocumentErrorBoundary fallback={<DocumentErrorFallback onDownload={props.onDownloadInFallback} downloadState={props.downloadState} />}>
-          <PdfViewer data={body.buffer!} focusPage={props.focus.focusPage} focusSeq={props.focus.seq} onPageCount={props.onPageCount} />
+          <PdfViewer data={body.buffer!} focusPage={focus.focusPage} focusSeq={focus.seq} onPageCount={props.onPageCount} />
         </DocumentErrorBoundary>
       </Suspense>
     );
@@ -127,8 +136,8 @@ export function FileViewer(props: FileViewerProps): React.ReactElement {
             data={body.buffer!}
             filePath={path}
             onAddContext={props.onAddContext ?? undefined}
-            focusCell={props.focus.focusCell}
-            focusSeq={props.focus.seq ?? undefined}
+            focusCell={focus.focusCell}
+            focusSeq={focus.seq ?? undefined}
           />
         </DocumentErrorBoundary>
       </Suspense>
@@ -154,10 +163,9 @@ export function FileViewer(props: FileViewerProps): React.ReactElement {
             fileName={fileName}
             workspaceId={props.workspaceId}
             filePath={path}
-            servedUrlOverride={props.servedUrl}
-            anchor={props.focus.htmlAnchor}
-            anchorSeq={props.focus.seq}
-            onCopyShareLink={props.onCopyShareLink ?? undefined}
+            servePrefix={props.servePrefix}
+            anchor={focus.htmlAnchor}
+            anchorSeq={focus.seq}
             onTriggerDownload={props.onDownloadInFallback}
           />
         </DocumentErrorBoundary>
@@ -198,7 +206,7 @@ export function FileViewer(props: FileViewerProps): React.ReactElement {
           lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1em', color: 'var(--color-text-tertiary)', userSelect: 'none', fontSize: '0.6875rem', opacity: 0.5 }}
           wrapLines
           lineProps={(lineNumber: number) => {
-            const range = props.focus.lineRange;
+            const range = focus.lineRange;
             const focused = !!range && lineNumber >= range[0] && lineNumber <= range[1];
             return { 'data-line': lineNumber, ...(focused ? { className: 'file-focus-line' } : {}) } as React.HTMLProps<HTMLElement>;
           }}

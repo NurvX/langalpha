@@ -263,6 +263,75 @@ export interface ThreadShareStatus {
   permissions: ThreadSharePermissions;
 }
 
+// --- Share links (files and apps) ---
+
+export type ShareLinkKind = 'file' | 'app';
+
+interface ShareLinkBase {
+  code: string;
+  /** App-relative, `/a/<code>`. */
+  url: string;
+  title: string | null;
+  shared: boolean;
+  shared_at: string | null;
+  /** The confirmed list while shared, null otherwise. */
+  shared_files: string[] | null;
+  created_at: string;
+}
+
+export interface FileShareLink extends ShareLinkBase {
+  kind: 'file';
+  /** Workspace-relative entry path. */
+  path: string;
+  port: null;
+}
+
+export interface AppShareLink extends ShareLinkBase {
+  kind: 'app';
+  /** The optional entry path on the served app. */
+  path: string | null;
+  port: number;
+}
+
+/** One item's stable `/a/<code>` link. Private unless `shared`. */
+export type ShareLink = FileShareLink | AppShareLink;
+
+export type ShareLinkTarget =
+  | { kind: 'file'; path: string }
+  | { kind: 'app'; port: number };
+
+export type ShareFileReason = 'entry' | 'page' | 'style' | 'markdown' | 'script';
+
+export interface ShareFileEntry {
+  path: string;
+  size: number;
+  reason: ShareFileReason;
+}
+
+export interface ShareLinkDrift {
+  added: string[];
+  removed: string[];
+}
+
+/** The current file list for a file link, with the drift against what was confirmed. */
+export interface ShareLinkFiles {
+  files: ShareFileEntry[];
+  total_size: number;
+  drift: ShareLinkDrift | null;
+}
+
+export interface SharedLinksResponse {
+  links: ShareLink[];
+}
+
+/** A signed, expiring prefix the owner's iframes serve workspace files under. */
+export interface FileGrant {
+  /** `/api/v1/wsfiles/g/<grant>/`, relative to the API base. */
+  prefix: string;
+  /** Seconds the grant has left when it is answered. */
+  expires_in: number;
+}
+
 // --- Workspace Files ---
 
 export interface WorkspaceFile {

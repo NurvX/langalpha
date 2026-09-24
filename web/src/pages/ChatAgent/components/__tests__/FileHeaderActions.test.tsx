@@ -25,6 +25,25 @@ vi.mock('../viewers/html/useHtmlActions', () => ({
   exportServedPdf: (...args: unknown[]) => exportServedPdfMock(...args),
 }));
 
+vi.mock('@/hooks/useWorkspaceFileGrant', () => ({
+  useWorkspaceFileGrant: (workspaceId: string | null) => ({
+    data: workspaceId ? { prefix: '/api/v1/wsfiles/g/grant-1/', expires_in: 12 * 60 * 60 } : undefined,
+    error: null,
+    refetch: vi.fn(),
+  }),
+}));
+vi.mock('@/hooks/useShareLink', () => ({
+  useShareLink: (workspaceId: string | null) => ({
+    data: workspaceId ? { code: 'abc123abc123' } : undefined,
+  }),
+}));
+
+// The dialog owns its own queries; here it only has to say which file it was opened for.
+vi.mock('../ShareLinkDialog', () => ({
+  default: ({ open, filePath }: { open: boolean; filePath: string }) =>
+    open ? <div role="dialog">share {filePath}</div> : null,
+}));
+
 vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenu: ({ children }: any) => (
     <div data-testid="dropdown-menu">{children}</div>
@@ -269,28 +288,48 @@ describe('FileHeaderActions', () => {
     expect(screen.queryByText('filePanel.downloadAsPdf')).not.toBeInTheDocument();
   });
 
-  it('exports the server PDF (with the served URL override) on Save as PDF', async () => {
+  it('exports the server PDF (under a share\'s serve prefix) on Save as PDF', async () => {
     exportServedPdfMock.mockClear();
     render(
       <FileHeaderActions
         {...defaultProps}
         selectedFile="results/report.html"
         fileMime="text/html"
-        htmlServedUrl="/api/v1/public/shared/tok-1/files/serve/results/report.html"
+        servePrefix="/api/v1/public/shared/tok-1/files/serve/"
       />,
     );
     fireEvent.click(screen.getByText('filePanel.saveAsPdf'));
     await waitFor(() => {
       expect(exportServedPdfMock).toHaveBeenCalledWith({
-        workspaceId: 'ws-123',
         filePath: 'results/report.html',
         servedUrl: '/api/v1/public/shared/tok-1/files/serve/results/report.html',
+        openUrl: '/api/v1/public/shared/tok-1/files/serve/results/report.html',
         printHint: 'filePanel.pdfPrintHint',
         generatingHint: 'filePanel.pdfGenerating',
         scale: 1,
         pageNumbers: false,
         branding: true,
       });
+    });
+  });
+
+  // The owner's served URL carries the workspace grant, so the print fallback
+  // opens the file's own /a/ page rather than handing the grant to a new tab.
+  it('exports the owner\'s PDF from the grant and opens the /a/ link as the fallback', async () => {
+    exportServedPdfMock.mockClear();
+    render(
+      <FileHeaderActions
+        {...defaultProps}
+        selectedFile="results/report.html"
+        fileMime="text/html"
+      />,
+    );
+    fireEvent.click(screen.getByText('filePanel.saveAsPdf'));
+    await waitFor(() => {
+      expect(exportServedPdfMock).toHaveBeenCalledWith(expect.objectContaining({
+        servedUrl: '/api/v1/wsfiles/g/grant-1/results/report.html',
+        openUrl: `${window.location.origin}/a/abc123abc123`,
+      }));
     });
   });
 
@@ -313,6 +352,18 @@ describe('FileHeaderActions', () => {
         expect.objectContaining({ scale: 0.8, pageNumbers: true, branding: false }),
       );
     });
+  });
+
+  it('offers no share button unless the panel can share', () => {
+    render(<FileHeaderActions {...defaultProps} />);
+    expect(screen.queryByTitle('filePanel.copyShareLink')).not.toBeInTheDocument();
+  });
+
+  it('opens the share dialog for the selected file', () => {
+    render(<FileHeaderActions {...defaultProps} selectedFile="results/report.html" canShare />);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('filePanel.copyShareLink'));
+    expect(screen.getByRole('dialog')).toHaveTextContent('share results/report.html');
   });
 
   it('renders only Download for binary file', () => {

@@ -3,7 +3,7 @@
  * All requests are unauthenticated — no Bearer token needed.
  */
 
-import { buildSharedServeUrl } from '../ChatAgent/components/viewers/html/wsfilesUrl';
+import { buildServeUrl } from '../ChatAgent/components/viewers/html/wsfilesUrl';
 import type { FileRefResolution } from '../ChatAgent/components/filePanel/types';
 
 const baseURL: string = import.meta.env.VITE_API_BASE_URL ?? '';
@@ -243,6 +243,11 @@ export async function downloadSharedFileAs(
   URL.revokeObjectURL(a.href);
 }
 
+/** Where a share's files are served, in place of a workspace id, which a share never names. */
+export function sharedServePrefix(shareToken: string): string {
+  return `/api/v1/public/shared/${encodeURIComponent(shareToken)}/files/serve/`;
+}
+
 /**
  * Fetch a shared file's bytes as an object URL via the serve endpoint.
  *
@@ -254,7 +259,7 @@ export async function downloadSharedFileAs(
  * copy-link share, which grants only `allow_files`.
  */
 export async function fetchSharedServeObjectUrl(shareToken: string, path: string): Promise<string> {
-  const res = await fetch(buildSharedServeUrl(shareToken, path));
+  const res = await fetch(buildServeUrl(sharedServePrefix(shareToken), path));
   if (!res.ok) {
     if (res.status === 403) throw sharedFileError(res.status, 'File access not permitted');
     throw sharedFileError(res.status, `Failed to load shared file (${res.status})`);
@@ -264,7 +269,7 @@ export async function fetchSharedServeObjectUrl(shareToken: string, path: string
 
 /** Like {@link fetchSharedServeObjectUrl} but returns the raw bytes (binary preview). */
 export async function fetchSharedServeArrayBuffer(shareToken: string, path: string): Promise<ArrayBuffer> {
-  const res = await fetch(buildSharedServeUrl(shareToken, path));
+  const res = await fetch(buildServeUrl(sharedServePrefix(shareToken), path));
   if (!res.ok) {
     if (res.status === 403) throw sharedFileError(res.status, 'File access not permitted');
     throw sharedFileError(res.status, `Failed to load shared file (${res.status})`);

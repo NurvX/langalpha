@@ -34,7 +34,7 @@ interface ActiveTabBodyProps {
   onAddContext: ((ctx: ContextPayload) => void) | null;
   onOpenInMarketView: ((spec: ChartTabSpec) => void) | null;
   /** What the file viewer needs beyond the tab's own path: the bytes, the edit and focus state, and the handlers. */
-  file: Omit<FileViewerProps, 'path' | 'workspaceId' | 'servedUrl' | 'onPageCount'>;
+  file: Omit<FileViewerProps, 'path' | 'workspaceId' | 'servePrefix' | 'onPageCount'>;
   onPageCount: (path: string, pages: number) => void;
   /** The empty tab's offers, each null where the panel has none to make. */
   canUpload: boolean;
@@ -129,7 +129,7 @@ export function ActiveTabBody({
           path={path}
           workspaceId={workspaceId}
           onPageCount={(pages) => onPageCount(path, pages)}
-          servedUrl={apiAdapter?.buildServedUrl?.(path, { injectTheme: true })}
+          servePrefix={apiAdapter?.servePrefix}
         />
       );
     }

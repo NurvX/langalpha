@@ -41,10 +41,10 @@ import {
   downloadSharedFileAs,
   fetchSharedServeObjectUrl,
   fetchSharedServeArrayBuffer,
+  sharedServePrefix,
 } from './api';
 import type { SharedThreadMetadata, SSEEvent } from './api';
 import type { TextSegment } from '@/types/chat';
-import { buildSharedServeUrl } from '../ChatAgent/components/viewers/html/wsfilesUrl';
 import { isTaskAgentId } from '../ChatAgent/utils/agentId';
 import type { FileLocation } from '../ChatAgent/utils/fileLocation';
 import { computeAgentArtifactRouting } from '../ChatAgent/utils/agentPaths';
@@ -451,7 +451,7 @@ export default function SharedChatView() {
     setShowFilePanel((prev) => !prev);
   }, [canBrowseFiles]);
 
-  // Build API adapter for FilePanel — wraps public endpoints. buildServedUrl
+  // Build API adapter for FilePanel — wraps public endpoints. servePrefix
   // points the HTML preview iframe at the public serve URL (no workspace UUID).
   const fileApiAdapter = useMemo(() => ({
     readFile: (path: string) => readSharedFile(shareToken!, path),
@@ -464,8 +464,7 @@ export default function SharedChatView() {
     downloadFile: (path: string) => fetchSharedServeObjectUrl(shareToken!, path),
     downloadFileAsArrayBuffer: (path: string) => fetchSharedServeArrayBuffer(shareToken!, path),
     triggerDownload: (path: string) => downloadSharedFileAs(shareToken!, path, 'download'),
-    buildServedUrl: (path: string, opts?: { injectTheme?: boolean }) =>
-      buildSharedServeUrl(shareToken!, path, opts),
+    servePrefix: sharedServePrefix(shareToken!),
     resolveFile: (candidates: string[], recentWrites: string[]) =>
       resolveSharedFile(shareToken!, candidates, recentWrites),
   }), [shareToken]);

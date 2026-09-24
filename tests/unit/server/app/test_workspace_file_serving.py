@@ -15,6 +15,7 @@ byte-faithful plain GET.
 from __future__ import annotations
 
 import base64
+import re
 from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -29,7 +30,7 @@ from src.server.app.workspace_files.serve import (
     serve_workspace_file,
     serve_workspace_file_endpoint,
 )
-from src.server.services import pdf_render
+from src.server.services import file_grants, pdf_render
 
 WS_ID = "ws-test-0001"
 OWNER = "user-test-1"
@@ -43,6 +44,26 @@ _WSMGR_PATCH = "src.server.app.workspace_files.serve.WorkspaceManager"
 _SHARED_WSMGR_PATCH = "src.server.app.workspace_files._shared.WorkspaceManager"
 _RENDER_PATCH = "src.server.services.pdf_render.render_workspace_pdf"
 _PDF_INTERNAL_BASE = "http://127.0.0.1:8000"
+_GRANT_KEY = b"k" * 32
+
+
+@pytest.fixture(autouse=True)
+def _pinned_grant_key(monkeypatch):
+    """The grant key is read from Postgres once per process; pin it here."""
+    monkeypatch.setattr(file_grants, "_key", _GRANT_KEY)
+
+
+def _grant(workspace_id: str = WS_ID, *, expires_at: int = 4_102_444_800) -> str:
+    """A grant the endpoint accepts, signed with the pinned key."""
+    signature = file_grants._signature(_GRANT_KEY, workspace_id, expires_at)
+    return f"v1.{workspace_id}.{expires_at}.{signature}"
+
+
+# The PDF renderer is handed a short-lived grant prefix; its expiry is minted
+# at call time, so the tests match its shape rather than its value.
+_GRANT_PREFIX_RE = re.compile(
+    rf"^{re.escape(_PDF_INTERNAL_BASE)}/api/v1/wsfiles/g/v1\.{re.escape(WS_ID)}\.\d+\.[A-Za-z0-9_-]+/$"
+)
 
 
 def _assert_report_csp(csp: str) -> None:
@@ -611,7 +632,7 @@ async def test_endpoint_inject_theme_query_enables_splice(
     html = "<html><head></head><body>x</body></html>"
     mock_fp.get_file_content = AsyncMock(return_value=_db_text_record(html))
     resp = await serve_workspace_file_endpoint(
-        workspace_id=WS_ID, path="results/report.html", inject="theme"
+        grant=_grant(), path="results/report.html", inject="theme"
     )
     assert b"widget:themeUpdate" in resp.body
 
@@ -626,7 +647,7 @@ async def test_endpoint_without_inject_is_byte_faithful(mock_ws, mock_fp, _wd, _
     html = "<html><head></head><body>x</body></html>"
     mock_fp.get_file_content = AsyncMock(return_value=_db_text_record(html))
     resp = await serve_workspace_file_endpoint(
-        workspace_id=WS_ID, path="results/report.html", inject=None
+        grant=_grant(), path="results/report.html", inject=None
     )
     assert resp.body == html.encode()
 
@@ -636,10 +657,16 @@ async def test_endpoint_without_inject_is_byte_faithful(mock_ws, mock_fp, _wd, _
 # render_workspace_pdf is mocked everywhere — CI has no Chromium. The pre-
 # validation path (resolve bytes + require HTML) reuses the DB-fallback fixtures.
 
-_EXPECTED_INTERNAL_URL = (
-    f"{_PDF_INTERNAL_BASE}/api/v1/wsfiles/{WS_ID}/results/report.html"
-)
-_EXPECTED_SERVE_PREFIX = f"{_PDF_INTERNAL_BASE}/api/v1/wsfiles/{WS_ID}/"
+
+
+def _assert_rendered_under_grant(mock_render, encoded_path: str, **kwargs) -> None:
+    """The document URL is the grant prefix plus the encoded path, and nothing else moved."""
+    call = mock_render.await_args
+    prefix = call.kwargs["workspace_serve_prefix"]
+    assert _GRANT_PREFIX_RE.match(prefix), prefix
+    assert call.args[0] == f"{prefix}{encoded_path}"
+    for key, value in kwargs.items():
+        assert call.kwargs[key] == value, key
 
 
 @pytest.mark.asyncio
@@ -656,7 +683,7 @@ async def test_format_pdf_renders_html(mock_ws, mock_fp, _wd, _vault, mock_rende
     mock_render.return_value = b"%PDF-1.7 fake pdf bytes"
 
     resp = await serve_workspace_file_endpoint(
-        workspace_id=WS_ID,
+        grant=_grant(),
         path="results/report.html",
         inject=None,
         format="pdf",
@@ -674,12 +701,9 @@ async def test_format_pdf_renders_html(mock_ws, mock_fp, _wd, _vault, mock_rende
     assert resp.headers["Cache-Control"] == "private, max-age=60"
     # No CSP on the PDF response.
     assert "Content-Security-Policy" not in resp.headers
-    mock_render.assert_awaited_once_with(
-        _EXPECTED_INTERNAL_URL,
-        workspace_serve_prefix=_EXPECTED_SERVE_PREFIX,
-        scale=None,
-        page_numbers=False,
-        branding=True,
+    mock_render.assert_awaited_once()
+    _assert_rendered_under_grant(
+        mock_render, "results/report.html", scale=None, page_numbers=False, branding=True
     )
 
 
@@ -699,7 +723,7 @@ async def test_format_pdf_scale_and_page_numbers_pass_through(
     mock_render.return_value = b"%PDF-1.7 fake pdf bytes"
 
     resp = await serve_workspace_file_endpoint(
-        workspace_id=WS_ID,
+        grant=_grant(),
         path="results/report.html",
         inject=None,
         format="pdf",
@@ -709,12 +733,9 @@ async def test_format_pdf_scale_and_page_numbers_pass_through(
     )
 
     assert resp.status_code == 200
-    mock_render.assert_awaited_once_with(
-        _EXPECTED_INTERNAL_URL,
-        workspace_serve_prefix=_EXPECTED_SERVE_PREFIX,
-        scale=0.8,
-        page_numbers=True,
-        branding=False,
+    mock_render.assert_awaited_once()
+    _assert_rendered_under_grant(
+        mock_render, "results/report.html", scale=0.8, page_numbers=True, branding=False
     )
 
 
@@ -733,7 +754,7 @@ async def test_format_pdf_on_non_html_returns_404_no_render(
     )
     with pytest.raises(HTTPException) as exc:
         await serve_workspace_file_endpoint(
-            workspace_id=WS_ID, path="results/style.css", inject=None, format="pdf"
+            grant=_grant(), path="results/style.css", inject=None, format="pdf"
         )
     assert exc.value.status_code == 404
     assert exc.value.detail == "Not found"
@@ -753,7 +774,7 @@ async def test_format_pdf_on_missing_file_returns_404_no_render(
     mock_fp.get_file_content = AsyncMock(return_value=None)
     with pytest.raises(HTTPException) as exc:
         await serve_workspace_file_endpoint(
-            workspace_id=WS_ID, path="results/missing.html", inject=None, format="pdf"
+            grant=_grant(), path="results/missing.html", inject=None, format="pdf"
         )
     assert exc.value.status_code == 404
     mock_render.assert_not_awaited()
@@ -783,7 +804,7 @@ async def test_format_pdf_render_errors_map_to_status(
     mock_render.side_effect = render_exc
     with pytest.raises(HTTPException) as exc:
         await serve_workspace_file_endpoint(
-            workspace_id=WS_ID, path="results/report.html", inject=None, format="pdf"
+            grant=_grant(), path="results/report.html", inject=None, format="pdf"
         )
     assert exc.value.status_code == expected_status
 
@@ -799,7 +820,7 @@ async def test_format_pdf_traversal_returns_404_no_render(
 ):
     with pytest.raises(HTTPException) as exc:
         await serve_workspace_file_endpoint(
-            workspace_id=WS_ID,
+            grant=_grant(),
             path="results/../../etc/passwd",
             inject=None,
             format="pdf",
@@ -822,7 +843,7 @@ async def test_unknown_format_serves_normally(
     mock_fp.get_file_content = AsyncMock(return_value=_db_text_record(html))
     # An unrecognized format value falls through to a normal inline serve.
     resp = await serve_workspace_file_endpoint(
-        workspace_id=WS_ID, path="results/report.html", inject=None, format="docx"
+        grant=_grant(), path="results/report.html", inject=None, format="docx"
     )
     assert resp.status_code == 200
     assert resp.media_type == "text/html; charset=utf-8"
@@ -855,16 +876,14 @@ async def test_format_pdf_encodes_url_metacharacters(
 
     # A space and a '#' in the filename would otherwise truncate/misroute.
     await serve_workspace_file_endpoint(
-        workspace_id=WS_ID,
+        grant=_grant(),
         path="results/Q4 report#draft.html",
         inject=None,
         format="pdf",
     )
 
     internal_url = mock_render.await_args.args[0]
-    assert internal_url == (
-        f"{_PDF_INTERNAL_BASE}/api/v1/wsfiles/{WS_ID}/results/Q4%20report%23draft.html"
-    )
+    _assert_rendered_under_grant(mock_render, "results/Q4%20report%23draft.html")
     # Slashes preserved, no raw space or '#' leaked into the URL.
     assert " " not in internal_url and "#" not in internal_url
 
@@ -886,19 +905,14 @@ async def test_format_pdf_encodes_cjk_filename(
 
     # A CJK-named report (neutral placeholder name).
     await serve_workspace_file_endpoint(
-        workspace_id=WS_ID,
+        grant=_grant(),
         path="results/报告.html",
         inject=None,
         format="pdf",
     )
 
-    internal_url = mock_render.await_args.args[0]
     # UTF-8 percent-encoding of 报告; the leading dir + '/' stay literal.
-    assert internal_url == (
-        f"{_PDF_INTERNAL_BASE}/api/v1/wsfiles/{WS_ID}/results/%E6%8A%A5%E5%91%8A.html"
-    )
-    serve_prefix = mock_render.await_args.kwargs["workspace_serve_prefix"]
-    assert serve_prefix == _EXPECTED_SERVE_PREFIX
+    _assert_rendered_under_grant(mock_render, "results/%E6%8A%A5%E5%91%8A.html")
 
 
 @pytest.mark.asyncio
@@ -916,3 +930,80 @@ async def test_serves_cjk_named_html_file(mock_ws, mock_fp, _wd, _vault):
     assert resp.status_code == 200
     assert resp.media_type == "text/html; charset=utf-8"
     assert "季度报告".encode() in resp.body
+
+
+# --- HTTP-level: the grant is the credential --------------------------------
+#
+# The route is mounted and driven over ASGI so the URL shape itself is what is
+# locked: a grant path that verifies serves, every other spelling is the same
+# 404, and the bare-UUID route no longer exists.
+
+
+def _wsfiles_client():
+    from httpx import ASGITransport, AsyncClient
+
+    from src.server.app.workspace_files.serve import wsfiles_router
+    from tests.conftest import create_test_app
+
+    app = create_test_app(wsfiles_router)
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+@pytest.mark.asyncio
+@patch(_VAULT_PATCH, new_callable=AsyncMock, return_value={})
+@patch(_WD_PATCH, return_value="/home/workspace")
+@patch(_FP_PATCH)
+@patch(_DBWS_PATCH, new_callable=AsyncMock)
+async def test_grant_route_serves_with_a_valid_grant(mock_ws, mock_fp, _wd, _vault):
+    mock_ws.return_value = _workspace("stopped")
+    html = "<html><head></head><body>granted</body></html>"
+    mock_fp.get_file_content = AsyncMock(return_value=_db_text_record(html))
+    async with _wsfiles_client() as client:
+        resp = await client.get(f"/api/v1/wsfiles/g/{_grant()}/results/report.html")
+    assert resp.status_code == 200
+    assert resp.content == html.encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "grant",
+    [
+        # Signature with its last character flipped.
+        _grant()[:-1] + ("A" if _grant()[-1] != "A" else "B"),
+        # Signed for a different workspace, presented as WS_ID.
+        _grant("ws-test-other").replace("ws-test-other", WS_ID),
+        # Expired on 2000-01-01.
+        _grant(expires_at=946_684_800),
+        "not-a-grant",
+    ],
+    ids=["tampered-signature", "swapped-workspace", "expired", "malformed"],
+)
+@patch(_FP_PATCH)
+@patch(_DBWS_PATCH, new_callable=AsyncMock)
+async def test_grant_route_refuses_a_bad_grant_before_any_lookup(
+    mock_ws, mock_fp, grant
+):
+    mock_ws.return_value = _workspace("stopped")
+    mock_fp.get_file_content = AsyncMock(return_value=_db_text_record("<p>x</p>"))
+    async with _wsfiles_client() as client:
+        resp = await client.get(f"/api/v1/wsfiles/g/{grant}/results/report.html")
+    assert resp.status_code == 404
+    mock_ws.assert_not_awaited()
+    mock_fp.get_file_content.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch(_FP_PATCH)
+@patch(_DBWS_PATCH, new_callable=AsyncMock)
+async def test_bare_workspace_uuid_route_is_gone(mock_ws, mock_fp):
+    from src.server.app.workspace_files.serve import wsfiles_router
+
+    mock_ws.return_value = _workspace("stopped")
+    mock_fp.get_file_content = AsyncMock(return_value=_db_text_record("<p>x</p>"))
+    async with _wsfiles_client() as client:
+        resp = await client.get(f"/api/v1/wsfiles/{WS_ID}/results/report.html")
+    assert resp.status_code == 404
+    mock_ws.assert_not_awaited()
+
+    served = [r.path for r in wsfiles_router.routes if r.path.startswith("/api/v1/wsfiles/")]
+    assert served == ["/api/v1/wsfiles/g/{grant}/{path:path}"]

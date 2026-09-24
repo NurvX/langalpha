@@ -42,6 +42,32 @@ export const queryKeys = {
     flash:  () => [...queryKeys.workspaces.all, 'flash'],
     quota:  () => [...queryKeys.workspaces.all, 'quota'],
   },
+  // The signed prefix the owner's report iframes load under, one per workspace
+  // because the grant covers the whole workspace and nothing narrower. Its own
+  // root, not under `workspaces`: every workspace invalidation would re-mint
+  // it, and a new prefix reloads every open report.
+  fileGrants: {
+    all:       ['fileGrants'],
+    workspace: (wsId: string) => [...queryKeys.fileGrants.all, wsId],
+  },
+  // Stable `/a/<code>` links for files and apps, grouped by workspace. A share
+  // or stop rewrites the cached entries holding that code under `links`, then
+  // re-reads the link's file list and the workspace's shared list.
+  shareLinks: {
+    all:         ['shareLinks'],
+    byWorkspace: (wsId: string) => [...queryKeys.shareLinks.all, wsId],
+    links:       (wsId: string) => [...queryKeys.shareLinks.byWorkspace(wsId), 'link'],
+    // `key` is the normalized entry path for a file, the port for an app.
+    link:        (wsId: string, kind: string, key: string) => [...queryKeys.shareLinks.links(wsId), kind, key],
+    files:       (wsId: string, code: string) => [...queryKeys.shareLinks.byWorkspace(wsId), 'files', code],
+    shared:      (wsId: string) => [...queryKeys.shareLinks.byWorkspace(wsId), 'shared'],
+  },
+  // What an `/s/` or `/a/` page resolves to. The visitor flag is part of the
+  // question: the owner gets a different answer for the same code.
+  share: {
+    all:      ['share'],
+    metadata: (code: string, asVisitor: boolean) => [...queryKeys.share.all, 'metadata', code, asVisitor],
+  },
   // One projection of a machine: the list. A detail entry would be a second
   // place for a status to disagree with itself, and every surface that shows a
   // machine already reads the list.

@@ -2,10 +2,9 @@ import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useHtmlSandbox } from './useHtmlSandbox';
-import { useDirectLinkGuard } from './useDirectLinkGuard';
 import HtmlActionBar from './HtmlActionBar';
+import { SERVED_HTML_SANDBOX } from './sandbox';
 import type { HtmlActions } from './useHtmlActions';
-import { buildWsfilesUrl } from './wsfilesUrl';
 import './HtmlFullscreenModal.css';
 
 interface BaseProps {
@@ -30,10 +29,8 @@ interface WidgetVariant extends BaseProps {
 
 interface FileVariant extends BaseProps {
   variant: 'file';
-  workspaceId: string;
-  filePath: string;
-  /** Override the served iframe src (e.g. public share serve URL). Defaults to wsfiles. */
-  servedUrl?: string;
+  /** The themed served URL the inline viewer already loads: a grant or a share base. */
+  servedUrl: string;
 }
 
 type HtmlFullscreenModalProps = WidgetVariant | FileVariant;
@@ -49,20 +46,7 @@ export default function HtmlFullscreenModal(props: HtmlFullscreenModalProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { pushTheme } = useHtmlSandbox({ iframeRef, autoHeight: false });
 
-  const servedUrl =
-    props.variant === 'file'
-      ? props.servedUrl ?? buildWsfilesUrl(props.workspaceId, props.filePath, { injectTheme: true })
-      : null;
-
-  // Owner-served files open the raw, non-revocable wsfiles URL — confirm first.
-  // Widgets (blob) and public share serve URLs are exempt.
-  const { request: openInNewTab, dialog: directLinkDialog } = useDirectLinkGuard(
-    actions.openInNewTab,
-    props.variant === 'file' && !props.servedUrl,
-  );
-
   return (
-    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         variant="centered"
@@ -76,7 +60,7 @@ export default function HtmlFullscreenModal(props: HtmlFullscreenModalProps) {
             {/* No exit-fullscreen button here — the dialog's own close (×) is
                 the canonical close, so a second one would overlap it. */}
             <HtmlActionBar
-              onOpenInNewTab={openInNewTab}
+              onOpenInNewTab={actions.openInNewTab}
               onDownload={canDownload ? actions.downloadHtml : undefined}
               onExportPdf={canDownload ? actions.exportPdf : undefined}
             />
@@ -87,8 +71,8 @@ export default function HtmlFullscreenModal(props: HtmlFullscreenModalProps) {
             // the link-click rationale (both must carry the popup tokens).
             <iframe
               ref={iframeRef}
-              src={servedUrl!}
-              sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+              src={props.servedUrl}
+              sandbox={SERVED_HTML_SANDBOX}
               className="html-fullscreen-frame"
               title={title || t('filePanel.fullscreen')}
               onLoad={pushTheme}
@@ -119,7 +103,5 @@ export default function HtmlFullscreenModal(props: HtmlFullscreenModalProps) {
         </div>
       </DialogContent>
     </Dialog>
-    {directLinkDialog}
-    </>
   );
 }

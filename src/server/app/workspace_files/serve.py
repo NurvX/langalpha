@@ -1,4 +1,4 @@
-"""Unauthenticated path-style workspace file serving (`/api/v1/wsfiles/...`)."""
+"""Path-style workspace file serving (`/api/v1/wsfiles/g/<grant>/...`)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,12 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Query
 
 from src.config.env import PDF_RENDER_INTERNAL_BASE
+from src.server.services.file_grants import (
+    FileGrantError,
+    grant_prefix,
+    mint_file_grant,
+    verify_file_grant,
+)
 from src.server.utils.error_sanitization import single_line
 from src.server.utils.http_headers import content_disposition
 from fastapi.responses import Response
@@ -72,28 +78,34 @@ def _served_work_dir(workspace: dict[str, Any], workspace_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Unauthenticated path-style file serving (`/api/v1/wsfiles/...`)
+# Path-style file serving (`/api/v1/wsfiles/g/<grant>/...`)
 # ---------------------------------------------------------------------------
 #
 # Gives `.html` deliverables true served semantics: a document served at
-# `/wsfiles/{ws}/work/task/report.html` can reference `charts/foo.png` and the
-# browser resolves it relatively to `/wsfiles/{ws}/work/task/charts/foo.png`.
-# The workspace UUID (128-bit) is the access credential, mirroring the
-# `preview_redirect_router` posture: uniform 404 for missing/unauthorized,
-# and never wake a stopped sandbox (denial-of-wallet protection).
+# `/wsfiles/g/<grant>/work/task/report.html` can reference `charts/foo.png`
+# and the browser resolves it relatively under the same prefix. The grant is
+# the credential: signed for the owner, expiring, and minted only by an
+# authenticated route (``services/file_grants``). Uniform 404 for a bad grant,
+# a missing file and an unauthorized path alike, and never wake a stopped
+# sandbox (denial-of-wallet protection).
 #
-# This is an internal serving mechanism, NOT a sharing primitive — the
-# workspace UUID grants read access to every file in the workspace.
-# User-facing sharing goes through permission-scoped thread-share tokens.
+# This is the owner's own viewer mechanism, NOT a sharing primitive: a grant
+# opens the whole workspace. User-facing sharing goes through share links and
+# permission-scoped thread-share tokens.
 
 wsfiles_router = APIRouter(prefix="/api/v1", tags=["Workspace File Serving"])
 
 # Short private cache: HTML reports and their assets are effectively immutable
 # for a turn, so up to 60s of staleness on reload (until the next agent update
 # is picked up) is an acceptable trade for far fewer sandbox/DB reads. The
-# workspace UUID is a bearer credential, so we never allow shared/public caches
-# to retain the bytes.
+# grant is a bearer credential, so we never allow shared/public caches to
+# retain the bytes.
 _WSFILES_CACHE_CONTROL = "private, max-age=60"
+
+# The renderer fetches the document and its subresources with no credential
+# of its own, so the prefix it is handed carries one that outlives the render
+# by a few minutes and nothing else.
+_PDF_GRANT_TTL_SECONDS = 5 * 60
 
 # Content-Security-Policy for served reports. Two jobs:
 #   1. The `sandbox` directive forces an opaque origin even though the iframe
@@ -320,8 +332,9 @@ async def _resolve_serve_bytes(
         )
     except RuntimeError as e:
         # Deliberate residual: an unreachable sandbox is indistinguishable from a
-        # missing file on this route. It is unauthenticated, so distinguishing
-        # them (503 vs 404) would confirm that a guessed workspace UUID is real.
+        # missing file on this route. The URL is the only credential, so
+        # distinguishing them (503 vs 404) would confirm that a guessed
+        # credential resolved to a real workspace.
         # Fall back to the persisted copy first so the common case still serves.
         # Warning, not debug: the response deliberately hides the cause, which
         # makes this line the only place it survives.
@@ -356,11 +369,12 @@ async def serve_workspace_file(
     raise a uniform 404 so the endpoint never reveals which check failed, and a
     404 rather than a 403 so a denial never confirms that a path exists.
 
-    ``workspace`` may be passed pre-resolved (e.g. by a share-token route) to
-    reuse this core with a different credential resolver; otherwise the
-    workspace is looked up by UUID. ``visible`` is that route's own reach: a
-    share token scoped to one subtree narrows it, and the gate runs again on
-    whatever path the sandbox read actually resolved to.
+    ``workspace`` may be passed pre-resolved (e.g. by a share route) to reuse
+    this core with a different credential resolver; otherwise the workspace is
+    looked up by the id the caller's credential named. ``visible`` is that
+    route's own reach: a share token scoped to one subtree or a share link
+    frozen to a file list narrows it, and the gate runs again on whatever path
+    the sandbox read actually resolved to.
     """
     visible = visible or _default_visible
     if _has_traversal(path):
@@ -434,16 +448,17 @@ async def render_workspace_file_pdf(
 
     Pre-validates the file exists and is HTML (same uniform 404 posture as the
     inline serve, so chromium never spins on garbage), then renders the byte-
-    faithful internal wsfiles URL (no theme injection) under an SSRF-gated
+    faithful loopback wsfiles URL (no theme injection) under an SSRF-gated
     browser. Renderer failures map to 501/504/500 — intentionally NOT 404,
     since the file exists and only the converter failed.
 
     ``serve_base`` is the route prefix the document and every subresource it
     pulls are fetched under, and it is the whole authorization story for those
     subresources: the browser fetches them with no token of its own, so
-    whatever the prefix admits is what the PDF can contain. A caller whose
-    reach is narrower than the workspace passes the prefix of a route that
-    re-checks each request rather than a deeper string to match against.
+    whatever the prefix admits is what the PDF can contain. The default is a
+    grant that outlives the render by minutes; a caller whose reach is
+    narrower than the workspace passes the prefix of a route that re-checks
+    each request rather than a deeper string to match against.
     """
     visible = visible or _default_visible
     if _has_traversal(path):
@@ -475,17 +490,19 @@ async def render_workspace_file_pdf(
     from src.server.services import pdf_render
 
     base = PDF_RENDER_INTERNAL_BASE.rstrip("/")
-    serve_prefix = serve_base or f"{base}/api/v1/wsfiles/{workspace_id}/"
-    if not serve_prefix.startswith(base):
-        serve_prefix = f"{base}/{serve_prefix.lstrip('/')}"
+    if serve_base is None:
+        grant = await mint_file_grant(workspace_id, ttl=_PDF_GRANT_TTL_SECONDS)
+        serve_base = grant_prefix(grant)
+    if not serve_base.startswith(base):
+        serve_base = f"{base}/{serve_base.lstrip('/')}"
     # Percent-encode the path (UTF-8) so metacharacters (#, ?, space) and
     # non-ASCII (CJK) survive into headless Chromium; keep `/` so the path
     # structure stays intact. The serving endpoint decodes it back to unicode.
-    internal_url = f"{serve_prefix}{quote(normalized_path, safe='/')}"
+    internal_url = f"{serve_base}{quote(normalized_path, safe='/')}"
     try:
         pdf_bytes = await pdf_render.render_workspace_pdf(
             internal_url,
-            workspace_serve_prefix=serve_prefix,
+            workspace_serve_prefix=serve_base,
             scale=scale,
             page_numbers=page_numbers,
             branding=branding,
@@ -509,9 +526,9 @@ async def render_workspace_file_pdf(
     return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
 
 
-@wsfiles_router.get("/wsfiles/{workspace_id}/{path:path}")
+@wsfiles_router.get("/wsfiles/g/{grant}/{path:path}")
 async def serve_workspace_file_endpoint(
-    workspace_id: str,
+    grant: str,
     path: str,
     inject: str | None = Query(
         None, description="Set to 'theme' to splice theme-sync into HTML."
@@ -529,14 +546,19 @@ async def serve_workspace_file_endpoint(
         True, description="PDF only: stamp 'LangAlpha · <date>' in the footer."
     ),
 ) -> Response:
-    """Serve a workspace file by path with sandboxed CSP (unauthenticated).
+    """Serve a workspace file by path with sandboxed CSP.
 
-    Workspace UUID is the credential; uniform 404 for unknown workspace,
-    missing file, or traversal. ``?inject=theme`` adds theme-sync to HTML only.
-    ``?format=pdf`` renders HTML files to PDF server-side; other values serve
-    normally. ``scale``, ``page_numbers``, and ``branding`` apply only with
-    ``format=pdf``.
+    The grant is the credential; uniform 404 for a bad or expired grant, an
+    unknown workspace, a missing file, or traversal. ``?inject=theme`` adds
+    theme-sync to HTML only. ``?format=pdf`` renders HTML files to PDF
+    server-side; other values serve normally. ``scale``, ``page_numbers``,
+    and ``branding`` apply only with ``format=pdf``.
     """
+    try:
+        workspace_id = await verify_file_grant(grant)
+    except FileGrantError as e:
+        logger.info(f"Refusing wsfiles request: {single_line(str(e))}")
+        raise HTTPException(status_code=404, detail="Not found") from None
     if format == "pdf":
         return await render_workspace_file_pdf(
             workspace_id,

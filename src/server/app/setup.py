@@ -1286,7 +1286,7 @@ app.include_router(
 )  # /api/v1/preview/{workspace_id}/{port} - Old preview URLs, redirected to /a/<code>
 app.include_router(
     wsfiles_router
-)  # /api/v1/wsfiles/{workspace_id}/{path} - Unauthenticated path-style file serving
+)  # /api/v1/wsfiles/g/{grant}/{path} - Grant-gated path-style file serving
 
 app.include_router(
     market_data_ws_router

@@ -89,6 +89,7 @@ vi.mock('../api', () => ({
   downloadSharedFileAs: vi.fn(async () => undefined),
   fetchSharedServeObjectUrl: vi.fn(async () => ''),
   fetchSharedServeArrayBuffer: vi.fn(async () => new ArrayBuffer(0)),
+  sharedServePrefix: (token: string) => `/api/v1/public/shared/${token}/files/serve/`,
 }));
 
 import SharedChatView from '../SharedChatView';
