@@ -6,13 +6,17 @@ No auth required. workspace_id is resolved server-side and never exposed.
 A token resolves to a (workspace, path) scope; the file endpoints serve that
 path and its subtree and nothing else, whatever path the URL asks for.
 
+The metadata route also answers for a file or app share link, which is
+what the ``/a/`` page dispatches on. It takes optional auth for that: a
+private link opens for its signed-in owner and for nobody else.
+
 This module carries the thread itself: the metadata a viewer opens and the SSE
 replay, with the owner-only marks stripped out of every event. What the token
 authorizes lives in ``share_access``, the file routes in ``share_files``, and
 the branded failure page in ``share_pages``.
 
 Endpoints:
-- GET /api/v1/public/shared/{share_token}          — Thread metadata
+- GET /api/v1/public/shared/{share_token}          - Thread, file or app metadata
 - GET /api/v1/public/shared/{share_token}/replay    — SSE conversation replay
 - GET /api/v1/public/shared/{share_token}/files     — File listing (requires allow_files)
 - GET /api/v1/public/shared/{share_token}/files/read     — Read file content (requires allow_files)
@@ -24,19 +28,28 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from ptc_agent.agent.middleware.direct_mcp import METADATA_KEY
 from ptc_agent.agent.middleware.order_governance import RECEIPT_KEY
 from src.observability import observe_replay_stream
 
-from src.server.app.share_access import get_permissions, get_shared_thread
+from src.server.app.share_access import (
+    LINK_NOT_FOUND,
+    LinkAccess,
+    get_permissions,
+    get_shared_thread,
+    resolve_link,
+)
 from src.server.app.share_files import share_files_router
 from src.server.database.conversation import (
     get_queries_for_thread,
     get_responses_for_thread,
 )
+from src.server.database.share_links import KIND_APP
+from src.server.services.file_grants import grant_prefix, mint_file_grant, seconds_left
+from src.server.utils.api import PageViewer, Viewer
 from src.server.services.history.replay.items import run_completed_at
 
 logger = logging.getLogger(__name__)
@@ -244,13 +257,63 @@ def _strip_private_artifact(data: dict[str, Any]) -> dict[str, Any]:
 # =============================================================================
 
 
+async def _link_metadata(access: LinkAccess) -> dict[str, Any]:
+    """What the ``/a/`` page renders for a link ``resolve_link`` admitted.
+
+    ``expires_in`` is how many seconds the credential in ``frame_base`` has
+    left, so the page renews it just before rather than on a timer. A public
+    file has none: its route re-checks the link on every request.
+    """
+    link = access.link
+    if link.kind == KIND_APP:
+        raise HTTPException(status_code=404, detail=LINK_NOT_FOUND)
+
+    file = {"kind": "file", "name": link.display_title, "path": link.path}
+    if access.owner:
+        grant = await mint_file_grant(link.workspace_id)
+        return {
+            **file,
+            "access": "owner",
+            "frame_base": grant_prefix(grant),
+            "expires_in": seconds_left(grant.expires_at),
+        }
+    return {
+        **file,
+        "access": "public",
+        "frame_base": f"/api/v1/public/shared/{link.code}/files/serve/",
+    }
+
+
 @router.get("/shared/{share_token}")
-async def get_shared_thread_metadata(share_token: str):
-    """Get metadata for a shared thread. No auth required."""
-    thread = await get_shared_thread(share_token)
+async def get_shared_thread_metadata(
+    share_token: str,
+    page_viewer: PageViewer,
+    view_as: str | None = Query(None, alias="as"),
+):
+    """Metadata for a shared thread, file or app. Auth is optional.
+
+    ``?as=visitor`` drops the viewer, so the owner sees exactly what a visitor
+    sees, a private link included. A token that is not a link is a thread
+    token and answers as it always has.
+    """
+    viewer = Viewer(None) if view_as == "visitor" else page_viewer
+    try:
+        access = await resolve_link(share_token, user_id=viewer.user_id)
+        thread = None if access is not None else await get_shared_thread(share_token)
+    except HTTPException as e:
+        # Not found is said only to a viewer the keys could check. Any other
+        # may be the owner, and a private link and an unknown code must still
+        # answer alike, so both wait for the keys.
+        if e.status_code == 404 and viewer.unconfirmed is not None:
+            raise viewer.unconfirmed from None
+        raise
+    if access is not None:
+        return await _link_metadata(access)
+
     perms = get_permissions(thread)
 
     return {
+        "kind": "thread",
         "thread_id": str(thread["conversation_thread_id"]),
         "title": thread.get("title"),
         "msg_type": thread.get("msg_type"),

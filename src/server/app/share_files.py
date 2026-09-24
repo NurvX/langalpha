@@ -19,7 +19,11 @@ from fastapi import APIRouter, HTTPException, Path, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
 from ptc_agent.core.sandbox.runtime import SandboxGoneError, SandboxTransientError
-from src.server.app.share_access import SharedFileTarget, resolve_shared_files
+from src.server.app.share_access import (
+    SharedFileTarget,
+    resolve_serve_target,
+    resolve_shared_files,
+)
 from src.server.app.share_pages import unavailable_response
 from src.server.app.workspace_files._containment import (
     contained_listing_path,
@@ -377,7 +381,7 @@ async def serve_shared_file(
         True, description="PDF only: stamp 'LangAlpha · <date>' in the footer."
     ),
 ) -> Response:
-    """Serve a shared workspace file inline with a sandboxed CSP. Requires allow_files.
+    """Serve a shared workspace file inline with a sandboxed CSP.
 
     Path-style so a served document's relative subresources (``charts/x.png``)
     resolve under the same token prefix. Reuses the workspace file-serving core
@@ -385,6 +389,10 @@ async def serve_shared_file(
     own reach as the visibility gate, so the core judges the path a sandbox read
     resolved to and not the one the URL asked for. The workspace UUID is
     resolved server-side and never appears in the URL.
+
+    The token is a thread token, which requires ``allow_files`` and opens its
+    subtree, or a file share link, which opens exactly the files the owner
+    confirmed. The only route a file link answers is this one.
 
     ``?format=pdf`` renders HTML through server-side Chromium, and renders it
     through *this* route rather than the workspace one: the browser fetches
@@ -398,7 +406,7 @@ async def serve_shared_file(
     reachability. So serving (and PDF export) need only ``allow_files``.
     """
     try:
-        target = await resolve_shared_files(share_token, require_files=True)
+        target = await resolve_serve_target(share_token)
 
         if format == "pdf":
             return await render_workspace_file_pdf(
@@ -422,7 +430,7 @@ async def serve_shared_file(
     except (SandboxGoneError, SandboxTransientError):
         # This route is unauthenticated, so it must never distinguish "sandbox
         # down" from "no such file", a 503 would confirm that a guessed
-        # workspace UUID is real. Today serve.py absorbs these before they get
+        # token is real. Today serve.py absorbs these before they get
         # here; this keeps the 404 posture from depending on that.
         page = unavailable_response(request, 404)
         if page is not None:

@@ -349,12 +349,18 @@ async def resolve_in_sandbox(
 
 
 async def resolve_batch_in_sandbox(
-    sandbox: Any, absolute_paths: Sequence[str], *, roots: Sequence[str]
+    sandbox: Any,
+    absolute_paths: Sequence[str],
+    *,
+    roots: Sequence[str],
+    strict: bool = False,
 ) -> list[str | None]:
     """One exec for a whole batch of probes; None for each path that escapes.
 
     A protocol failure denies the whole batch rather than guessing which record
     belongs to which request: these paths are about to be handed to ``rm``.
+    ``strict`` raises instead, for a caller that lists what exists and would
+    read a denied batch as files that are not there.
     """
     runtime = getattr(sandbox, "runtime", None)
     if runtime is None:
@@ -373,6 +379,10 @@ async def resolve_batch_in_sandbox(
             f"Path containment probe failed: {single_line(str(e))}"
         ) from e
     if getattr(result, "exit_code", None) != 0:
+        if strict:
+            raise SandboxTransientError(
+                f"Path containment probe exited {getattr(result, 'exit_code', None)}"
+            )
         logger.warning(
             "Path containment denied a batch of %d under %r (probe exit %s)",
             len(absolute_paths),
@@ -383,6 +393,8 @@ async def resolve_batch_in_sandbox(
 
     records = str(getattr(result, "stdout", "") or "").split(mark)[:-1]
     if len(records) != len(absolute_paths):
+        if strict:
+            raise SandboxTransientError("Path containment probe returned a short batch")
         logger.warning(
             "Path containment denied a batch of %d under %r "
             "(probe returned %d records)",
@@ -413,7 +425,11 @@ def _addresses_project(absolute_path: str, work_dir: str) -> bool:
 
 
 async def contained_sandbox_paths(
-    sandbox: Any, absolute_paths: Sequence[str], *, work_dir: str
+    sandbox: Any,
+    absolute_paths: Sequence[str],
+    *,
+    work_dir: str,
+    strict: bool = False,
 ) -> list[str | None]:
     """``contained_sandbox_path`` for a batch, in one sandbox round trip.
 
@@ -430,7 +446,7 @@ async def contained_sandbox_paths(
         return resolved
     roots = serving_roots(sandbox, work_dir=work_dir)
     canonicals = await resolve_batch_in_sandbox(
-        sandbox, [absolute_paths[i] for i in addressed], roots=roots
+        sandbox, [absolute_paths[i] for i in addressed], roots=roots, strict=strict
     )
     validate = getattr(sandbox, "validate_path", None)
     for index, canonical in zip(addressed, canonicals):
