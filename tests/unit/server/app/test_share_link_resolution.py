@@ -43,6 +43,8 @@ _ACCESS_LINK = "src.server.app.share_access.get_link"
 _ACCESS_WS = "src.server.app.share_access.db_get_workspace"
 _ACCESS_THREAD = "src.server.app.share_access.get_thread_by_share_token"
 _PUBLIC_THREAD = "src.server.app.public.get_shared_thread"
+_PUBLIC_PREVIEW_URL = "src.server.app.public.owner_preview_url"
+_PUBLIC_URL_EXPIRY = "src.server.app.public.signed_url_expires_at"
 _SERVE_WS = "src.server.app.workspace_files.serve.db_get_workspace"
 _SERVE_FP = "src.server.app.workspace_files.serve.FilePersistenceService"
 _SERVE_VAULT = "src.server.app.workspace_files.serve.get_vault_secrets_for_redaction"
@@ -361,6 +363,8 @@ async def test_metadata_private_file_opens_for_the_owner_under_a_grant():
         async with _client(OWNER) as client:
             resp = await client.get(f"/api/v1/public/shared/{CODE}")
     assert resp.status_code == 200
+    # The grant is the owner's: no cache on the way may replay it to a visitor.
+    assert resp.headers["cache-control"] == "no-store"
     body = resp.json()
     assert body["access"] == "owner"
     assert body["frame_base"].startswith(f"/api/v1/wsfiles/g/v1.{WS_ID}.")
@@ -395,6 +399,63 @@ async def test_metadata_owner_as_visitor_on_a_private_file_is_404():
                 f"/api/v1/public/shared/{CODE}", params={"as": "visitor"}
             )
     assert resp.status_code == 404
+
+
+async def test_metadata_app_opens_for_the_owner_only():
+    with (
+        patch(_ACCESS_LINK, AsyncMock(return_value=_link("app", path="dash.html"))),
+        patch(_ACCESS_WS, AsyncMock(return_value=_workspace())),
+        patch(
+            _PUBLIC_PREVIEW_URL,
+            AsyncMock(return_value="https://preview.example.com/signed?token=abc"),
+        ) as preview,
+        patch(
+            _PUBLIC_URL_EXPIRY, AsyncMock(return_value=int(time.time()) + 3600)
+        ) as expiry,
+    ):
+        async with _client(OWNER) as client:
+            resp = await client.get(f"/api/v1/public/shared/{CODE}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body.pop("expires_in") == pytest.approx(3600, abs=5)
+    assert body == {
+        "kind": "app",
+        "title": "App on port 8080",
+        "url": "https://preview.example.com/signed/dash.html?token=abc",
+    }
+    preview.assert_awaited_once_with(WS_ID, OWNER, 8080)
+    # The expiry is the minted URL's, not the one with the entry path spliced in.
+    expiry.assert_awaited_once_with("https://preview.example.com/signed?token=abc")
+
+
+async def test_metadata_app_opens_at_the_page_an_old_preview_url_named():
+    with (
+        patch(_ACCESS_LINK, AsyncMock(return_value=_link("app", path="dash.html"))),
+        patch(_ACCESS_WS, AsyncMock(return_value=_workspace())),
+        patch(
+            _PUBLIC_PREVIEW_URL,
+            AsyncMock(return_value="https://preview.example.com/signed?token=abc"),
+        ),
+        patch(_PUBLIC_URL_EXPIRY, AsyncMock(return_value=1_767_229_200)),
+    ):
+        async with _client(OWNER) as client:
+            resp = await client.get(
+                f"/api/v1/public/shared/{CODE}", params={"path": "reports/q3.html"}
+            )
+    assert resp.json()["url"] == "https://preview.example.com/signed/reports/q3.html?token=abc"
+
+
+@pytest.mark.parametrize("viewer", [None, STRANGER])
+async def test_metadata_app_is_404_for_anyone_else(viewer):
+    with (
+        patch(_ACCESS_LINK, AsyncMock(return_value=_link("app"))),
+        patch(_ACCESS_WS, AsyncMock(return_value=_workspace())),
+        patch(_PUBLIC_PREVIEW_URL, AsyncMock()) as preview,
+    ):
+        async with _client(viewer) as client:
+            resp = await client.get(f"/api/v1/public/shared/{CODE}")
+    assert resp.status_code == 404
+    preview.assert_not_awaited()
 
 
 async def test_metadata_missing_workspace_is_404():

@@ -12,6 +12,7 @@ from src.server.database.share_codes import (
     SHARE_CODE_LENGTH,
     is_share_code,
     mint_share_code,
+    share_url,
 )
 
 _BASE62 = set(string.digits + string.ascii_letters)
@@ -45,3 +46,11 @@ def test_two_mints_differ():
 )
 def test_anything_but_an_exact_twelve_base62_run_is_not_a_code(value):
     assert not is_share_code(value)
+
+
+def test_an_app_url_names_its_page_so_a_later_entry_path_cannot_move_it():
+    # The root is named too: a bare /a/ URL follows the link's current entry.
+    assert share_url("AbCdEfGh1234").endswith("/a/AbCdEfGh1234?path=/")
+    assert share_url("AbCdEfGh1234", "reports/q3 final.html").endswith(
+        "/a/AbCdEfGh1234?path=reports/q3+final.html"
+    )

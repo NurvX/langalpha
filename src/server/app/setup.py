@@ -1283,7 +1283,7 @@ app.include_router(
 app.include_router(health_router)  # /health - Health check
 app.include_router(
     preview_redirect_router
-)  # /api/v1/preview/{workspace_id}/{port} - Unauthenticated preview URL redirect
+)  # /api/v1/preview/{workspace_id}/{port} - Old preview URLs, redirected to /a/<code>
 app.include_router(
     wsfiles_router
 )  # /api/v1/wsfiles/{workspace_id}/{path} - Unauthenticated path-style file serving

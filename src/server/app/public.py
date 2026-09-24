@@ -28,7 +28,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
 from ptc_agent.agent.middleware.direct_mcp import METADATA_KEY
@@ -36,13 +36,17 @@ from ptc_agent.agent.middleware.order_governance import RECEIPT_KEY
 from src.observability import observe_replay_stream
 
 from src.server.app.share_access import (
-    LINK_NOT_FOUND,
     LinkAccess,
     get_permissions,
     get_shared_thread,
     resolve_link,
 )
 from src.server.app.share_files import share_files_router
+from src.server.app.workspace_sandbox import (
+    owner_preview_url,
+    signed_url_expires_at,
+    with_preview_path,
+)
 from src.server.database.conversation import (
     get_queries_for_thread,
     get_responses_for_thread,
@@ -257,16 +261,26 @@ def _strip_private_artifact(data: dict[str, Any]) -> dict[str, Any]:
 # =============================================================================
 
 
-async def _link_metadata(access: LinkAccess) -> dict[str, Any]:
+async def _link_metadata(
+    access: LinkAccess, user_id: str | None, path: str | None
+) -> dict[str, Any]:
     """What the ``/a/`` page renders for a link ``resolve_link`` admitted.
 
-    ``expires_in`` is how many seconds the credential in ``frame_base`` has
-    left, so the page renews it just before rather than on a timer. A public
-    file has none: its route re-checks the link on every request.
+    ``expires_in`` is how many seconds the credential in ``url`` or
+    ``frame_base`` has left, so the page renews it just before rather than on a
+    timer. A public file
+    has none: its route re-checks the link on every request.
     """
     link = access.link
     if link.kind == KIND_APP:
-        raise HTTPException(status_code=404, detail=LINK_NOT_FOUND)
+        # An app link is never shared, so only its owner is ever here.
+        url = await owner_preview_url(link.workspace_id, user_id, link.port)
+        return {
+            "kind": "app",
+            "title": link.display_title,
+            "url": with_preview_path(url, path or link.path),
+            "expires_in": seconds_left(await signed_url_expires_at(url)),
+        }
 
     file = {"kind": "file", "name": link.display_title, "path": link.path}
     if access.owner:
@@ -288,14 +302,20 @@ async def _link_metadata(access: LinkAccess) -> dict[str, Any]:
 async def get_shared_thread_metadata(
     share_token: str,
     page_viewer: PageViewer,
+    response: Response,
     view_as: str | None = Query(None, alias="as"),
+    path: str | None = Query(None),
 ):
     """Metadata for a shared thread, file or app. Auth is optional.
 
     ``?as=visitor`` drops the viewer, so the owner sees exactly what a visitor
-    sees, a private link included. A token that is not a link is a thread
-    token and answers as it always has.
+    sees, a private link included. ``?path=`` opens an app at a page other
+    than its entry, which is how an old preview URL keeps its suffix. A token
+    that is not a link is a thread token and answers as it always has.
     """
+    # The answer depends on the bearer and can carry the owner's grant, so no
+    # cache between here and the browser may hand it to the next visitor.
+    response.headers["Cache-Control"] = "no-store"
     viewer = Viewer(None) if view_as == "visitor" else page_viewer
     try:
         access = await resolve_link(share_token, user_id=viewer.user_id)
@@ -308,7 +328,7 @@ async def get_shared_thread_metadata(
             raise viewer.unconfirmed from None
         raise
     if access is not None:
-        return await _link_metadata(access)
+        return await _link_metadata(access, viewer.user_id, path)
 
     perms = get_permissions(thread)
 
