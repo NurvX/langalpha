@@ -164,7 +164,7 @@ async def test_new_files_go_direct_and_register_only_what_the_store_took(db):
     assert rows["b.bin"]["is_binary"] is True and rows["a.txt"]["is_binary"] is False
     assert rows["a.txt"]["permissions"] == "0644"
     assert rows["a.txt"]["sandbox_modified_at"] == micros_to_datetime(NS // 1000)
-    assert result == SyncResult(synced=3)
+    assert result == SyncResult(synced=3, pruned=True)
 
 
 @pytest.mark.asyncio

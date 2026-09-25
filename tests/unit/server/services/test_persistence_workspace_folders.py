@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ptc_agent.core.paths import SandboxLayout
+from src.server.services.persistence.sync_result import SyncResult
 from src.server.services.persistence import backup, restore, transfer
 
 ROOT = "/home/workspace"
@@ -254,7 +255,7 @@ def test_a_row_that_names_no_folder_is_refused_rather_than_widened(row):
 async def test_a_backup_scans_the_folder_the_caller_named():
     with (
         patch.object(backup, "workspace_sync_lock") as lock,
-        patch.object(backup, "_sync_locked", AsyncMock(return_value={})) as locked,
+        patch.object(backup, "_sync_locked", AsyncMock(return_value=SyncResult())) as locked,
     ):
         lock.return_value.__aenter__ = AsyncMock(return_value="conn")
         lock.return_value.__aexit__ = AsyncMock(return_value=False)

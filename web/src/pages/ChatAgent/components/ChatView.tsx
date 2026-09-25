@@ -83,6 +83,7 @@ import {
 import SubagentStatusIndicator from './chatView/SubagentStatusIndicator';
 import { ModelStatusPill } from './chatView/ModelStatusPill';
 import { FallbackSuggestionPill } from './chatView/FallbackSuggestionPill';
+import { ChatDiskWarning } from './chatView/ChatDiskWarning';
 import { useToolCallAnnouncer } from './chatView/useToolCallAnnouncer';
 import { useNavPanel } from './chatView/useNavPanel';
 import { useChatScroll } from './chatView/useChatScroll';
@@ -1657,6 +1658,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                     )}
                     {messageError && !isLoading && (
                       <ErrorBanner error={messageError} />
+                    )}
+                    {!isFlashMode && workspaceRecord?.computer_id && (
+                      <ChatDiskWarning computerId={workspaceRecord.computer_id} />
                     )}
                     <ModelStatusPill modelStatus={modelStatus} isLoading={isLoading} />
                     <FallbackSuggestionPill

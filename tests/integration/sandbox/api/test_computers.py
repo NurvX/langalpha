@@ -42,7 +42,7 @@ class TestComputersRouterIsMounted:
         "path,payload,method_name",
         [
             ("stop", None, "stop_computer"),
-            ("spec", {"tier": "standard"}, "set_computer_spec"),
+            ("spec", {"tier": "standard"}, "precheck_computer_spec"),
             ("always-on", {"enabled": False}, "set_computer_always_on"),
         ],
     )

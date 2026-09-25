@@ -18,12 +18,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.server.models.computer import ComputerStatus
+
 from src.server.services.computer_manager import ComputerBinding
 from src.server.services.egress.session_binding import RelayBind
 from src.server.services.workspace_manager import WorkspaceManager
 from tests.computer_manager_patch import cm_patch
 from tests.unit.server.mcp_builders import resolved_mcp
 from tests.unit.server.services.conftest import _patch_identity, _patch_machine_bind
+
+
+@pytest.fixture(autouse=True)
+def _stub_sibling_restore_flags():
+    """A recreate flags its siblings' restores pending, a row write these
+    pool-less tests would see raise."""
+    with patch(
+        "src.server.services.computer_manager._provisioning.flag_sibling_restores_pending",
+        new=AsyncMock(return_value=0),
+    ):
+        yield
 
 
 def _make_config():
@@ -144,6 +157,8 @@ def _patch_computer_for_workspace(computer):
 # Regression #5 — warm acquire within cooldown issues no workspace query
 # ---------------------------------------------------------------------------
 
+
+_SPEC = "src.server.services.computer_manager._spec"
 
 class TestWarmCooldownNoQuery:
     def setup_method(self):
@@ -1528,7 +1543,7 @@ class TestSetComputerSpecDiskGuard:
                 new=AsyncMock(return_value=0),
             ),
             patch(
-                "src.server.services.workspace_entitlements."
+                "src.server.services.computer_manager._spec."
                 "try_claim_computer_for_start",
                 new=AsyncMock(return_value={"status": "starting"}),
             ) as claim,
@@ -1536,9 +1551,23 @@ class TestSetComputerSpecDiskGuard:
                 "src.server.dependencies.usage_limits.platform_gating_active",
                 return_value=False,
             ),
+            patch(
+                f"{_SPEC}.claim_computer_spec_change",
+                new=AsyncMock(return_value={"spec_change": {"claim_id": "c-1"}}),
+            ),
+            patch(f"{_SPEC}.settle_computer_spec_change", new=AsyncMock()) as settle,
+            patch(f"{_SPEC}.heartbeat_computer_spec_change", new=AsyncMock(return_value=True)),
+            patch(f"{_SPEC}.publish_computer_status_change", new=AsyncMock()),
+            patch(f"{_SPEC}.clear_computer_disk", new=AsyncMock(return_value=True)),
         ):
             self.claim = claim
+            self.settle = settle
             yield
+
+    def _settled_error(self):
+        self.settle.assert_awaited_once()
+        error = self.settle.await_args.kwargs.get("error")
+        return error and error["code"]
 
     @staticmethod
     def _config_with_tiers():
@@ -1561,20 +1590,20 @@ class TestSetComputerSpecDiskGuard:
 
     @pytest.mark.asyncio
     @patch(
-        "src.server.services.workspace_entitlements.get_workspace_total_size",
+        "src.server.services.computer_manager._spec.get_live_project_sizes_for_computer",
         new_callable=AsyncMock,
     )
     @patch(
-        "src.server.services.workspace_entitlements.get_live_workspace_ids_for_computer",
+        "src.server.services.computer_manager._spec.get_live_workspace_ids_for_computer",
         new_callable=AsyncMock,
     )
     @patch(
-        "src.server.services.workspace_entitlements.db_set_computer_resource_tier",
+        "src.server.services.computer_manager._spec.db_set_computer_resource_tier",
         new_callable=AsyncMock,
     )
-    @patch("src.server.services.workspace_entitlements.SessionManager")
+    @patch("src.server.services.computer_manager._spec.SessionManager")
     @patch(
-        "src.server.services.workspace_entitlements.get_computer",
+        "src.server.services.computer_manager._spec.get_computer",
         new_callable=AsyncMock,
     )
     async def test_running_downgrade_rejected_when_files_exceed_disk(
@@ -1583,7 +1612,7 @@ class TestSetComputerSpecDiskGuard:
         mock_session_mgr,
         mock_set_tier,
         mock_live_ids,
-        mock_total_size,
+        mock_sizes,
     ):
         wm = WorkspaceManager.get_instance(config=self._config_with_tiers())
         ws_id = str(uuid.uuid4())
@@ -1595,7 +1624,7 @@ class TestSetComputerSpecDiskGuard:
         # the point of the guard: checking only the project that asked is how a
         # two-project machine passes a downgrade its combined files cannot fit.
         mock_live_ids.return_value = [ws_id, sibling_id]
-        mock_total_size.return_value = 5 * 1024**3 // 4  # 1.25 GiB each
+        mock_sizes.return_value = [5 * 1024**3 // 4] * 2  # 1.25 GiB each
         self._attach_running_session(wm, computer_id)
         wm._backup_machine_files_to_db = AsyncMock()
         wm._clear_session = AsyncMock()
@@ -1603,40 +1632,49 @@ class TestSetComputerSpecDiskGuard:
         wm._recover_sandbox = AsyncMock()
         wm._workspace_folder = AsyncMock(return_value="proj-1a2b")
 
-        with pytest.raises(RuntimeError, match="Cannot downgrade"):
-            await wm.set_computer_spec(
-                computer_id, "standard", user_id="user-1", workspace_id=ws_id
-            )
+        with patch(
+            "src.server.services.computer_manager._spec.update_computer_status",
+            new_callable=AsyncMock,
+        ) as mock_status:
+            with pytest.raises(RuntimeError, match="Cannot downgrade"):
+                await wm.set_computer_spec(
+                    computer_id, "standard", user_id="user-1", workspace_id=ws_id
+                )
 
         # Backed up (for fresh sizes) but the live sandbox is never torn down.
         wm._backup_machine_files_to_db.assert_awaited_once()
-        assert mock_total_size.await_count == 2
+        mock_sizes.assert_awaited_once_with(computer_id)
         wm._recover_sandbox.assert_not_awaited()
         wm._clear_session.assert_not_awaited()
         wm._destroy_sandbox.assert_not_awaited()
-        # Rejected before the replacement was claimed, so the row still
-        # advertises running/<old id> rather than being stranded at 'starting'.
-        self.claim.assert_not_awaited()
-        # Tier set to target optimistically, then reverted to the original.
-        assert mock_set_tier.await_args_list[0].args == (computer_id, "standard")
-        assert mock_set_tier.await_args_list[-1].args == (computer_id, "max")
+        # Claimed before the backup, so the rejection hands the untouched
+        # machine back running rather than stranding it at 'starting'.
+        self.claim.assert_awaited_once()
+        mock_status.assert_awaited_once_with(
+            computer_id, ComputerStatus.RUNNING, expected=ComputerStatus.STARTING
+        )
+        # Tier set to target once; the failed settle reverts it in one write.
+        assert [c.args for c in mock_set_tier.await_args_list] == [
+            (computer_id, "standard")
+        ]
+        assert self._settled_error() == "disk_too_small"
 
     @pytest.mark.asyncio
     @patch(
-        "src.server.services.workspace_entitlements.get_workspace_total_size",
+        "src.server.services.computer_manager._spec.get_live_project_sizes_for_computer",
         new_callable=AsyncMock,
     )
     @patch(
-        "src.server.services.workspace_entitlements.get_live_workspace_ids_for_computer",
+        "src.server.services.computer_manager._spec.get_live_workspace_ids_for_computer",
         new_callable=AsyncMock,
     )
     @patch(
-        "src.server.services.workspace_entitlements.db_set_computer_resource_tier",
+        "src.server.services.computer_manager._spec.db_set_computer_resource_tier",
         new_callable=AsyncMock,
     )
-    @patch("src.server.services.workspace_entitlements.SessionManager")
+    @patch("src.server.services.computer_manager._spec.SessionManager")
     @patch(
-        "src.server.services.workspace_entitlements.get_computer",
+        "src.server.services.computer_manager._spec.get_computer",
         new_callable=AsyncMock,
     )
     async def test_running_downgrade_allowed_when_files_fit(
@@ -1645,7 +1683,7 @@ class TestSetComputerSpecDiskGuard:
         mock_session_mgr,
         mock_set_tier,
         mock_live_ids,
-        mock_total_size,
+        mock_sizes,
     ):
         wm = WorkspaceManager.get_instance(config=self._config_with_tiers())
         ws_id = str(uuid.uuid4())
@@ -1653,7 +1691,7 @@ class TestSetComputerSpecDiskGuard:
         computer_id = str(uuid.uuid4())
         mock_get_computer.return_value = _make_computer(computer_id)
         mock_live_ids.return_value = [ws_id, sibling_id]
-        mock_total_size.return_value = 50 * 1024**2  # 100 MiB together, fits
+        mock_sizes.return_value = [50 * 1024**2] * 2  # 100 MiB together, fits
         self._attach_running_session(wm, computer_id)
         wm._backup_machine_files_to_db = AsyncMock()
         wm._clear_session = AsyncMock()
@@ -1666,25 +1704,26 @@ class TestSetComputerSpecDiskGuard:
         )
 
         wm._recover_sandbox.assert_awaited_once()
-        # Tier never reverted — the last write is the target.
+        # Settled as a success, so the tier stays at the target.
         assert mock_set_tier.await_args_list[-1].args == (computer_id, "standard")
+        assert self._settled_error() is None
 
     @pytest.mark.asyncio
     @patch(
-        "src.server.services.workspace_entitlements.get_workspace_total_size",
+        "src.server.services.computer_manager._spec.get_live_project_sizes_for_computer",
         new_callable=AsyncMock,
     )
     @patch(
-        "src.server.services.workspace_entitlements.db_set_computer_resource_tier",
+        "src.server.services.computer_manager._spec.db_set_computer_resource_tier",
         new_callable=AsyncMock,
     )
-    @patch("src.server.services.workspace_entitlements.SessionManager")
+    @patch("src.server.services.computer_manager._spec.SessionManager")
     @patch(
-        "src.server.services.workspace_entitlements.get_computer",
+        "src.server.services.computer_manager._spec.get_computer",
         new_callable=AsyncMock,
     )
     async def test_upgrade_skips_disk_guard(
-        self, mock_get_computer, mock_session_mgr, mock_set_tier, mock_total_size
+        self, mock_get_computer, mock_session_mgr, mock_set_tier, mock_sizes
     ):
         wm = WorkspaceManager.get_instance(config=self._config_with_tiers())
         ws_id = str(uuid.uuid4())
@@ -1703,44 +1742,44 @@ class TestSetComputerSpecDiskGuard:
             computer_id, "max", user_id="user-1", workspace_id=ws_id
         )
 
-        mock_total_size.assert_not_awaited()  # no fit check on an upgrade
+        mock_sizes.assert_not_awaited()  # no fit check on an upgrade
         wm._recover_sandbox.assert_awaited_once()
 
     @pytest.mark.asyncio
     @patch(
-        "src.server.services.workspace_entitlements.get_workspace_total_size",
+        "src.server.services.computer_manager._spec.get_live_project_sizes_for_computer",
         new_callable=AsyncMock,
     )
     @patch(
-        "src.server.services.workspace_entitlements.get_live_workspace_ids_for_computer",
+        "src.server.services.computer_manager._spec.get_live_workspace_ids_for_computer",
         new_callable=AsyncMock,
     )
     @patch(
-        "src.server.services.workspace_entitlements.db_set_computer_resource_tier",
+        "src.server.services.computer_manager._spec.db_set_computer_resource_tier",
         new_callable=AsyncMock,
     )
     @patch(
-        "src.server.services.workspace_entitlements.get_computer",
+        "src.server.services.computer_manager._spec.get_computer",
         new_callable=AsyncMock,
     )
     async def test_stopped_downgrade_rejected_before_destroy(
-        self, mock_get_computer, mock_set_tier, mock_live_ids, mock_total_size
+        self, mock_get_computer, mock_set_tier, mock_live_ids, mock_sizes
     ):
         wm = WorkspaceManager.get_instance(config=self._config_with_tiers())
         ws_id = str(uuid.uuid4())
         computer_id = str(uuid.uuid4())
         mock_get_computer.return_value = _make_computer(computer_id, status="stopped")
         mock_live_ids.return_value = [ws_id]
-        mock_total_size.return_value = 5 * 1024**3
+        mock_sizes.return_value = [5 * 1024**3]
         wm._destroy_sandbox = AsyncMock()
 
         probe = MagicMock(initialize=AsyncMock(), stop=AsyncMock())
         wm._sync_machine_assets = AsyncMock()
         wm._backup_machine_files_to_db = AsyncMock()
         with (
-            patch("src.server.services.workspace_entitlements.Session", return_value=probe),
-            patch("src.server.services.workspace_entitlements.try_claim_computer_for_start", AsyncMock(return_value={"status": "starting"})),
-            patch("src.server.services.workspace_entitlements.update_computer_status", AsyncMock()),
+            patch("src.server.services.computer_manager._spec.Session", return_value=probe),
+            patch("src.server.services.computer_manager._spec.try_claim_computer_for_start", AsyncMock(return_value={"status": "starting"})),
+            patch("src.server.services.computer_manager._spec.update_computer_status", AsyncMock()),
             pytest.raises(RuntimeError, match="Cannot downgrade"),
         ):
             await wm.set_computer_spec(
@@ -1748,10 +1787,7 @@ class TestSetComputerSpecDiskGuard:
             )
 
         wm._destroy_sandbox.assert_not_awaited()
-        assert mock_set_tier.await_args_list[-1].args == (
-            computer_id,
-            "max",
-        )  # reverted
+        assert self._settled_error() == "disk_too_small"
 
 
 class TestVaultPushWritesEachTier:

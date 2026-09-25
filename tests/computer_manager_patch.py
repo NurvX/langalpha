@@ -16,13 +16,15 @@ _PKG = "src.server.services.computer_manager"
 
 # Every name that more than one mixin module imports, with its modules.
 CM_PATCH_TARGETS = {
-    "SessionManager": ("_machines", "_provisioning", "_sessions"),
-    "db_get_workspace": ("_lifecycle", "_machines", "_mcp", "_provisioning", "_sessions"),
+    "SessionManager": ("_machines", "_provisioning", "_sessions", "_spec"),
+    "db_get_workspace": (
+        "_lifecycle", "_machines", "_mcp", "_provisioning", "_sessions", "_spec"
+    ),
     "db_get_workspace_identity": ("_mcp", "_provisioning", "_sessions"),
-    "get_live_workspace_ids_for_computer": ("_machines", "_provisioning"),
+    "get_live_workspace_ids_for_computer": ("_machine_backup", "_machines", "_spec"),
     "get_workspace_dir_names_for_computer": ("_machines", "_provisioning"),
     "try_bind_computer_provider_ref": ("_lifecycle", "_machines"),
-    "try_claim_computer_for_start": ("_machines", "_provisioning"),
+    "try_claim_computer_for_start": ("_machines", "_provisioning", "_spec"),
     "update_workspace_activity": ("_lifecycle", "_provisioning"),
 }
 

@@ -11,15 +11,18 @@ the single-table path.
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
 from psycopg.rows import dict_row
+from psycopg.types.json import Json
 
 from src.server.database.pool import get_db_connection
 from src.server.database.sql_fences import (
     COMPUTER_COLS as _COMPUTER_COLS,
 )
 from src.server.database.sql_fences import (
+    computer_cols,
     FENCE_BINDABLE,
     advisory_key,
     FENCE_LIVE_WORKSPACE,
@@ -73,11 +76,6 @@ def observed_layout_version(computer: Dict[str, Any]) -> Optional[int]:
     if version is None or int(version) == LAYOUT_VERSION_UNOBSERVED:
         return None
     return int(version)
-
-
-def _qualified(alias: str) -> str:
-    """Qualify shared column names for joins while preserving dict_row result keys."""
-    return ", ".join(f"{alias}.{col}" for col in _COMPUTER_COLS.split(", "))
 
 
 @asynccontextmanager
@@ -191,7 +189,7 @@ async def get_computer_for_workspace(
     async with _computer_cursor(conn) as cur:
         await cur.execute(
             f"""
-            SELECT {_qualified("c")}, w.dir_name
+            SELECT {computer_cols("c")}, w.dir_name
             FROM computers c
             JOIN workspaces w ON w.computer_id = c.computer_id
             WHERE w.workspace_id = %s AND c.{FENCE_NOT_DELETED}
@@ -406,7 +404,6 @@ async def create_computer(
     predates the computers table; a machine minted for a new project is born
     unprovisioned and gets its ref from try_bind_computer_provider_ref."""
     from psycopg.errors import UniqueViolation
-    from psycopg.types.json import Json
 
     name = name or default_computer_name(kind)
 
@@ -794,6 +791,106 @@ async def update_computer_activity(
                    OR last_activity_at < NOW() - INTERVAL '60 seconds')
             """,
             (computer_id,),
+        )
+        return cur.rowcount > 0
+
+
+async def rename_computer(
+    computer_id: str,
+    name: str,
+    *,
+    conn=None,
+) -> Optional[Dict[str, Any]]:
+    """The name has no workspace shadow; nothing but the computer reads it."""
+    async with _computer_cursor(conn) as cur:
+        await cur.execute(
+            f"""
+            UPDATE computers
+            SET name = %s, updated_at = NOW()
+            WHERE computer_id = %s
+              AND {FENCE_NOT_DELETED}
+            RETURNING {_COMPUTER_COLS}
+            """,
+            (name, computer_id),
+        )
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def record_computer_disk(
+    computer_id: str,
+    *,
+    sandbox_id: str,
+    observed_at: datetime,
+    total_bytes: int,
+    used_bytes: int,
+    free_bytes: int,
+    conn=None,
+) -> Optional[Dict[str, Any]]:
+    """Record a reading of ``sandbox_id`` taken at ``observed_at``; None when it lost.
+
+    Readings race across workers and a breakdown's ``du`` can run long after
+    its ``df``, so the newest observation wins, not the last write, and a
+    reading of a sandbox the machine no longer has is dropped. Only a running
+    or stopping machine takes one: a replacement keeps the ref on the old
+    sandbox while it starts, and a reading landing then would undo the clear.
+    Leaves updated_at alone: a reading is an observation, not an edit of the row.
+    """
+    async with _computer_cursor(conn) as cur:
+        await cur.execute(
+            f"""
+            UPDATE computers
+            SET disk_total_bytes = %(total)s,
+                disk_used_bytes = %(used)s,
+                disk_free_bytes = %(free)s,
+                disk_measured_at = %(observed_at)s,
+                disk_sandbox_ref = %(sandbox_id)s
+            WHERE computer_id = %(computer_id)s
+              AND provider_ref = %(sandbox_id)s
+              AND status IN ('running', 'stopping')
+              AND (disk_measured_at IS NULL OR disk_measured_at < %(observed_at)s)
+              AND {FENCE_NOT_DELETED}
+            RETURNING {_COMPUTER_COLS}
+            """,
+            {
+                "total": total_bytes,
+                "used": used_bytes,
+                "free": free_bytes,
+                "observed_at": observed_at,
+                "computer_id": computer_id,
+                "sandbox_id": sandbox_id,
+            },
+        )
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def clear_computer_disk(
+    computer_id: str,
+    *,
+    sandbox_id: str,
+    conn=None,
+) -> bool:
+    """Drop the reading taken on ``sandbox_id``, once that sandbox is destroyed.
+
+    For a replacement that leaves ``provider_ref`` naming the destroyed
+    sandbox until the next start: the ref fence alone would keep serving that
+    sandbox's total and fullness as the machine's. Fenced on the reading's own
+    sandbox, so a reading of any other one is never touched.
+    """
+    async with _computer_cursor(conn) as cur:
+        await cur.execute(
+            """
+            UPDATE computers
+            SET disk_total_bytes = NULL,
+                disk_used_bytes = NULL,
+                disk_free_bytes = NULL,
+                disk_measured_at = NULL,
+                disk_sandbox_ref = NULL
+            WHERE computer_id = %s
+              AND disk_sandbox_ref = %s
+            """,
+            (computer_id, sandbox_id),
         )
         return cur.rowcount > 0
 

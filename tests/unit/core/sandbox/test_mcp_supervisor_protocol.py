@@ -199,7 +199,14 @@ def start_supervisor(monkeypatch):
 
 
 def _stop_serving(supervisor):
-    """Stop over the wire, then close."""
+    """Stop over the wire, then close.
+
+    A daemon that stopped itself (the stale-daemon refusal) drops whatever is
+    still in its accept backlog when it closes, so asking it over the wire
+    would race that close into a dropped connection: close it directly."""
+    if supervisor._stop.is_set():
+        supervisor.close()
+        return
     try:
         client = _Client(supervisor.socket_path)
         try:
@@ -210,7 +217,7 @@ def _stop_serving(supervisor):
         # returns the blocked accept now instead of after its one second poll.
         _Client(supervisor.socket_path).close()
     except OSError:
-        pass  # already stopped: the stale-daemon refusal stops the daemon itself
+        pass  # stopped between the check and the connect
     supervisor.close()
 
 

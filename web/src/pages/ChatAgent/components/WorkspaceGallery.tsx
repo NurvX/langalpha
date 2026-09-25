@@ -7,25 +7,20 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Computer } from '@/types/api';
 import CreateWorkspaceModal from './CreateWorkspaceModal';
-import ComputersDialog from './ComputersDialog';
+import { DiskWarning, useDiskAlertComputer } from './DiskWarning';
 import RenameWorkspaceDialog from './RenameWorkspaceDialog';
 import MorphingPageDots from '../../../components/ui/morphing-page-dots';
 import { useWorkspaces } from '../../../hooks/useWorkspaces';
 import { queryKeys } from '../../../lib/queryKeys';
-import {
-  createWorkspace,
-  getFlashWorkspace,
-  renameWorkspace,
-} from '../utils/api';
+import { getFlashWorkspace, renameWorkspace } from '../utils/api';
 import { useWorkspaceActions } from './workspaceActions';
 import { isEffectivelyPinned } from '../hooks/useNavigationData';
-import {
-  invalidateWorkspaceMembership,
-  pinWorkspaceRow,
-} from '../hooks/workspaceRowActions';
+import { pinWorkspaceRow } from '../hooks/workspaceRowActions';
+import { useCreateWorkspace } from '../hooks/useCreateWorkspace';
 import { clearChatSession } from '../hooks/utils/chatSessionRestore';
 import { useWorkspaceMutation } from '../hooks/useWorkspaceMutation';
 import { useComputers } from '../hooks/useComputers';
+import { openComputersPanel } from '../hooks/computerPanelStore';
 import { GalleryActions } from './workspaceGallery/GalleryActions';
 import { GalleryEmptyState } from './workspaceGallery/GalleryEmptyState';
 import { ReorderList } from './workspaceGallery/ReorderList';
@@ -69,7 +64,6 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isComputersOpen, setIsComputersOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   // Default to the manual ('custom') order so the gallery matches the in-chat
@@ -79,8 +73,9 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
   // remain available via the Sort-by toggle.
   const [sortBy, setSortBy] = useState<'activity' | 'name' | 'custom'>('custom');
   const [isReorderMode, setIsReorderMode] = useState(false);
-  // Rename is the gallery's own dialog (the tree renames inline); change-spec,
-  // always-on, duplicate and delete all come from useWorkspaceActions below.
+  // Rename is the gallery's own dialog (the tree renames inline); duplicate
+  // and delete come from useWorkspaceActions below. Spec and always-on are the
+  // machine's and live in the Computers dialog.
   const [renameTarget, setRenameTarget] = useState<WorkspaceRecord | null>(null);
   const { workspaceId: currentWorkspaceId } = useParams();
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -148,6 +143,10 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     return (wsData?.workspaces || []) as WorkspaceRecord[];
   }, [wsData]);
 
+  // The machine whose disk is worst, if any is past the warning line. One
+  // banner, not one per machine: almost every user has a single computer.
+  const alertComputer = useDiskAlertComputer(computerData?.computers);
+
   // Clear saved chat session so tab-switching returns to workspace gallery
   useEffect(() => {
     clearChatSession();
@@ -176,23 +175,7 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     };
   }, []);
 
-  /**
-   * Handles workspace creation
-   */
-  const handleCreateWorkspace = async (workspaceData: { name: string; description: string }) => {
-    try {
-      const newWorkspace = await createWorkspace(
-        workspaceData.name,
-        workspaceData.description,
-      );
-      invalidateWorkspaceMembership(queryClient);
-      // Return workspace so modal can use workspace_id for file uploads
-      return newWorkspace;
-    } catch (err) {
-      console.error('Error creating workspace:', err);
-      throw err; // Let modal handle the error display
-    }
-  };
+  const createWorkspace = useCreateWorkspace();
 
   /**
    * Pin/unpin from the card menu. The canonical row action owns the
@@ -226,7 +209,7 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     if (ok) setRenameTarget(null);
   };
 
-  // Change-spec / always-on / duplicate / delete — one implementation, shared
+  // Duplicate / delete: one implementation, shared
   // with the nav tree. Only the paging reactions are gallery-specific: a
   // duplicate lands at the top, and a delete that empties the page steps back.
   const wsActions = useWorkspaceActions({
@@ -366,8 +349,7 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
               onSelect={onWorkspaceSelect}
               onTogglePin={handleTogglePin}
               onRenameStart={setRenameTarget}
-              onUpgrade={wsActions.openUpgrade}
-              onToggleAlwaysOn={wsActions.toggleAlwaysOn}
+              onOpenComputer={(computerId) => openComputersPanel({ computerId })}
               onDuplicate={wsActions.openDuplicate}
               onDelete={wsActions.openDelete}
               prefetchThreads={prefetchThreads}
@@ -398,7 +380,7 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
           {hasWorkspaces && (
             <GalleryActions
               onNewWorkspace={() => setIsModalOpen(true)}
-              onOpenComputers={() => setIsComputersOpen(true)}
+              onOpenComputers={() => openComputersPanel()}
             />
           )}
         </div>
@@ -416,10 +398,16 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
             <GalleryActions
               stacked
               onNewWorkspace={() => setIsModalOpen(true)}
-              onOpenComputers={() => setIsComputersOpen(true)}
+              onOpenComputers={() => openComputersPanel()}
             />
           )}
         </div>
+
+        {alertComputer && !isReorderMode && (
+          <div className="flex-shrink-0 px-1 pb-4 enter-fade-up">
+            <DiskWarning computer={alertComputer} />
+          </div>
+        )}
 
         {hasWorkspaces && !isReorderMode && (
         <div className="flex-shrink-0 flex flex-col gap-4 pb-4 md:pb-6 px-1 enter-fade-up enter-fade-up-d1">
@@ -518,13 +506,9 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
       <CreateWorkspaceModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        onCreate={handleCreateWorkspace}
-        onComplete={(wsId) => onWorkspaceSelect(wsId)}
+        onCreate={createWorkspace}
+        onComplete={(ws) => onWorkspaceSelect(ws.workspace_id, ws.name)}
       />
-
-      {/* Computers: the machines the cards live on. It reads its own list, so
-          the count it shows is the machine's, not this page's. */}
-      <ComputersDialog open={isComputersOpen} onOpenChange={setIsComputersOpen} />
 
       {/* Rename Dialog — the gallery's own flow; the rest live in wsActions.dialogs */}
       <RenameWorkspaceDialog
@@ -534,7 +518,8 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
         busy={renameTarget ? renameMutation.busyIds.has(renameTarget.workspace_id) : false}
       />
 
-      {/* Change-spec / always-on / duplicate / delete confirmations */}
+      {/* Duplicate / delete confirmations. The Computers dialog mounts at the
+          page root (ComputersDialogHost). */}
       {wsActions.dialogs}
     </div>
   );

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import i18n from '@/i18n';
-import { createFormatter, createDateFormatter, compactNumber, compactNumberFixed2, fixed2, signedFixed2 } from '@/lib/format';
+import { createFormatter, createDateFormatter, compactNumber, compactNumberFixed2, fixed2, formatBytes, signedFixed2 } from '@/lib/format';
 
 describe('createFormatter', () => {
   beforeEach(() => {
@@ -119,5 +119,36 @@ describe('safe fallback for invalid locales', () => {
     const fmt = createDateFormatter({ year: 'numeric', month: 'short' });
     expect(() => fmt(new Date('2026-04-25T00:00:00Z'))).not.toThrow();
     Object.defineProperty(i18n, 'language', { value: original, configurable: true });
+  });
+});
+
+describe('formatBytes', () => {
+  beforeEach(() => {
+    i18n.changeLanguage('en-US');
+  });
+
+  it('keeps whole bytes and one decimal under ten', () => {
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(512)).toBe('512 B');
+    expect(formatBytes(1536)).toBe('1.5 KB');
+    expect(formatBytes(40960)).toBe('40 KB');
+    expect(formatBytes(6_549_825_126)).toBe('6.1 GB');
+    expect(formatBytes(250 * 1024 ** 3)).toBe('250 GB');
+    expect(formatBytes(2 * 1024 ** 4)).toBe('2 TB');
+  });
+
+  it('carries a value that would round up to 1024 into the next unit', () => {
+    expect(formatBytes(1024 * 1024 - 10)).toBe('1 MB');
+  });
+
+  it('reads a negative or non-finite count as zero', () => {
+    expect(formatBytes(-5)).toBe('0 B');
+    expect(formatBytes(Number.NaN)).toBe('0 B');
+  });
+
+  it('formats the number in the active locale', () => {
+    i18n.changeLanguage('de-DE');
+    expect(formatBytes(1536)).toBe('1,5 KB');
+    expect(formatBytes(2000 * 1024 ** 4)).toBe('2.000 TB');
   });
 });

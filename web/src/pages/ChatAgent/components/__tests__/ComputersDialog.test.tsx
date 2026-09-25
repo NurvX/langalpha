@@ -146,6 +146,23 @@ describe('ComputersDialog', () => {
     expect(mockStart).toHaveBeenCalledWith(SECOND_ID, { lazy: true });
   });
 
+  it.each([
+    ['starting', true],
+    ['stopping', true],
+    ['running', false],
+  ])('holds the always-on switch while a machine is %s', async (status, disabled) => {
+    mockGetComputers.mockResolvedValue({
+      ...LIVE_LIST,
+      computers: [{ ...LIVE_LIST.computers[0], status }],
+      total: 1,
+    });
+    open();
+
+    const toggle = await screen.findByRole('switch', { name: 'Always-on' });
+    if (disabled) expect(toggle).toBeDisabled();
+    else expect(toggle).toBeEnabled();
+  });
+
   it('does not offer additional-computer creation', async () => {
     open();
     expect(await screen.findByText('Alpha Research')).toBeInTheDocument();

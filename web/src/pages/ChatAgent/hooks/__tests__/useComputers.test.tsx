@@ -271,7 +271,10 @@ describe('useComputerStatusFanout', () => {
       expect(computers?.computers[0].status).toBe('running');
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(invalidate).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: queryKeys.computers.lists() });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: queryKeys.workspaces.lists() });
+    // Reaching running re-reads a breakdown taken while the machine was down.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.computers.storage(COMPUTER_ID) });
   });
 
   it('aborts its streams on unmount', async () => {

@@ -92,6 +92,10 @@ class TurnContextMiddleware(AgentMiddleware):
         surface_rules: Delivery rules the posting client wrote for its own
             surface. They stand in for langalpha's built-in line, because the
             client that renders the reply is the authority on what it accepts.
+        disk_free_mb: Free space on the computer's shared disk, passed only
+            when it is low enough that the agent should work around it.
+        disk_known: Whether a current reading stands behind ``disk_free_mb``
+            being None, as opposed to no reading at all.
         is_subagent: Whether this stack belongs to a subagent.
     """
 
@@ -105,6 +109,8 @@ class TurnContextMiddleware(AgentMiddleware):
         platform: str | None = None,
         origin: str | None = None,
         surface_rules: str | None = None,
+        disk_free_mb: int | None = None,
+        disk_known: bool = False,
         is_subagent: bool = False,
     ) -> None:
         super().__init__()
@@ -115,6 +121,8 @@ class TurnContextMiddleware(AgentMiddleware):
         self._platform = platform
         self._origin = origin
         self._surface_rules = surface_rules
+        self._disk_free_mb = disk_free_mb
+        self._disk_known = disk_known
         self._is_subagent = is_subagent
         # Set once the turn-open hook has run on this instance; see
         # ``abefore_model``.
@@ -201,11 +209,29 @@ class TurnContextMiddleware(AgentMiddleware):
             # the model was told.
             if key is not None:
                 provenance["rules_key"] = key
+            # The low-disk line is a present-tense instruction in a row nothing
+            # rewrites, so the first turn a reading shows it no longer holds
+            # takes it back. A turn without a reading records nothing, leaving
+            # the last word to the rows that had one. A subagent never carries
+            # the line.
+            disk_recovered = False
+            if not self._is_subagent:
+                if self._disk_free_mb is not None:
+                    provenance["disk_low"] = True
+                elif self._disk_known:
+                    provenance["disk_low"] = False
+                    disk_recovered = _last_disk_low(state)
             row = DurableUpdate(
                 kind=TURN_ROW_KIND,
                 schema_version=TURN_SCHEMA_VERSION,
                 text=self._render(
-                    now, surface, rules, zone, market, _last_turn_market(state)
+                    now,
+                    surface,
+                    rules,
+                    zone,
+                    market,
+                    _last_turn_market(state),
+                    disk_recovered=disk_recovered,
                 ),
                 provenance=provenance,
                 created_at=now,
@@ -281,6 +307,8 @@ class TurnContextMiddleware(AgentMiddleware):
         zone: str,
         market: str | None,
         last_market: LastSession | None,
+        *,
+        disk_recovered: bool = False,
     ) -> str:
         from ptc_agent.agent.prompts import format_current_time
 
@@ -302,6 +330,8 @@ class TurnContextMiddleware(AgentMiddleware):
             "origin": self._origin,
             "is_subagent": self._is_subagent,
             "surface_rules": surface_rules,
+            "disk_free_mb": self._disk_free_mb,
+            "disk_recovered": disk_recovered,
         }
         return render_template("envelope/turn.md.j2", **fields)
 
@@ -478,3 +508,23 @@ def _last_rules_key(state: Any) -> str | None:
         if "rules_key" in update.provenance:
             return update.provenance["rules_key"]
     return None
+
+
+def _last_disk_low(state: Any) -> bool:
+    """Whether the last row in view that stated the disk said it was low.
+
+    Rows behind the compaction cutoff do not count: a low-disk line the model
+    can no longer read needs no taking back.
+    """
+    messages = state_get(state, "messages")
+    if not isinstance(messages, (list, tuple)):
+        return False
+    event = state_get(state, "_summarization_event")
+    cutoff = resolve_cutoff_index(messages, event) if isinstance(event, dict) else 0
+    for message in reversed(list(messages)[cutoff:]):
+        update = runtime_update_from_message(message)
+        if update is None or update.kind != TURN_ROW_KIND:
+            continue
+        if "disk_low" in update.provenance:
+            return update.provenance["disk_low"] is True
+    return False

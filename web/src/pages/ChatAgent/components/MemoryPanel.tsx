@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, useMemo } from 'react';
 import { ArrowLeft, BookMarked, FileText, RefreshCw, X } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
+import { formatBytes } from '@/lib/format';
 import { useTranslation } from 'react-i18next';
 import {
   useUserMemory,
@@ -27,12 +28,6 @@ interface MemoryPanelProps {
    * (e.g. `feedback_visualization_preference.md`) against the current
    * memory tier's dir before calling. */
   onOpenFile?: OpenFileHandler;
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function formatTime(iso: string | null): string {

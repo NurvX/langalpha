@@ -1,9 +1,9 @@
 """What a turn knows about itself, carried whole from the request to the stack.
 
-These four values are read off the request that opened the turn and are used in
+These values are read when the turn opens, mostly off its request, and are used in
 exactly one place, the turn anchor row. Threading them one by one made every
 builder between the handler and the middleware restate a list it has no other
-interest in, and adding a fifth meant editing five signatures.
+interest in, and adding one meant editing every signature between them.
 """
 
 from __future__ import annotations
@@ -25,3 +25,9 @@ class TurnContext:
     platform: str | None = None
     origin: str | None = None
     surface_rules: str | None = None
+    # Set only once the shared disk is low enough to change what the agent
+    # should do; None states nothing. A subagent's stack never carries it.
+    disk_free_mb: int | None = None
+    # Whether a current reading backs disk_free_mb being None; only then may a
+    # turn take back an earlier low-disk line.
+    disk_known: bool = False

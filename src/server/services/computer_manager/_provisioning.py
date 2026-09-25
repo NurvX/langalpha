@@ -30,7 +30,7 @@ from src.server.database.computer import (
 from src.server.database.workspace import (
     complete_workspace_folder_cleanup,
     defer_workspace_folder_cleanup,
-    get_live_workspace_ids_for_computer,
+    flag_sibling_restores_pending,
     get_workspace_dir_names_for_computer,
     get_workspace as db_get_workspace,
     get_workspace_dir_name as db_get_workspace_dir_name,
@@ -44,7 +44,7 @@ from src.server.services.persistence.file import (
     RestoreGuardUnavailable,
     RestoreIdentityLost,
 )
-from src.server.services.persistence.sync_result import BackupIncomplete, UnsavedFile
+from src.server.services.persistence.sync_result import BackupIncomplete
 from src.server.services.workspace_layout import (
     layout_from_binding,
     WorkspaceLayoutUnavailable,
@@ -590,6 +590,18 @@ class ProvisioningMixin:
 
         # The machine's ref is the identity the bind CAS fences on.
         previous_sandbox_id = binding.provider_ref
+        # Only this project is restored below; the siblings rejoin when next
+        # opened. Until then their prune authority must not carry over from
+        # the sandbox being replaced, or a sweep of a folder that exists but
+        # was never restored prunes every row it did not find.
+        try:
+            await flag_sibling_restores_pending(
+                binding.computer_id,
+                except_workspace_id=workspace_id,
+                expected_provider_ref=previous_sandbox_id,
+            )
+        except Exception as e:
+            raise RestoreGuardUnavailable(workspace_id) from e
 
         async def _post_init(session: Session) -> None:
             if session.sandbox:
@@ -611,7 +623,15 @@ class ProvisioningMixin:
             core_config=core_config,
             expected_previous_sandbox_id=previous_sandbox_id,
         )
-        await update_workspace_activity(workspace_id)
+        # The new sandbox is bound: past here nothing may fail the recover, or
+        # a spec change settles failed and reverts the tier over a machine
+        # already built at the target size.
+        try:
+            await update_workspace_activity(workspace_id)
+        except Exception as e:
+            logger.warning(
+                f"Recovered workspace {workspace_id} but could not stamp activity: {e}"
+            )
         return session
 
     async def backup_project_files(
@@ -622,6 +642,7 @@ class ProvisioningMixin:
         strict: bool = False,
         expected_sandbox_id: str | None = None,
         session: Session | None = None,
+        layout: WorkspaceLayout | None = None,
     ) -> bool:
         """Always fence backups: sync_to_db overwrites the durable file copy.
 
@@ -631,7 +652,7 @@ class ProvisioningMixin:
 
         A superseded session would destroy the good copy and miss live files.
         strict=True must abort destructive callers on incomplete backup;
-        expected_sandbox_id avoids a read when the caller already holds the row.
+        expected_sandbox_id and layout avoid reads when the caller already holds them.
         The machine is resolved here for a caller that holds only the project
         (the post-turn mirror), because the session and the fence are the
         machine's: requiring it of every caller made that one fail on its
@@ -675,7 +696,7 @@ class ProvisioningMixin:
             result = await FilePersistenceService.sync_to_db(
                 workspace_id,
                 session.sandbox,
-                layout=await self._project_layout(
+                layout=layout or await self._project_layout(
                     workspace_id, computer_id,
                     root=binding.root_dir if binding is not None else None,
                 ),
@@ -718,76 +739,6 @@ class ProvisioningMixin:
 
         logger.debug(f"File backup completed for {workspace_id}: {result}")
         return True
-
-    async def _backup_machine_files_to_db(
-        self,
-        computer_id: str,
-        *,
-        workspace_id: Optional[str] = None,
-        expected_sandbox_id: Optional[str] = None,
-        strict: bool = False,
-        session: Optional[Session] = None,
-    ) -> int:
-        """Mirror every project on the machine, since one runtime ends for all of them.
-
-        Each project is fenced by the machine's durable ref rather than by its own
-        shadow column: the session belongs to the computer, so a project row that
-        lags behind it must not be able to skip its own last mirror. One project's
-        failure never skips its siblings, and the caller's contract is unchanged
-        per project - best effort logs, strict refuses the teardown. Returns
-        how many projects were actually mirrored, not how many were asked."""
-        ordered: list[str] = [workspace_id] if workspace_id else []
-        failures: list[str] = []
-        try:
-            siblings = await get_live_workspace_ids_for_computer(computer_id)
-        except Exception as e:
-            # Losing the sibling list means the unmirrored set is unknown, so a
-            # strict caller must not read "no failures" as "everything is saved".
-            logger.warning(
-                f"Could not list the projects on computer {computer_id}: {e}; "
-                f"backing up {workspace_id} alone"
-            )
-            siblings = []
-            failures.append(f"sibling list unavailable: {type(e).__name__}: {e}")
-        ordered += [ws for ws in siblings if ws != workspace_id]
-
-        mirrored = 0
-        unsaved: list[UnsavedFile] = []
-        unnamed_failure = bool(failures)
-        for ws_id in ordered:
-            try:
-                if await self.backup_project_files(
-                    ws_id,
-                    computer_id=computer_id,
-                    strict=strict,
-                    expected_sandbox_id=expected_sandbox_id,
-                    session=session,
-                ):
-                    mirrored += 1
-            except Exception as e:
-                logger.error(
-                    f"File backup failed for {ws_id} on computer {computer_id}: "
-                    f"{type(e).__name__}: {e}"
-                )
-                failures.append(f"{ws_id}: {type(e).__name__}: {e}")
-                named = e.unsaved if isinstance(e, BackupIncomplete) else []
-                unsaved.extend(named)
-                # A project that failed outright has no file list, and naming
-                # only the others' files would read as the whole problem.
-                unnamed_failure = unnamed_failure or not named
-
-        if strict and failures:
-            raise BackupIncomplete(
-                f"File backup left {len(failures)} of {len(ordered)} project(s) "
-                f"on computer {computer_id} unmirrored: " + "; ".join(failures),
-                [] if unnamed_failure else unsaved,
-            )
-        if mirrored < len(ordered):
-            logger.warning(
-                f"File backup mirrored {mirrored} of {len(ordered)} project(s) "
-                f"on computer {computer_id}; the rest keep their last mirror"
-            )
-        return mirrored
 
     async def _detached_sandbox_teardown(
         self,

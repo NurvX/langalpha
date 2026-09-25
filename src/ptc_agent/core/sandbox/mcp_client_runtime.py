@@ -72,6 +72,10 @@ _STDIO_CHUNK_CHARS = 65536
 # first). The tail's deque bounds line COUNT; this bounds line size, so one
 # newline-free blob can't make the tail itself unbounded.
 _STDERR_LINE_MAX_BYTES = 4096
+# How long a closed connection waits for the stderr drain to finish reading a
+# dead server's crash output. Bounded because a grandchild (npx -> node) can
+# hold the pipe open past the kill.
+_STDERR_DRAIN_JOIN_S = 2.0
 # Server-initiated requests answered with -32601 per reply read. The refusal
 # write is the one blocking stdin operation in the reader: a server that floods
 # requests while never draining stdin would wedge the writer against a full
@@ -830,6 +834,12 @@ def _read_reply(
         if line is None:  # EOF sentinel from the pump thread
             _kill_server(server_name, proc)
             error_msg = f"MCP server {server_name} closed connection"
+            # stdout EOF and the stderr drain race: a server that wrote its
+            # crash and exited can reach EOF here before the drain thread has
+            # read the cause. The process is dead, so stderr ends promptly.
+            drain = getattr(proc, "mcp_stderr_drain", None)
+            if drain is not None:
+                drain.join(timeout=_STDERR_DRAIN_JOIN_S)
             stderr_tail = "\n".join(getattr(proc, "mcp_stderr_tail", ()))
             if "No module named 'mcp." in stderr_tail:
                 error_msg += (
@@ -917,7 +927,9 @@ def _spawn_mcp_process(server_name: str, discovery: bool = False) -> subprocess.
         except (OSError, ValueError):
             pass
 
-    threading.Thread(target=_drain_stderr, daemon=True).start()
+    drain = threading.Thread(target=_drain_stderr, daemon=True)
+    drain.start()
+    proc.mcp_stderr_drain = drain
     proc.mcp_stderr_tail = err_tail
 
     # Pump stdout lines onto a queue: readers wait on the queue, not

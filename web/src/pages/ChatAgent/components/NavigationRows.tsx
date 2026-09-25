@@ -565,8 +565,6 @@ function WorkspaceTreeRowImpl({
                           workspace={ws}
                           onTogglePin={onPinWorkspace ? () => onPinWorkspace(wsId, !isPinned) : undefined}
                           onRename={rename.enabled ? () => rename.onStart(wsId, ws.name || '') : undefined}
-                          onUpgrade={wsActions.openUpgrade}
-                          onToggleAlwaysOn={wsActions.toggleAlwaysOn}
                           onDuplicate={wsActions.openDuplicate}
                           onDelete={wsActions.openDelete}
                         />

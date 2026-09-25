@@ -64,7 +64,7 @@ describe('CreateWorkspaceModal', () => {
     await user.type(screen.getByPlaceholderText(/name/i), 'WP16 UI probe');
     await user.click(screen.getByRole('button', { name: /^create$/i }));
 
-    await waitFor(() => expect(onComplete).toHaveBeenCalledWith(LIVE_CREATED.workspace_id));
+    await waitFor(() => expect(onComplete).toHaveBeenCalledWith(LIVE_CREATED));
     expect(onClose).toHaveBeenCalled();
     expect(startWorkspace).not.toHaveBeenCalled();
     // No progress phase at all: nothing was provisioned and nothing uploaded.
@@ -179,6 +179,6 @@ it('blocks backdrop, close and cancel while creation is pending', async () => {
   await user.click(close);
   expect(onClose).not.toHaveBeenCalled();
   finish(LIVE_CREATED);
-  await waitFor(() => expect(onComplete).toHaveBeenCalledWith(LIVE_CREATED.workspace_id));
+  await waitFor(() => expect(onComplete).toHaveBeenCalledWith(LIVE_CREATED));
   expect(onClose).toHaveBeenCalledOnce();
 });

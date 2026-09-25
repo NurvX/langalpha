@@ -108,7 +108,12 @@ def _make_workspace_manager(
     return wm
 
 
-async def _run_to_sentinel(request, workspace_manager):
+async def _run_to_sentinel(request, workspace_manager, stamps=None):
+    """``stamps``, when given, gets each event's delay from the first pull.
+
+    Timing the events rather than the whole call keeps the lazy app import
+    and the error-path teardown after the sentinel out of the measurement:
+    both depend on state earlier tests leave behind, not on this path."""
     from src.server.handlers.chat.ptc_run import astream_ptc_workflow
 
     sentinel_registry_store = MagicMock()
@@ -156,9 +161,13 @@ async def _run_to_sentinel(request, workspace_manager):
         )
 
         collected: list[str] = []
+        loop = asyncio.get_running_loop()
+        started = loop.time()
         try:
             async for event in gen:
                 collected.append(event)
+                if stamps is not None:
+                    stamps.append(loop.time() - started)
         except Exception:
             pass
         finally:
@@ -252,11 +261,11 @@ async def test_warm_sibling_acquisition_does_not_wait_for_state_callback():
         session_delay_s=0.001,
     )
 
-    started = asyncio.get_running_loop().time()
-    lines = await _run_to_sentinel(req, wm)
-    elapsed = asyncio.get_running_loop().time() - started
+    stamps: list[float] = []
+    lines = await _run_to_sentinel(req, wm, stamps)
 
-    assert elapsed < 1.0
+    # Ready arrives on the session, not after the 5 s state-callback wait.
+    assert stamps[-1] < 1.0
     assert _parse_ws_status_events(lines) == [
         {"status": "starting", "workspace_id": "ws-1"},
         {"status": "ready", "workspace_id": "ws-1"},

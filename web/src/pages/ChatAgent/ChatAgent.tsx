@@ -16,6 +16,7 @@ import { warmWorkspace } from './utils/warmWorkspace';
 import { isValidUuid } from './utils/uuid';
 import { shouldLeaveThreadRoute } from './utils/threadRouteGuard';
 import ChatView from './components/ChatView';
+import ComputersDialogHost from './components/ComputersDialogHost';
 import './ChatAgent.css';
 
 // View depth for direction-aware transitions: gallery(0) → threads(1) → chat(2)
@@ -406,6 +407,7 @@ function ChatAgent(): React.ReactElement | null {
         {!threadId && galleryContent}
         {chatViews}
         {accessDeniedContent}
+        <ComputersDialogHost />
       </div>
     );
   }
@@ -437,6 +439,9 @@ function ChatAgent(): React.ReactElement | null {
       {/* Cached ChatViews — visibility toggled, never unmounted on thread switch */}
       {chatViews}
       {accessDeniedContent}
+      {/* Computer management and change-spec, opened from the gallery, a
+          card's machine line, or a disk warning in any chat. */}
+      <ComputersDialogHost />
     </div>
   );
 }

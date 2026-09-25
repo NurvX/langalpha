@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 
 import { renderWithProviders } from '@/test/utils';
 import type { Workspace } from '@/types/api';
@@ -159,5 +159,33 @@ describe('WorkspaceCard, machine line', () => {
     renderWithProviders(<WorkspaceGallery onWorkspaceSelect={vi.fn()} />);
     const buttons = await screen.findAllByRole('button', { name: /computers/i });
     expect(buttons.length).toBeGreaterThan(0);
+  });
+
+  it('hands the banner to the next full machine when one is dismissed', async () => {
+    // Two machines equally low: dismissing the one shown must not silence the other.
+    const disk = {
+      used_bytes: 9_000_000_000,
+      total_bytes: 10_000_000_000,
+      free_bytes: 1_000_000_000,
+      measured_at: '2026-09-16T02:23:43.210835Z',
+      level: 'warning',
+    };
+    const [machine] = computerList('running').computers;
+    mockGetComputers.mockResolvedValue({
+      computers: [
+        { ...machine, computer_id: 'disk-a', name: 'Disk A', disk },
+        { ...machine, computer_id: 'disk-b', name: 'Disk B', is_primary: false, disk },
+      ],
+      total: 2,
+    });
+    renderWithProviders(<WorkspaceGallery onWorkspaceSelect={vi.fn()} />);
+
+    expect(await screen.findByText('Disk A is running low on disk space')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+    expect(await screen.findByText('Disk B is running low on disk space')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+    expect(screen.queryByTestId('disk-warning')).not.toBeInTheDocument();
   });
 });

@@ -6,7 +6,9 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import type { Computer } from '@/types/api';
 
 import { ComputerStatusIndicator } from '../computerStatusUi';
+import { diskLevelColor } from '../computerDiskUi';
 import { normalizeTier, tierLabel } from '../tierUi';
+import { effectiveTier } from '../specChangeUi';
 import { WorkspaceMenuItems } from '../workspaceActions';
 import { WORKSPACE_CARD_HEIGHT } from './cardMetrics';
 import type { WorkspaceRecord } from './types';
@@ -15,14 +17,12 @@ interface CardMenuProps {
   workspace: WorkspaceRecord;
   onTogglePin: (workspace: WorkspaceRecord) => void;
   onRename: (workspace: WorkspaceRecord) => void;
-  onUpgrade: (workspace: WorkspaceRecord) => void;
-  onToggleAlwaysOn: (workspace: WorkspaceRecord) => void;
   onDuplicate: (workspace: WorkspaceRecord) => void;
   onDelete: (workspace: WorkspaceRecord) => void;
 }
 
-/** Card menu dropdown (Pin / Rename / Spec / Always-on / Duplicate / Delete). */
-function CardMenu({ workspace, onTogglePin, onRename, onUpgrade, onToggleAlwaysOn, onDuplicate, onDelete }: CardMenuProps) {
+/** Card menu dropdown (Pin / Rename / Duplicate / Delete). */
+function CardMenu({ workspace, onTogglePin, onRename, onDuplicate, onDelete }: CardMenuProps) {
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
@@ -39,8 +39,6 @@ function CardMenu({ workspace, onTogglePin, onRename, onUpgrade, onToggleAlwaysO
           workspace={workspace}
           onTogglePin={onTogglePin}
           onRename={onRename}
-          onUpgrade={onUpgrade}
-          onToggleAlwaysOn={onToggleAlwaysOn}
           onDuplicate={onDuplicate}
           onDelete={onDelete}
         />
@@ -56,8 +54,8 @@ interface WorkspaceCardProps {
   onSelect: (wsId: string, name?: string, status?: string) => void;
   onTogglePin: (workspace: WorkspaceRecord) => void;
   onRenameStart: (workspace: WorkspaceRecord) => void;
-  onUpgrade: (workspace: WorkspaceRecord) => void;
-  onToggleAlwaysOn: (workspace: WorkspaceRecord) => void;
+  /** Open the Computers dialog on this card's machine. */
+  onOpenComputer?: (computerId: string) => void;
   onDuplicate: (workspace: WorkspaceRecord) => void;
   onDelete: (workspace: WorkspaceRecord) => void;
   prefetchThreads?: (wsId: string) => void;
@@ -65,14 +63,18 @@ interface WorkspaceCardProps {
 }
 
 /** Workspace card for the normal gallery grid (no DnD). */
-export function WorkspaceCard({ workspace, computer, onSelect, onTogglePin, onRenameStart, onUpgrade, onToggleAlwaysOn, onDuplicate, onDelete, prefetchThreads, index }: WorkspaceCardProps) {
+export function WorkspaceCard({ workspace, computer, onSelect, onTogglePin, onRenameStart, onOpenComputer, onDuplicate, onDelete, prefetchThreads, index }: WorkspaceCardProps) {
   const { t, i18n } = useTranslation();
   const isMobile = useIsMobile();
   const isFlash = workspace.status === 'flash';
 
-  const tier = normalizeTier(workspace.resource_tier);
+  // Tier and always-on are the machine's; the workspace row's copies are the
+  // fallback for a row whose machine the list does not name.
+  const tier = computer ? effectiveTier(computer) : normalizeTier(workspace.resource_tier);
   const showTierBadge = !isFlash && tier !== 'standard';
-  const showAlwaysOn = !isFlash && workspace.is_always_on === true;
+  const showAlwaysOn = !isFlash && (computer?.is_always_on ?? workspace.is_always_on) === true;
+  const diskLevel = computer?.disk?.level;
+  const showDiskDot = !isFlash && !!diskLevel && diskLevel !== 'healthy';
   // Several workspaces share one machine, so the state worth showing is the
   // machine's. The workspace row mirrors it, and is the only source for a
   // workspace that names no computer. The folder is the card title spelled as
@@ -127,13 +129,35 @@ export function WorkspaceCard({ workspace, computer, onSelect, onTogglePin, onRe
               {workspace.description || ''}
             </div>
             {showMachine && (
-              <div className="text-xs flex items-center gap-1.5 min-w-0" style={{ color: 'var(--color-text-tertiary)' }}>
+              <button
+                type="button"
+                className="self-start max-w-full text-xs flex items-center gap-1.5 min-w-0 rounded -mx-1 px-1 hover:bg-[var(--color-bg-hover)]"
+                style={{ color: 'var(--color-text-tertiary)' }}
+                title={t('computer.manageComputer', 'Manage {{name}}', { name: machineName })}
+                onClick={(e) => {
+                  // The card itself opens the workspace; this line is the machine.
+                  e.stopPropagation();
+                  if (computer) onOpenComputer?.(computer.computer_id);
+                }}
+              >
                 <Server className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
-                <span className="truncate" title={t('computer.onComputer', { name: machineName })}>
-                  {machineName}
-                </span>
+                <span className="truncate">{machineName}</span>
                 <ComputerStatusIndicator status={machineStatus} glyphSize={10} className="flex-shrink-0" />
-              </div>
+                {showDiskDot && (
+                  <span
+                    className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                    style={{ backgroundColor: diskLevelColor(diskLevel) }}
+                    role="img"
+                    aria-label={
+                      diskLevel === 'critical'
+                        ? t('computer.disk.criticalTitle', '{{name}} is almost out of disk space', { name: machineName })
+                        : diskLevel === 'warning'
+                          ? t('computer.disk.warningTitle', '{{name}} is running low on disk space', { name: machineName })
+                          : t('computer.disk.lowTitle', 'Disk is getting full')
+                    }
+                  />
+                )}
+              </button>
             )}
             <div className="text-xs mt-auto pt-3 flex items-center justify-between gap-2" style={{ color: 'var(--color-text-tertiary)' }}>
               <span className="truncate">
@@ -174,8 +198,6 @@ export function WorkspaceCard({ workspace, computer, onSelect, onTogglePin, onRe
               workspace={workspace}
               onTogglePin={onTogglePin}
               onRename={onRenameStart}
-              onUpgrade={onUpgrade}
-              onToggleAlwaysOn={onToggleAlwaysOn}
               onDuplicate={onDuplicate}
               onDelete={onDelete}
             />

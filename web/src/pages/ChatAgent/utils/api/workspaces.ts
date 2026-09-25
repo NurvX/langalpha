@@ -2,7 +2,7 @@
  * Workspace management endpoints.
  */
 import { api } from '@/api/client';
-import type { ResourceTier, Workspace, WorkspaceQuota, WorkspacesResponse } from '@/types/api';
+import type { Workspace, WorkspaceQuota, WorkspacesResponse } from '@/types/api';
 import { streamStatusEvents } from './statusStream';
 
 // The shared axios instance sets no global timeout. Workspace-management ops
@@ -20,8 +20,8 @@ export async function getWorkspaces(limit: number = 20, offset: number = 0, sort
   return data;
 }
 
-export async function createWorkspace(name: string, description: string = '', config: Record<string, unknown> = {}) {
-  const { data } = await api.post('/api/v1/workspaces', { name, description, config });
+export async function createWorkspace(name: string, description: string = '', config: Record<string, unknown> = {}): Promise<Workspace> {
+  const { data } = await api.post<Workspace>('/api/v1/workspaces', { name, description, config });
   return data;
 }
 
@@ -66,32 +66,6 @@ export async function reorderWorkspaces(items: Array<{ workspace_id: string; sor
 export async function renameWorkspace(workspaceId: string, name: string) {
   if (!workspaceId) throw new Error('Workspace ID is required');
   const { data } = await api.put(`/api/v1/workspaces/${workspaceId}`, { name }, {
-    timeout: WORKSPACE_MUTATION_TIMEOUT_MS,
-  });
-  return data;
-}
-
-/**
- * Change a workspace's sandbox resource tier (standard / performance / max).
- * In platform mode the backend gates elevated tiers: 403 (not on plan) or
- * 429 (workspace count limit reached). OSS mode is ungated.
- */
-export async function setWorkspaceSpec(workspaceId: string, tier: ResourceTier) {
-  if (!workspaceId) throw new Error('Workspace ID is required');
-  const { data } = await api.post(`/api/v1/workspaces/${workspaceId}/spec`, { tier }, {
-    timeout: WORKSPACE_MUTATION_TIMEOUT_MS,
-  });
-  return data;
-}
-
-/**
- * Toggle always-on (keep the sandbox running, disable idle auto-stop).
- * In platform mode enabling is gated (403 not on plan / 429 limit reached);
- * disabling is always allowed. OSS mode is ungated.
- */
-export async function setWorkspaceAlwaysOn(workspaceId: string, enabled: boolean) {
-  if (!workspaceId) throw new Error('Workspace ID is required');
-  const { data } = await api.post(`/api/v1/workspaces/${workspaceId}/always-on`, { enabled }, {
     timeout: WORKSPACE_MUTATION_TIMEOUT_MS,
   });
   return data;

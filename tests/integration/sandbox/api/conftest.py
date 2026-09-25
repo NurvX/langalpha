@@ -171,7 +171,9 @@ async def computers_client():
     manager.start_computer = AsyncMock(return_value=_make_computer())
     manager.stop_computer = AsyncMock(return_value=_make_computer("stopped"))
     manager.archive_computer = AsyncMock(return_value=_make_computer("stopped"))
-    manager.set_computer_spec = AsyncMock(return_value=_make_computer())
+    # The spec route answers 202 and runs the change later; a same-tier request
+    # is the synchronous 200 shortcut the precheck reports.
+    manager.precheck_computer_spec = AsyncMock(return_value=True)
     manager.set_computer_always_on = AsyncMock(return_value=_make_computer())
 
     with (

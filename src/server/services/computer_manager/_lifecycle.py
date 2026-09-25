@@ -1411,6 +1411,13 @@ class SessionLifecycleMixin:
                 (time.monotonic() - backup_started) * 1000,
             )
 
+            # The last chance to read the disk before it is unreachable, so the
+            # stopped machine still shows how full it is.
+            if durable_sandbox_id:
+                await self.refresh_computer_disk(
+                    computer_id, sandbox_id=durable_sandbox_id
+                )
+
             session = self._cached_session(computer_id)
             attached_sandbox_id = self._session_sandbox_id(session)
             if session is not None and attached_sandbox_id != durable_sandbox_id:

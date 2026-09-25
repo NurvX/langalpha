@@ -6,7 +6,7 @@ import {
   TagBadge,
 } from '@/components/mcp/McpPrimitives';
 import { useSkillContent } from '@/hooks/useSkills';
-import { createDateFormatter } from '@/lib/format';
+import { createDateFormatter, formatBytes } from '@/lib/format';
 import type { SkillInfo } from '@/pages/ChatAgent/utils/api';
 import {
   DetailField,
@@ -23,11 +23,6 @@ import { PluginOriginBadge, PluginSuppressedBadge } from './PluginBadges';
  */
 
 const formatDate = createDateFormatter({ dateStyle: 'medium' });
-
-function formatSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
 
 export function SkillDetail({
   skill,
@@ -143,7 +138,7 @@ export function SkillDetail({
           <DetailField label={t('plugins.detail.origin')}>{originLabel}</DetailField>
           {skill.size_bytes > 0 && (
             <DetailField label={t('plugins.detail.size')}>
-              {formatSize(skill.size_bytes)}
+              {formatBytes(skill.size_bytes)}
             </DetailField>
           )}
           {skill.updated_at && (

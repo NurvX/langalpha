@@ -1,21 +1,30 @@
 """What one sync pass saved, and every file it could not.
 
 A caller acts differently per reason, which is why failures carry one rather
-than being counted: ``too_large`` is refused the same way by every later sync
-on this deployment, while the rest can save on the next pass. A caller about
-to destroy the sandbox treats all of them alike, since each is a file whose
-only copy is still in it.
+than being counted: ``too_large`` and ``path_too_long`` are refused the same
+way by every later sync on this deployment, while the rest can save on the
+next pass. A caller about to destroy the sandbox treats all of them alike,
+since each is a file whose only copy is still in it.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-UnsavedReason = Literal["too_large", "unreadable", "changed", "failed"]
+if TYPE_CHECKING:
+    from src.server.services.persistence.transfer import ScanMark
+
+UnsavedReason = Literal[
+    "too_large", "path_too_long", "unreadable", "changed", "failed"
+]
+
+#: Reasons no later sync on this deployment can get past.
+_PERMANENT: frozenset[UnsavedReason] = frozenset({"too_large", "path_too_long"})
 
 _REASON_PHRASES: dict[UnsavedReason, str] = {
     "too_large": "too large for this deployment's transfer path",
+    "path_too_long": "path too long to record",
     "unreadable": "unreadable in the sandbox",
     "changed": "changed while being saved",
     "failed": "failed to save",
@@ -41,17 +50,23 @@ class SyncResult:
     #: The project's folder is absent from this sandbox, so the pass mirrored
     #: nothing and pruned nothing; the manifest stands as the record.
     root_missing: bool = False
+    #: The pass pruned and refreshed stamps; one that withheld both leaves
+    #: work a later pass has to repeat.
+    pruned: bool = False
     unsaved: list[UnsavedFile] = field(default_factory=list)
+    #: What this pass's scan can vouch for, recorded only if the pass leaves
+    #: nothing a later pass could still save.
+    scan_mark: ScanMark | None = None
 
     @property
     def errors(self) -> int:
         """Unsaved files the next sync may still save."""
-        return sum(1 for f in self.unsaved if f.reason != "too_large")
+        return sum(1 for f in self.unsaved if f.reason not in _PERMANENT)
 
     @property
     def oversized(self) -> int:
         """Unsaved files no sync on this deployment can save."""
-        return sum(1 for f in self.unsaved if f.reason == "too_large")
+        return sum(1 for f in self.unsaved if f.reason in _PERMANENT)
 
     def describe_unsaved(self, examples: int = 3) -> str:
         """Each reason with its count and a few paths, for a log line or an error."""
@@ -68,10 +83,22 @@ class SyncResult:
 
 _USER_REASONS: dict[UnsavedReason, str] = {
     "too_large": "too large to back up",
+    "path_too_long": "path too long to back up",
     "unreadable": "unreadable",
     "changed": "changed while saving",
     "failed": "didn't upload",
 }
+
+
+_SHOWN_PATH_CHARS = 120
+
+
+def _shown_path(path: str) -> str:
+    """A path short enough for a sentence; the ends are what identify it."""
+    if len(path) <= _SHOWN_PATH_CHARS:
+        return path
+    half = (_SHOWN_PATH_CHARS - 3) // 2
+    return f"{path[:half]}...{path[-half:]}"
 
 
 class BackupIncomplete(RuntimeError):
@@ -93,7 +120,7 @@ class BackupIncomplete(RuntimeError):
                 "backed up first. Try again in a moment."
             )
         shown = ", ".join(
-            f"{f.path} ({_USER_REASONS[f.reason]})" for f in self.unsaved[:3]
+            f"{_shown_path(f.path)} ({_USER_REASONS[f.reason]})" for f in self.unsaved[:3]
         )
         more = len(self.unsaved) - 3
         tail = f", and {more} more" if more > 0 else ""

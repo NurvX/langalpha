@@ -139,6 +139,71 @@ export interface Computer {
   last_activity_at?: string | null;
   stopped_at?: string | null;
   config?: Record<string, unknown>;
+  /** Last disk reading. Null when never measured, or on a local machine with
+   *  no storage quota, where `df` would report the host's disk. */
+  disk?: ComputerDisk | null;
+  /** The last spec change and how it went. The change runs after its request
+   *  has answered, so this row is where its outcome is read. */
+  spec_change?: ComputerSpecChange | null;
+}
+
+export type SpecChangeState = 'in_progress' | 'succeeded' | 'failed';
+
+/** Why a spec change that was accepted later failed. */
+export type SpecChangeErrorCode =
+  | 'turn_active'
+  | 'backup_incomplete'
+  | 'busy'
+  | 'interrupted'
+  | 'disk_too_small'
+  | 'not_allowed'
+  | 'unknown';
+
+export interface ComputerSpecChangeError {
+  code: SpecChangeErrorCode;
+  /** A user-facing sentence from the server, always present. */
+  message: string;
+  /** The files a backup could not take; may be empty. */
+  files: UnsavedFile[];
+}
+
+export interface ComputerSpecChange {
+  target_tier: ResourceTier;
+  from_tier: ResourceTier;
+  state: SpecChangeState;
+  error?: ComputerSpecChangeError | null;
+  started_at: string;
+  finished_at?: string | null;
+}
+
+/** How close a machine's disk is to full, decided server-side from free bytes. */
+export type ComputerDiskLevel = 'healthy' | 'notice' | 'warning' | 'critical';
+
+export interface ComputerDisk {
+  used_bytes: number;
+  total_bytes: number;
+  free_bytes: number;
+  measured_at: string;
+  level: ComputerDiskLevel;
+}
+
+/** One workspace folder's share of the machine's disk. */
+export interface ComputerStorageWorkspace {
+  workspace_id: string;
+  name: string;
+  dir_name: string | null;
+  bytes: number;
+}
+
+/**
+ * `GET /computers/{id}/storage`. `live` is false when the machine is not
+ * running: the reading is the stored one and the breakdown is empty.
+ */
+export interface ComputerStorage {
+  disk: ComputerDisk | null;
+  workspaces: ComputerStorageWorkspace[];
+  other_bytes: number;
+  live: boolean;
 }
 
 export interface ComputersResponse {
@@ -363,7 +428,7 @@ export interface WriteFileResponse {
   size: number;
 }
 
-export type UnsavedReason = 'too_large' | 'unreadable' | 'changed' | 'failed';
+export type UnsavedReason = 'too_large' | 'path_too_long' | 'unreadable' | 'changed' | 'failed';
 
 export interface UnsavedFile {
   path: string;
