@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "packageManager": "pnpm@10.18.1",
+  "packageManager": "pnpm@12.6.0",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && node scripts/check-critical-path.mjs",
@@ -92,17 +92,5 @@
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
     "vitest": "^3.2.4"
-  },
-  "pnpm": {
-    "overrides": {
-      "minimatch": "^10.2.1",
-      "dompurify": "^3.3.2"
-    },
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ],
-    "patchedDependencies": {
-      "exceljs@4.4.0": "patches/exceljs@4.4.0.patch"
-    }
   }
 }
