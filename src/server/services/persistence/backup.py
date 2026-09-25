@@ -22,6 +22,7 @@ from src.server.database.workspace_file import (
     get_file_metadata_for_sync,
     get_workspace_total_size,
     path_fits_manifest,
+    set_files_scan_mark,
     workspace_sync_lock,
 )
 from src.server.database.workspace import files_restore_incomplete, workspace_owner
@@ -43,6 +44,8 @@ from src.server.services.persistence.transfer import (
     scan_cap_bytes,
     PACK_CUTOFF,
     ScanEntry,
+    ScanMark,
+    ScanRules,
     scan_workspace,
 )
 from src.utils.storage import is_storage_enabled
@@ -125,7 +128,28 @@ async def sync_to_db(
     """
     try:
         async with workspace_sync_lock(workspace_id) as conn:
-            return await _sync_locked(workspace_id, sandbox, conn, layout)
+            result = await _sync_locked(workspace_id, sandbox, conn, layout)
+            # Last, under the same lock: a mark says everything changed before
+            # it is saved, so it moves only once the writes above landed, the
+            # prune ran, and nothing a retry could save was left behind. A pass
+            # that withheld its prune must be repeated once the gate lifts,
+            # and a mark would let the sweep skip that repeat. A file
+            # unsaved for good (too large, path too long) does not hold it
+            # back: rescanning cannot save it, and it is reported either way.
+            if result.scan_mark and result.pruned and not result.errors:
+                try:
+                    await set_files_scan_mark(
+                        workspace_id, result.scan_mark.as_json(), conn=conn
+                    )
+                except Exception as e:
+                    # A hint the next sweep would have skipped on: without it
+                    # that sweep reads the project as changed, which is safe.
+                    # Failing here would report saved files as unsaved.
+                    logger.warning(
+                        f"Could not record the scan mark for workspace "
+                        f"{workspace_id}: {e}"
+                    )
+            return result
     except Exception as e:
         logger.error(f"File sync failed for workspace {workspace_id}: {e}")
         raise
@@ -150,7 +174,8 @@ async def _sync_locked(
     started_at = await manifest_clock(conn=conn)
     existing = await get_file_metadata_for_sync(workspace_id, conn=conn)
     blobs_on = is_storage_enabled()
-    scan_cap = scan_cap_bytes(sandbox, blobs_on=blobs_on)
+    rules = ScanRules.of(scan_cap_bytes(sandbox, blobs_on=blobs_on))
+    scan_cap = rules.max_file_bytes
     result = SyncResult(max_file_bytes=scan_cap)
     scan = await scan_workspace(
         sandbox,
@@ -158,6 +183,7 @@ async def _sync_locked(
         max_file_bytes=scan_cap,
         layout=layout,
     )
+    result.scan_mark = ScanMark.of(scan, sandbox, rules)
     # Paths this deployment can never store. They are not entries, so nothing
     # downstream builds a row for them, but they are still present in the
     # sandbox: the prune has to see them or it reads the gap as a deletion
@@ -176,11 +202,14 @@ async def _sync_locked(
             f"file itself is not backed up."
         )
     # A path the manifest cannot key would fail the batch insert and take
-    # every other file in the pass down with it. No row can exist for one,
-    # so there is nothing for the prune to protect either.
+    # every other file in the pass down with it. It can still have a row: the
+    # cutoff counts bytes and is stricter than the column, so a multibyte path
+    # recorded earlier is protected from the prune like an oversized file.
     unkeyable = [e for e in scan.entries if not path_fits_manifest(e.path)]
+    unkeyable_dirs = {e.path for e in unkeyable if e.kind == "dir"}
     if unkeyable:
         scan.entries = [e for e in scan.entries if path_fits_manifest(e.path)]
+        oversized_paths |= {e.path for e in unkeyable}
         for entry in unkeyable:
             result.unsaved.append(
                 UnsavedFile(
@@ -281,6 +310,7 @@ async def _sync_locked(
                 untouched_since=started_at,
                 conn=conn,
             )
+            result.pruned = True
         # Rows kept for oversized files, or by a skipped prune, still count.
         result.total_size = await get_workspace_total_size(workspace_id, conn=conn)
         return result
@@ -307,7 +337,7 @@ async def _sync_locked(
     # create a directory where the symlink or file has to land. Keyed on
     # the scan alone: a manifest written before directories had rows of
     # their own holds the children with no parent row to compare against.
-    non_dir_paths: set[str] = set(oversized_paths)
+    non_dir_paths: set[str] = oversized_paths - unkeyable_dirs
 
     for entry in scan.entries:
         active_paths.add(entry.path)
@@ -430,6 +460,7 @@ async def _sync_locked(
             conn=conn,
         )
         result.deleted += deleted
+        result.pruned = True
     else:
         withheld = len(set(existing) - active_paths)
         if withheld:

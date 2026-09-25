@@ -1047,50 +1047,253 @@ async def test_a_missing_runtime_is_503_not_a_silent_success(
     assert resp.status_code == 503
 
 
+@pytest.mark.asyncio
+async def test_storage_reuses_a_breakdown_younger_than_a_minute(
+    client, computer, mock_computer_manager
+):
+    """The panel asks on every open; a du over the whole root on each one is
+    what the reuse window exists to avoid, so the route has to ask for it."""
+    from src.server.services.computer_disk import STORAGE_BREAKDOWN_MAX_AGE_SECONDS
+
+    mock_computer_manager.measures_disk = MagicMock(return_value=True)
+    mock_computer_manager.refresh_computer_disk = AsyncMock(
+        return_value=(computer, {"alpha": 300})
+    )
+    with (
+        patch("src.server.app.computers.get_computer", AsyncMock(return_value=computer)),
+        patch("src.server.app.computers._computer_manager", return_value=mock_computer_manager),
+        patch(
+            "src.server.app.computers.get_live_workspace_folders_for_computer",
+            AsyncMock(return_value=[]),
+        ),
+    ):
+        resp = await client.get(f"/api/v1/computers/{COMPUTER_ID}/storage")
+
+    assert resp.status_code == 200
+    assert resp.json()["live"] is True
+    assert mock_computer_manager.refresh_computer_disk.await_args.kwargs == {
+        "breakdown": True,
+        "breakdown_max_age_s": STORAGE_BREAKDOWN_MAX_AGE_SECONDS,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Spec tier and always-on
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_set_spec_delegates_the_quota_decision_to_the_manager(
-    client, computer, sample_computer_dict, mock_computer_manager
-):
-    events = []
+def _spec_claim(computer, **change):
+    from datetime import datetime, timezone
 
-    upgraded = sample_computer_dict(
-        computer_id=COMPUTER_ID, resource_tier="performance"
-    )
-    async def set_spec(*args, **kwargs):
-        events.append(("write", args[0]))
-        return upgraded
-    mock_computer_manager.set_computer_spec.side_effect = set_spec
-    with (
+    return {
+        **computer,
+        "spec_change": {
+            "target_tier": "performance",
+            "from_tier": "standard",
+            "state": "in_progress",
+            "error": None,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "claim_id": "claim-1",
+            **change,
+        },
+        "spec_change_stale": False,
+    }
+
+
+def _spec_client_patches(computer, manager):
+    return (
         patch(
             "src.server.app.computers.get_computer",
             AsyncMock(return_value=computer),
         ),
         patch(
+            "src.server.app.computers._computer_manager",
+            return_value=manager,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_set_spec_accepts_then_runs_the_claim_in_the_background(
+    client, computer, mock_computer_manager
+):
+    """A recreate outlives an edge-proxied request, so the route answers 202 and
+    hands the claim to a background run whose outcome is read back from the row."""
+    import inspect
+
+    from src.server.services.computer_manager import ComputerManager
+
+    mock_computer_manager.precheck_computer_spec = AsyncMock(return_value=False)
+    mock_computer_manager.claim_computer_spec = AsyncMock(
+        return_value=_spec_claim(computer)
+    )
+    mock_computer_manager.run_accepted_spec_change = AsyncMock()
+    get_row, get_manager = _spec_client_patches(computer, mock_computer_manager)
+    with (
+        get_row,
+        get_manager,
+        patch(
             "src.server.app.computers.count_live_workspaces_by_computer",
             AsyncMock(return_value={COMPUTER_ID: 2}),
         ),
+    ):
+        resp = await client.post(
+            f"/api/v1/computers/{COMPUTER_ID}/spec", json={"tier": "performance"}
+        )
+        await _drain_start_tasks()
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["spec_change"]["state"] == "in_progress"
+    assert body["spec_change"]["claim_id"] == "claim-1"
+    assert body["workspace_count"] == 2
+    mock_computer_manager.claim_computer_spec.assert_awaited_once_with(
+        COMPUTER_ID, "performance"
+    )
+    mock_computer_manager.run_accepted_spec_change.assert_awaited_once_with(
+        COMPUTER_ID, "performance", user_id=USER, claim_id="claim-1"
+    )
+    # The manager is a bare mock: hold every call the route made to the real
+    # signatures, so a renamed method or keyword fails here, not in production.
+    for name in (
+        "precheck_computer_spec",
+        "claim_computer_spec",
+        "run_accepted_spec_change",
+    ):
+        call = getattr(mock_computer_manager, name).await_args
+        inspect.signature(getattr(ComputerManager, name)).bind(
+            None, *call.args, **call.kwargs
+        )
+
+
+def _assert_refusal(resp, code):
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == code
+    assert isinstance(detail["message"], str) and detail["message"]
+    assert detail["files"] == []
+
+
+@pytest.mark.asyncio
+async def test_set_spec_refuses_a_second_change_while_one_runs(
+    client, computer, mock_computer_manager
+):
+    mock_computer_manager.precheck_computer_spec = AsyncMock(return_value=False)
+    mock_computer_manager.claim_computer_spec = AsyncMock(return_value=None)
+    mock_computer_manager.run_accepted_spec_change = AsyncMock()
+    get_row, get_manager = _spec_client_patches(computer, mock_computer_manager)
+    with get_row, get_manager:
+        resp = await client.post(
+            f"/api/v1/computers/{COMPUTER_ID}/spec", json={"tier": "performance"}
+        )
+
+    _assert_refusal(resp, "spec_in_progress")
+    mock_computer_manager.run_accepted_spec_change.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_repeat_of_a_running_change_is_refused_not_read_as_done(
+    client, computer, mock_computer_manager
+):
+    """A running change persists its target tier early, so the same-tier
+    shortcut would answer a repeat 200 as if the change had finished."""
+    row = _spec_claim({**computer, "resource_tier": "performance"})
+    mock_computer_manager.precheck_computer_spec = AsyncMock(return_value=True)
+    get_row, get_manager = _spec_client_patches(row, mock_computer_manager)
+    with get_row, get_manager:
+        resp = await client.post(
+            f"/api/v1/computers/{COMPUTER_ID}/spec", json={"tier": "performance"}
+        )
+
+    _assert_refusal(resp, "spec_in_progress")
+
+
+@pytest.mark.asyncio
+async def test_a_stale_change_does_not_block_a_new_one(
+    client, computer, mock_computer_manager
+):
+    """The database says the old claim is stale, so the route reads it as
+    interrupted and lets the claim take the row over."""
+    row = _spec_claim(computer)
+    row["spec_change_stale"] = True
+    mock_computer_manager.precheck_computer_spec = AsyncMock(return_value=False)
+    mock_computer_manager.claim_computer_spec = AsyncMock(
+        return_value=_spec_claim(computer, claim_id="claim-2")
+    )
+    mock_computer_manager.run_accepted_spec_change = AsyncMock()
+    get_row, get_manager = _spec_client_patches(row, mock_computer_manager)
+    with (
+        get_row,
+        get_manager,
         patch(
-            "src.server.app.computers._computer_manager",
-            return_value=mock_computer_manager,
+            "src.server.app.computers.count_live_workspaces_by_computer",
+            AsyncMock(return_value={}),
         ),
     ):
         resp = await client.post(
             f"/api/v1/computers/{COMPUTER_ID}/spec", json={"tier": "performance"}
         )
 
-    assert resp.status_code == 200
-    assert resp.json()["resource_tier"] == "performance"
-    # A response the client swaps its row for still carries the project count.
-    assert resp.json()["workspace_count"] == 2
-    mock_computer_manager.set_computer_spec.assert_awaited_once_with(
-        COMPUTER_ID, "performance", user_id=USER
+    assert resp.status_code == 202
+    assert resp.json()["spec_change"]["claim_id"] == "claim-2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raised", "code"),
+    [("turn", "turn_active"), ("busy", "busy")],
+)
+async def test_set_spec_refuses_before_accepting_in_the_outcome_shape(
+    client, computer, mock_computer_manager, raised, code
+):
+    from src.server.services.computer_errors import (
+        ComputerBusyError,
+        MachineBusyError,
     )
-    assert events == [("write", COMPUTER_ID)]
+
+    exc = {
+        "turn": MachineBusyError("turn running"),
+        "busy": ComputerBusyError("mid-operation"),
+    }[raised]
+    mock_computer_manager.precheck_computer_spec = AsyncMock(side_effect=exc)
+    mock_computer_manager.claim_computer_spec = AsyncMock()
+    get_row, get_manager = _spec_client_patches(computer, mock_computer_manager)
+    with get_row, get_manager:
+        resp = await client.post(
+            f"/api/v1/computers/{COMPUTER_ID}/spec", json={"tier": "performance"}
+        )
+
+    _assert_refusal(resp, code)
+    mock_computer_manager.claim_computer_spec.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_incomplete_backup_names_its_files_on_the_spec_route_only():
+    from fastapi import HTTPException
+
+    from src.server.app.computers import _computer_action_errors
+    from src.server.services.persistence.sync_result import (
+        BackupIncomplete,
+        UnsavedFile,
+    )
+
+    exc = BackupIncomplete("ws-1 unsaved", [UnsavedFile("a.bin", "too_large", 9)])
+    with pytest.raises(HTTPException) as spec:
+        async with _computer_action_errors("set spec for", "c1", spec=True):
+            raise exc
+    assert spec.value.status_code == 409
+    assert spec.value.detail["code"] == "backup_incomplete"
+    assert spec.value.detail["files"] == [
+        {"path": "a.bin", "reason": "too_large", "size": 9}
+    ]
+    assert "ws-1" not in spec.value.detail["message"]
+
+    with pytest.raises(HTTPException) as other:
+        async with _computer_action_errors("stop", "c1"):
+            raise exc
+    assert other.value.status_code == 400
+    assert other.value.detail == exc.user_message
 
 
 @pytest.mark.asyncio

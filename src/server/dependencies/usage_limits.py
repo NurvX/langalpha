@@ -676,6 +676,32 @@ async def get_capacity_status(user_id: str, check_quota: str) -> Optional[dict]:
     return {"used": int(used), "limit": int(limit)}
 
 
+async def get_entitlement_statuses(
+    user_id: str, entitlements: dict[str, tuple[str, str]]
+) -> dict[str, Optional[dict]]:
+    """Display status per entitlement, where a scope the plan lacks reads as ``limit 0``.
+
+    ``entitlements`` maps a caller's key to ``(scope, count-quota name)``. The
+    count quota alone cannot say "not on your plan": the platform reports the
+    tier's count limit whether or not the scope is granted, so a UI reading only
+    counts offers an upgrade the gate then refuses with 403. Scopes are read
+    once for all keys; None from the platform stays unknown (fail-open), the
+    same reading the gate gives it.
+    """
+    if not platform_gating_active():
+        return {key: None for key in entitlements}
+    scopes = await _get_user_scopes(user_id)
+
+    async def status(scope: str, quota: str) -> Optional[dict]:
+        if scopes is not None and scope not in scopes:
+            return {"used": 0, "limit": 0}
+        return await get_capacity_status(user_id, quota)
+
+    keys = list(entitlements)
+    results = await asyncio.gather(*(status(*entitlements[k]) for k in keys))
+    return dict(zip(keys, results))
+
+
 # Always-on entitlement identifiers — single source for the gate, the
 # reconciler probe, and the quota route.
 ALWAYS_ON_SCOPE = "workspace:always_on"
@@ -688,10 +714,10 @@ _SPEC_ENTITLEMENTS: dict[str, tuple[str, str]] = {
     "max": ("workspace:spec:max", "spec_max"),
 }
 
-# tier -> count-quota name, for callers that only need the quota identifier
-# (e.g. the /workspaces/quota route).
-SPEC_QUOTAS: dict[str, str] = {
-    tier: quota for tier, (_scope, quota) in _SPEC_ENTITLEMENTS.items()
+# key -> (scope, count-quota name) for every entitlement the quota route shows.
+DISPLAYED_ENTITLEMENTS: dict[str, tuple[str, str]] = {
+    **_SPEC_ENTITLEMENTS,
+    "always_on": (ALWAYS_ON_SCOPE, ALWAYS_ON_QUOTA),
 }
 
 # Ordering for upgrade-vs-downgrade decisions. Unknown tiers rank lowest so a

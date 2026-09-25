@@ -2,13 +2,29 @@
 
 One file of the ComputerManager split; see the package __init__."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from ptc_agent.core.sandbox.runtime import SandboxGoneError
+from ptc_agent.core.sandbox.runtime import SandboxGoneError, SandboxRuntime
 
+from src.server.database.computer import (
+    DEFAULT_ROOT_DIR,
+    get_computer,
+    record_computer_disk,
+)
+from src.server.models.computer import ComputerStatus
+from src.server.services.computer_disk import (
+    STORAGE_BREAKDOWN_MAX_AGE_SECONDS,
+    disk_breakdown_key,
+    disk_command,
+    measured_within,
+    parse_disk_output,
+)
 from src.server.services.computer_manager._types import ComputerBinding
+from src.utils.cache.redis_cache import get_cache_client
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +112,166 @@ class ProviderMixin:
             yield await provider.get(sandbox_id)
         finally:
             await provider.close()
+
+    def measures_disk(self, computer: Dict[str, Any]) -> bool:
+        """A local computer without a storage quota reports the host's disk, not its own."""
+        if computer.get("kind") != "docker":
+            return True
+        try:
+            settings = self._provider_settings(
+                "docker", computer.get("provider_config") or None
+            )
+        except ValueError:
+            return False
+        return bool(getattr(settings, "storage_quota_enabled", False))
+
+    async def refresh_computer_disk(
+        self,
+        computer: Dict[str, Any] | str,
+        *,
+        sandbox_id: str | None = None,
+        breakdown: bool = False,
+        min_age_s: float | None = None,
+        breakdown_max_age_s: float | None = None,
+        timeout: float | None = None,
+    ) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, int]]]:
+        """Measure a computer's disk and store the reading, best effort.
+
+        Answers the row as it now stands and the folder sizes (empty unless
+        ``breakdown``), or sizes None when nothing was measured: a machine that
+        does not measure, one measured within ``min_age_s``, or a failure,
+        which leaves the last reading in place and never raises. ``computer``
+        may be an id, read here. Without ``sandbox_id`` only a running machine
+        is measured, on its current sandbox; a caller that names one (a stop
+        about to take it away) is measuring that sandbox whatever the row says.
+        With ``breakdown_max_age_s`` a breakdown of that sandbox taken within
+        it, by any worker, is answered again without an exec, beside the
+        row's reading. ``timeout`` bounds everything, the row read and a
+        detached connect included, since a stop waits on this under the
+        machine lock; it defaults to the exec's own budget plus a connect.
+        """
+        if timeout is None:
+            timeout = disk_command("/", breakdown=breakdown)[1] + 5
+        computer_id = computer if isinstance(computer, str) else computer.get("computer_id")
+        row = None if isinstance(computer, str) else computer
+        try:
+            async with asyncio.timeout(timeout):
+                if row is None:
+                    row = await get_computer(str(computer_id))
+                if row is None or not self.measures_disk(row):
+                    return row, None
+                if sandbox_id is None:
+                    if row.get("status") != ComputerStatus.RUNNING:
+                        return row, None
+                    sandbox_id = row.get("provider_ref")
+                if not sandbox_id:
+                    return row, None
+                if min_age_s is not None and measured_within(row, min_age_s):
+                    return row, None
+                if breakdown and breakdown_max_age_s is not None:
+                    sizes = await self._recent_breakdown(
+                        str(computer_id), str(sandbox_id), breakdown_max_age_s
+                    )
+                    if sizes is not None:
+                        return row, sizes
+                return await self._measure_disk(row, str(sandbox_id), breakdown)
+        except Exception as e:  # noqa: BLE001 - a reading is never worth failing its caller
+            logger.warning(f"Disk reading failed for computer {computer_id}: {e}")
+            return row, None
+
+    async def _measure_disk(
+        self, computer: Dict[str, Any], sandbox_id: str, breakdown: bool
+    ) -> tuple[Dict[str, Any], Dict[str, int]]:
+        """Read off this worker's session when it holds that sandbox, else a detached runtime."""
+        computer_id = str(computer["computer_id"])
+        session = self._cached_session(computer_id)
+        runtime = getattr(getattr(session, "sandbox", None), "runtime", None)
+        if runtime is not None and self._session_sandbox_id(session) == sandbox_id:
+            return await self._read_and_record_disk(
+                computer, runtime, breakdown, sandbox_id=sandbox_id
+            )
+        binding = self._binding_from_computer("", computer)
+        async with self._detached_runtime(sandbox_id, binding=binding) as detached:
+            return await self._read_and_record_disk(
+                computer, detached, breakdown, sandbox_id=sandbox_id
+            )
+
+    async def _recent_breakdown(
+        self, computer_id: str, sandbox_id: str, max_age_s: float
+    ) -> Optional[Dict[str, int]]:
+        """The last breakdown of this sandbox if it is young enough, else None.
+
+        Redis, not process memory: the worker answering the storage panel is
+        rarely the one that measured. A cache miss or outage only costs an exec.
+        """
+        cached = await get_cache_client().get(disk_breakdown_key(computer_id))
+        if not isinstance(cached, dict) or cached.get("sandbox_id") != sandbox_id:
+            return None
+        try:
+            measured_at = datetime.fromisoformat(cached["measured_at"])
+            sizes = {str(k): int(v) for k, v in cached["sizes"].items()}
+        except (KeyError, TypeError, ValueError):
+            return None
+        if (datetime.now(timezone.utc) - measured_at).total_seconds() >= max_age_s:
+            return None
+        return sizes
+
+    async def _remember_breakdown(
+        self, computer_id: str, sandbox_id: str, sizes: Dict[str, int]
+    ) -> None:
+        await get_cache_client().set(
+            disk_breakdown_key(computer_id),
+            {
+                "sandbox_id": sandbox_id,
+                "measured_at": datetime.now(timezone.utc).isoformat(),
+                "sizes": sizes,
+            },
+            ttl=STORAGE_BREAKDOWN_MAX_AGE_SECONDS,
+        )
+
+    async def _read_and_record_disk(
+        self,
+        computer: Dict[str, Any],
+        runtime: SandboxRuntime,
+        breakdown: bool,
+        *,
+        sandbox_id: str,
+    ) -> tuple[Dict[str, Any], Dict[str, int]]:
+        root_dir = computer.get("root_dir") or DEFAULT_ROOT_DIR
+        command, exec_timeout = disk_command(root_dir, breakdown=breakdown)
+        # df runs first, so the reading is as old as the exec's start.
+        observed_at = datetime.now(timezone.utc)
+        result = await runtime.exec(command, timeout=exec_timeout)
+        reading, sizes = parse_disk_output(
+            result.stdout or "", root_dir, breakdown=breakdown
+        )
+        if breakdown:
+            await self._remember_breakdown(
+                str(computer["computer_id"]), sandbox_id, sizes
+            )
+        if reading is None:
+            logger.warning(
+                "Disk reading on computer %s returned no parsable df line",
+                computer.get("computer_id"),
+            )
+            return computer, sizes
+        updated = await record_computer_disk(
+            str(computer["computer_id"]),
+            sandbox_id=sandbox_id,
+            observed_at=observed_at,
+            total_bytes=reading.total_bytes,
+            used_bytes=reading.used_bytes,
+            free_bytes=reading.free_bytes,
+        )
+        if updated is not None:
+            return updated, sizes
+        # Lost the write. To a newer reading of the same sandbox, the folders
+        # still describe the machine; to a replacement, they describe one that
+        # is gone, so they are dropped and nothing is answered as measured.
+        current = await get_computer(str(computer["computer_id"])) or computer
+        if current.get("provider_ref") != sandbox_id:
+            return current, None
+        return current, sizes
 
     def _is_sandbox_gone(
         self, exc: Exception, binding: Optional[ComputerBinding] = None

@@ -15,7 +15,6 @@ Endpoints:
 - DELETE /api/v1/workspaces/{workspace_id} - Delete workspace
 """
 
-import asyncio
 import contextlib
 import logging
 from typing import Literal
@@ -26,9 +25,8 @@ from fastapi.responses import Response, StreamingResponse
 from src.server.services.persistence.sync_result import BackupIncomplete
 from src.server.utils.api import CurrentUserId, require_workspace_owner
 from src.server.dependencies.usage_limits import (
-    ALWAYS_ON_QUOTA,
-    SPEC_QUOTAS,
-    get_capacity_status,
+    DISPLAYED_ENTITLEMENTS,
+    get_entitlement_statuses,
 )
 from src.server.app.background_starts import schedule_start
 from src.server.app.status_stream import (
@@ -277,15 +275,11 @@ async def get_workspace_quota(x_user_id: CurrentUserId):
     remaining-count hint. Fails open: a capability the platform can't report comes
     back null rather than erroring the whole call.
     """
-    performance, maximum, always_on = await asyncio.gather(
-        get_capacity_status(x_user_id, SPEC_QUOTAS["performance"]),
-        get_capacity_status(x_user_id, SPEC_QUOTAS["max"]),
-        get_capacity_status(x_user_id, ALWAYS_ON_QUOTA),
-    )
+    statuses = await get_entitlement_statuses(x_user_id, DISPLAYED_ENTITLEMENTS)
     return WorkspaceQuotaResponse(
-        performance=performance,
-        max=maximum,
-        always_on=always_on,
+        performance=statuses["performance"],
+        max=statuses["max"],
+        always_on=statuses["always_on"],
     )
 
 

@@ -10,7 +10,10 @@ since each is a file whose only copy is still in it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from src.server.services.persistence.transfer import ScanMark
 
 UnsavedReason = Literal[
     "too_large", "path_too_long", "unreadable", "changed", "failed"
@@ -47,7 +50,13 @@ class SyncResult:
     #: The project's folder is absent from this sandbox, so the pass mirrored
     #: nothing and pruned nothing; the manifest stands as the record.
     root_missing: bool = False
+    #: The pass pruned and refreshed stamps; one that withheld both leaves
+    #: work a later pass has to repeat.
+    pruned: bool = False
     unsaved: list[UnsavedFile] = field(default_factory=list)
+    #: What this pass's scan can vouch for, recorded only if the pass leaves
+    #: nothing a later pass could still save.
+    scan_mark: ScanMark | None = None
 
     @property
     def errors(self) -> int:

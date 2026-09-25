@@ -34,6 +34,7 @@ COMPUTER_ID = "11111111-1111-4111-8111-111111111111"
 _LIFECYCLE = "src.server.services.computer_manager._lifecycle"
 _MACHINES = "src.server.services.computer_manager._machines"
 _PROVISIONING = "src.server.services.computer_manager._provisioning"
+_MACHINE_BACKUP = "src.server.services.computer_manager._machine_backup"
 
 
 def _make_config():
@@ -321,7 +322,7 @@ class TestStopEntersThroughTheMachine(_Base):
                 AsyncMock(return_value=_workspace(ws_id, status="stopped")),
             ),
             patch(
-                f"{_PROVISIONING}.get_live_workspace_ids_for_computer",
+                f"{_MACHINE_BACKUP}.get_live_workspace_ids_for_computer",
                 AsyncMock(return_value=[ws_id]),
             ),
             patch(
@@ -517,7 +518,7 @@ class TestStopMirrorsEveryProjectOnTheMachine(_Base):
                 AsyncMock(return_value=_workspace(workspace_ids[0])),
             ),
             patch(
-                f"{_PROVISIONING}.get_live_workspace_ids_for_computer",
+                f"{_MACHINE_BACKUP}.get_live_workspace_ids_for_computer",
                 AsyncMock(return_value=list(workspace_ids)),
             ),
             patch(f"{_LIFECYCLE}.get_computer", AsyncMock(return_value=computer)),
@@ -581,7 +582,7 @@ class TestStopMirrorsEveryProjectOnTheMachine(_Base):
         backup = AsyncMock()
         manager.backup_project_files = backup
         with patch(
-            f"{_PROVISIONING}.get_live_workspace_ids_for_computer",
+            f"{_MACHINE_BACKUP}.get_live_workspace_ids_for_computer",
             AsyncMock(return_value=[handle, sibling]),
         ):
             await manager._backup_machine_files_to_db(
@@ -604,7 +605,7 @@ class TestStopMirrorsEveryProjectOnTheMachine(_Base):
         backup = AsyncMock(side_effect=[RuntimeError("scan failed"), None])
         manager.backup_project_files = backup
         with patch(
-            f"{_PROVISIONING}.get_live_workspace_ids_for_computer",
+            f"{_MACHINE_BACKUP}.get_live_workspace_ids_for_computer",
             AsyncMock(return_value=[handle, sibling]),
         ):
             with pytest.raises(RuntimeError, match="unmirrored"):
@@ -625,7 +626,7 @@ class TestStopMirrorsEveryProjectOnTheMachine(_Base):
         backup = AsyncMock()
         manager.backup_project_files = backup
         with patch(
-            f"{_PROVISIONING}.get_live_workspace_ids_for_computer",
+            f"{_MACHINE_BACKUP}.get_live_workspace_ids_for_computer",
             AsyncMock(side_effect=RuntimeError("pool exhausted")),
         ):
             await manager._backup_machine_files_to_db(

@@ -12,9 +12,11 @@ from typing import Any, Dict, List, Optional
 
 from psycopg.errors import LockNotAvailable
 from psycopg.rows import dict_row
+from psycopg.types.json import Json
 
 from src.server.database.pool import get_db_connection
 from src.server.database.session_lock import release_session_lock
+from src.server.database.sql_fences import FENCE_LIVE_WORKSPACE
 from src.server.utils.pg_sanitize import strip_pg_nul_str
 
 logger = logging.getLogger(__name__)
@@ -579,6 +581,11 @@ async def delete_removed_files(
                     "active_paths": paths_list,
                     "untouched_since": untouched_since,
                 },
+                # Never prepared: Postgres hashes ``= ANY`` only over a constant
+                # array, which a generic plan does not have, so a prepared prune
+                # compares every row against every path. At 65k paths that
+                # measured 19.6 s against 0.15 s planned with the values.
+                prepare=False,
             )
             return cur.rowcount
 
@@ -623,6 +630,42 @@ async def delete_file_rows(
     async with get_db_connection() as conn:
         async with conn.cursor() as cur:
             return await _execute(cur)
+
+
+async def set_files_scan_mark(
+    workspace_id: str, mark: dict[str, Any], *, conn=None
+) -> None:
+    sql = "UPDATE workspaces SET files_scan_mark = %s WHERE workspace_id = %s"
+    if conn:
+        async with conn.cursor() as cur:
+            await cur.execute(sql, (Json(mark), workspace_id))
+        return
+    async with get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(sql, (Json(mark), workspace_id))
+
+
+async def get_scan_marks_for_computer(computer_id: str) -> List[Dict[str, Any]]:
+    """Every live project on the machine with its folder and scan mark.
+
+    The same set the machine-wide backup mirrors, so a sweep never skips a
+    project that backup would have covered.
+    """
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT workspace_id, dir_name, files_scan_mark
+                FROM workspaces
+                WHERE computer_id = %s AND status <> 'deleted'
+                ORDER BY created_at
+                """,
+                (computer_id,),
+            )
+            return [
+                {**r, "workspace_id": str(r["workspace_id"])}
+                for r in await cur.fetchall()
+            ]
 
 
 async def copy_workspace_files(
@@ -737,3 +780,20 @@ async def get_workspace_total_size(
     except Exception as e:
         logger.error(f"Error getting total size for workspace {workspace_id}: {e}")
         raise
+
+
+async def get_live_project_sizes_for_computer(computer_id: str) -> List[int]:
+    """Backed-up bytes of each live project on a computer, one entry per project."""
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                f"""
+                SELECT COALESCE(SUM(f.file_size), 0)::bigint AS total_size
+                FROM workspaces w
+                LEFT JOIN workspace_files f ON f.workspace_id = w.workspace_id
+                WHERE w.computer_id = %s AND w.{FENCE_LIVE_WORKSPACE}
+                GROUP BY w.workspace_id
+                """,
+                (computer_id,),
+            )
+            return [r["total_size"] for r in await cur.fetchall()]

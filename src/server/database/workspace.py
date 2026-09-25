@@ -371,6 +371,27 @@ async def get_live_workspace_ids_for_computer(
         return [str(r["workspace_id"]) for r in await cur.fetchall()]
 
 
+async def get_live_workspace_folders_for_computer(
+    computer_id: str,
+) -> List[Dict[str, Any]]:
+    """Each live project's name and folder, for attributing disk use to it."""
+    computer_id = normalize_uuid(computer_id)
+    if computer_id is None:
+        return []
+
+    async with _ws_cursor() as cur:
+        await cur.execute(
+            f"""
+            SELECT workspace_id, name, dir_name
+            FROM workspaces
+            WHERE computer_id = %s AND {FENCE_LIVE_WORKSPACE}
+            ORDER BY created_at
+            """,
+            (computer_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def get_workspace_dir_names_for_computer(computer_id: str) -> tuple[str, ...]:
     """Include tombstones: stopped machines may still hold their project folders."""
     async with _ws_cursor() as cur:
@@ -921,6 +942,45 @@ async def set_files_restore_incomplete(
             params,
         )
         return cur.rowcount > 0
+
+
+async def flag_sibling_restores_pending(
+    computer_id: str,
+    *,
+    except_workspace_id: str,
+    expected_provider_ref: Optional[str],
+) -> int:
+    """Raise the completeness flag on every other project of a machine being recreated.
+
+    A recreate restores only the project that asked for it; the rest rejoin
+    lazily, and until then an empty or stray folder of theirs on the new
+    sandbox reads to a sync as the user having deleted everything. Fenced by
+    the machine's ref, which is the identity the recreate replaces, so a
+    provisioner that already lost the race flags nothing.
+    """
+    async with _ws_cursor() as cur:
+        await cur.execute(
+            """
+            UPDATE workspaces w
+            SET files_restore_incomplete_at = %s
+            WHERE w.computer_id = %s
+              AND w.workspace_id <> %s
+              AND w.status <> 'deleted'
+              AND w.files_restore_incomplete_at IS NULL
+              AND EXISTS (
+                  SELECT 1 FROM computers c
+                  WHERE c.computer_id = w.computer_id
+                    AND c.provider_ref IS NOT DISTINCT FROM %s
+              )
+            """,
+            (
+                datetime.now(timezone.utc),
+                normalize_uuid(computer_id),
+                normalize_uuid(except_workspace_id),
+                expected_provider_ref,
+            ),
+        )
+        return cur.rowcount
 
 
 async def files_restore_incomplete(workspace_id: str, *, conn=None) -> bool:

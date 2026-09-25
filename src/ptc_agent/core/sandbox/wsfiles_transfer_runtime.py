@@ -6,7 +6,7 @@ through presigned URLs. It runs on the sandbox's bare python3, so it is
 standard library only and imports nothing from the host repo.
 
 CLI: ``python3 wsfiles_transfer.py <op> (--spec-b64 <base64 json> | <in.json>)``
-where ``op`` is scan, hash, push, pull, pack or unlink. The result is the last
+where ``op`` is scan, sweep, hash, push, pull, pack or unlink. The result is the last
 stdout line, behind ``RESULT_MARKER``, and the process exits 0 even on partial
 failure; exit 2 is reserved for unreadable or invalid input.
 """
@@ -14,6 +14,7 @@ failure; exit 2 is reserved for unreadable or invalid input.
 import base64
 import codecs
 import contextlib
+import errno
 import hashlib
 import http.client
 import json
@@ -225,18 +226,105 @@ def _is_connection_error(exc: BaseException) -> bool:
 # ---------------------------------------------------------------------------
 
 
+class _Exclusions:
+    """What a backup leaves out, shared by ``scan`` and ``sweep``.
+
+    One predicate for both, because a sweep that looked at an entry the scan
+    skips would keep reporting a project as changed, and one that skipped an
+    entry the scan keeps would let a real change go unsaved.
+    """
+
+    def __init__(self, spec: dict[str, Any]) -> None:
+        self.dir_names = set(spec.get("exclude_dir_names") or ())
+        self.rel_dirs = {p.strip("/") for p in (spec.get("exclude_rel_dirs") or ())}
+        self.rel_dir_prefixes = tuple(
+            p.strip("/") for p in (spec.get("exclude_rel_dir_prefixes") or ())
+        )
+        self.basenames = set(spec.get("exclude_basenames") or ())
+        self.rel_files = {p.strip("/") for p in (spec.get("exclude_rel_files") or ())}
+        self.root_basenames = set(spec.get("exclude_root_basenames") or ())
+        self.root_prefixes = tuple(spec.get("exclude_root_basename_prefixes") or ())
+        self.suffixes = tuple(spec.get("exclude_suffixes") or ())
+
+    def kind(self, child: Any, rel: str, at_root: bool) -> str | None:
+        """``child``'s kind as a backup carries it, or None when it is left out.
+
+        ``child`` is a ``DirEntry``; the answer is ``"symlink"``, ``"dir"`` or
+        ``"file"``. May raise OSError.
+        """
+        name = child.name
+        # Reserved root names are skipped whatever the entry is: the pull op's
+        # sweep removes any root ``.wsfiles-`` entry no item claims,
+        # directories included, so a row for one would only promise what the
+        # next restore deletes.
+        if at_root and (name in self.root_basenames or name.startswith(self.root_prefixes)):
+            return None
+        if child.is_symlink():
+            # A symlink standing where an excluded directory would be is that
+            # directory as far as a restore is concerned, so it answers to the
+            # path-anchored rules too.
+            left_out = (
+                name in self.dir_names
+                or name in self.basenames
+                or rel in self.rel_files
+                or rel in self.rel_dirs
+                or rel.startswith(self.rel_dir_prefixes)
+            )
+            return None if left_out else "symlink"
+        if child.is_dir(follow_symlinks=False):
+            left_out = (
+                name in self.dir_names
+                or rel in self.rel_dirs
+                or rel.startswith(self.rel_dir_prefixes)
+            )
+            return None if left_out else "dir"
+        if child.is_file(follow_symlinks=False):
+            left_out = name in self.basenames or rel in self.rel_files or name.endswith(self.suffixes)
+            return None if left_out else "file"
+        # Sockets, fifos and devices are not files a backup can carry.
+        return None
+
+
+def _boot_id() -> str | None:
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _clock_offset_ns() -> int:
+    """How far the wall clock sits from the boot clock.
+
+    Change times are stamped by the wall clock, which can be stepped back; the
+    boot clock cannot. A drop in this offset between a mark and a sweep means
+    the wall clock went back, so a change made since may carry a change time
+    older than the mark.
+    """
+    boot_clock = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)
+    return time.time_ns() - time.clock_gettime_ns(boot_clock)
+
+
+# A wall clock slewed by NTP drifts from the boot clock by well under this;
+# only a step back reaches it.
+_CLOCK_STEP_NS = 1_000_000_000
+
+
+def _root(spec: dict[str, Any]) -> str:
+    """The one folder an op works in. A sweep names a folder per project instead."""
+    root = spec.get("root")
+    if not isinstance(root, str):
+        raise ValueError("spec needs a string 'root'")
+    return os.path.abspath(root)
+
+
 def scan(spec: dict[str, Any]) -> dict[str, Any]:
-    root = os.path.abspath(spec["root"])
-    exclude_dir_names = set(spec.get("exclude_dir_names") or ())
-    exclude_rel_dirs = {p.strip("/") for p in (spec.get("exclude_rel_dirs") or ())}
-    exclude_rel_dir_prefixes = tuple(
-        p.strip("/") for p in (spec.get("exclude_rel_dir_prefixes") or ())
-    )
-    exclude_basenames = set(spec.get("exclude_basenames") or ())
-    exclude_rel_files = {p.strip("/") for p in (spec.get("exclude_rel_files") or ())}
-    exclude_root_basenames = set(spec.get("exclude_root_basenames") or ())
-    exclude_root_prefixes = tuple(spec.get("exclude_root_basename_prefixes") or ())
-    exclude_suffixes = tuple(spec.get("exclude_suffixes") or ())
+    root = _root(spec)
+    excluded = _Exclusions(spec)
+    # Before the walk: a change made while it runs is newer than this and so
+    # shows up in the next sweep, whichever side of the walk it landed on.
+    started_ns = time.time_ns()
+    clock_offset_ns = _clock_offset_ns()
     max_file_bytes = spec.get("max_file_bytes")
     prior = spec.get("prior") or {}
     # A listing that only compares sizes and mtimes has no use for digests,
@@ -247,16 +335,6 @@ def scan(spec: dict[str, Any]) -> dict[str, Any]:
     oversized: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     counts = {"hashed": 0, "reused": 0}
-
-    def excluded_dir(name: str, rel: str) -> bool:
-        return (
-            name in exclude_dir_names
-            or rel in exclude_rel_dirs
-            or rel.startswith(exclude_rel_dir_prefixes)
-        )
-
-    def excluded_name(name: str) -> bool:
-        return name in exclude_dir_names or name in exclude_basenames
 
     def file_entry(abs_path: str, rel: str) -> None:
         st = os.stat(abs_path, follow_symlinks=False)
@@ -319,31 +397,11 @@ def scan(spec: dict[str, Any]) -> dict[str, Any]:
             return
         for child in children:
             rel = f"{rel_dir}/{child.name}" if rel_dir else child.name
-            # Reserved root names are skipped whatever the entry is: the
-            # pull op's sweep removes any root ``.wsfiles-`` entry no item
-            # claims, directories included, so a row for one would only
-            # promise what the next restore deletes.
-            if not rel_dir and (
-                child.name in exclude_root_basenames
-                or child.name.startswith(exclude_root_prefixes)
-            ):
-                continue
             try:
-                if child.is_symlink():
-                    # A symlink standing where an excluded directory would be
-                    # is that directory as far as a restore is concerned, so
-                    # it answers to the path-anchored rules too.
-                    if (
-                        excluded_name(child.name)
-                        or rel in exclude_rel_files
-                        or rel in exclude_rel_dirs
-                        or rel.startswith(exclude_rel_dir_prefixes)
-                    ):
-                        continue
+                kind = excluded.kind(child, rel, not rel_dir)
+                if kind == "symlink":
                     symlink_entry(child.path, rel)
-                elif child.is_dir(follow_symlinks=False):
-                    if excluded_dir(child.name, rel):
-                        continue
+                elif kind == "dir":
                     walk(child.path, rel)
                     # Every directory gets a row, not only empty leaves: a
                     # directory's mode is user data too (a read-only tree
@@ -360,13 +418,7 @@ def scan(spec: dict[str, Any]) -> dict[str, Any]:
                             "symlink_target": None,
                         }
                     )
-                elif child.is_file(follow_symlinks=False):
-                    if (
-                        child.name in exclude_basenames
-                        or rel in exclude_rel_files
-                        or child.name.endswith(exclude_suffixes)
-                    ):
-                        continue
+                elif kind == "file":
                     file_entry(child.path, rel)
             except OSError as exc:
                 errors.append({"path": rel, "error": str(exc), "errno": exc.errno})
@@ -379,6 +431,99 @@ def scan(spec: dict[str, Any]) -> dict[str, Any]:
         "errors": errors,
         "hashed": counts["hashed"],
         "reused": counts["reused"],
+        "started_ns": started_ns,
+        "clock_offset_ns": clock_offset_ns,
+        "boot_id": _boot_id(),
+    }
+
+
+def sweep(spec: dict[str, Any]) -> dict[str, Any]:
+    """Which projects changed since their mark, walking each only until it has.
+
+    ``projects`` is ``[{"key", "root", "mark": {"ns", "boot_id", "offset_ns"} | None}]``;
+    the first entries are the likeliest to have changed, since the walk of a
+    changed project stops at its first newer entry and an unchanged one is
+    walked in full. Change time, not mtime: a delete or rename moves the
+    parent directory's, any write or chmod moves the file's, and nothing a
+    program can call sets it back. A missing mark, one from another boot, or
+    one the wall clock has since stepped back past, is changed without a walk.
+    """
+    excluded = _Exclusions(spec)
+    boot_id = _boot_id()
+    offset_ns = _clock_offset_ns()
+    changed: list[str] = []
+    unchanged: list[str] = []
+    missing: list[str] = []
+    visited = 0
+    started = time.monotonic()
+
+    def newer(abs_dir: str, rel_dir: str, mark_ns: int) -> bool:
+        nonlocal visited
+        with os.scandir(abs_dir) as it:
+            for child in it:
+                rel = f"{rel_dir}/{child.name}" if rel_dir else child.name
+                try:
+                    kind = excluded.kind(child, rel, not rel_dir)
+                    if kind is None:
+                        continue
+                    visited += 1
+                    # ``>=``: a coarse timestamp can equal a mark taken just
+                    # before the change.
+                    if child.stat(follow_symlinks=False).st_ctime_ns >= mark_ns:
+                        return True
+                    if kind == "dir" and newer(child.path, rel, mark_ns):
+                        return True
+                except RecursionError:
+                    # A legal but absurdly deep tree: say changed, and let the
+                    # scan settle it, rather than fail the sweep for every
+                    # project on the machine.
+                    return True
+                except OSError as exc:
+                    # Past PATH_MAX nothing can be opened, and the scan
+                    # already reports it as unsaved for good; counting it
+                    # changed would rescan the project on every sweep.
+                    if exc.errno == errno.ENAMETOOLONG:
+                        continue
+                    # Anything else unreadable is the scan's to report; only
+                    # a scan can say whether it hides a file a backup is missing.
+                    return True
+        return False
+
+    for project in spec.get("projects") or ():
+        key, root = project["key"], project["root"]
+        mark = project.get("mark") or {}
+        mark_ns = mark.get("ns")
+        try:
+            root_ctime = os.stat(root, follow_symlinks=False).st_ctime_ns
+        except FileNotFoundError:
+            missing.append(key)
+            continue
+        except OSError:
+            changed.append(key)
+            continue
+        mark_offset = mark.get("offset_ns")
+        if (
+            not isinstance(mark_ns, int)
+            or not boot_id
+            or mark.get("boot_id") != boot_id
+            or not isinstance(mark_offset, int)
+            or offset_ns < mark_offset - _CLOCK_STEP_NS
+        ):
+            changed.append(key)
+            continue
+        try:
+            dirty = root_ctime >= mark_ns or newer(root, "", mark_ns)
+        except OSError:
+            dirty = True
+        (changed if dirty else unchanged).append(key)
+
+    return {
+        "changed": changed,
+        "unchanged": unchanged,
+        "missing": missing,
+        "visited": visited,
+        "walk_ms": int((time.monotonic() - started) * 1000),
+        "boot_id": boot_id,
     }
 
 
@@ -804,7 +949,7 @@ def _push_one(
 
 
 def push(spec: dict[str, Any]) -> dict[str, Any]:
-    root = os.path.abspath(spec["root"])
+    root = _root(spec)
     pack_base = _pack_base(spec, root)
     timeout_s = float(spec.get("timeout_s") or 300)
     items = spec.get("items") or []
@@ -1230,7 +1375,7 @@ def pull(spec: dict[str, Any]) -> dict[str, Any]:
     modes and mtimes are applied exactly once, by the op that places the last
     file; a read-only directory closed early would reject its own children.
     """
-    root = os.path.abspath(spec["root"])
+    root = _root(spec)
     pack_base = _pack_base(spec, root)
     timeout_s = float(spec.get("timeout_s") or 300)
     items = spec.get("items") or []
@@ -1327,7 +1472,7 @@ def pack(spec: dict[str, Any]) -> dict[str, Any]:
     listed under ``changed`` rather than written wrong; the previous chunk
     files are wiped first so a stale one can never be pushed.
     """
-    root = os.path.abspath(spec["root"])
+    root = _root(spec)
     if spec.get("pack_root"):
         base = _pack_base(spec, root)
     else:
@@ -1448,7 +1593,7 @@ def hash_one(spec: dict[str, Any]) -> dict[str, Any]:
     symlink is refused rather than followed: the caller resolved the path
     already, and what sits there now is the only thing it may name.
     """
-    root = os.path.abspath(spec["root"])
+    root = _root(spec)
     path = _resolve_under_root(root, spec.get("path") or "")
     if path is None:
         return {"status": "missing"}
@@ -1485,7 +1630,7 @@ def hash_one(spec: dict[str, Any]) -> dict[str, Any]:
 
 def unlink(spec: dict[str, Any]) -> dict[str, Any]:
     """Remove files under root; used to drop chunks the server relayed itself."""
-    root = os.path.abspath(spec["root"])
+    root = _root(spec)
     pack_base = _pack_base(spec, root)
     removed = 0
     for rel in spec.get("paths") or []:
@@ -1503,6 +1648,7 @@ def unlink(spec: dict[str, Any]) -> dict[str, Any]:
 
 _OPS = {
     "scan": scan,
+    "sweep": sweep,
     "hash": hash_one,
     "push": push,
     "pull": pull,
@@ -1512,7 +1658,7 @@ _OPS = {
 
 
 RESULT_MARKER = "WSFILES_RESULT "
-_USAGE = "usage: wsfiles_transfer.py <scan|hash|push|pull|pack|unlink> (--spec-b64 <base64 json> | <in.json>)\n"
+_USAGE = "usage: wsfiles_transfer.py <scan|sweep|hash|push|pull|pack|unlink> (--spec-b64 <base64 json> | <in.json>)\n"
 
 
 def _load_spec(argv: list[str]) -> dict[str, Any]:
@@ -1524,8 +1670,8 @@ def _load_spec(argv: list[str]) -> dict[str, Any]:
         # The spec file is a one-shot exchange; nothing else reads it.
         _unlink_quiet(argv[2])
     spec = json.loads(raw.decode("utf-8"))
-    if not isinstance(spec, dict) or not isinstance(spec.get("root"), str):
-        raise ValueError("input must be a JSON object with a string 'root'")
+    if not isinstance(spec, dict):
+        raise ValueError("input must be a JSON object")
     return spec
 
 

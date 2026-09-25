@@ -22,6 +22,7 @@ from langgraph.types import Command
 from ptc_agent.core.project_context import ProjectContext, run_with_project
 from src.server.app import setup
 from src.server.database.workspace import update_workspace_activity
+from src.server.services.computer_disk import TURN_MEASURE_MIN_INTERVAL_SECONDS
 from src.server.services.runs.sse_producer import RunSSEProducer
 from src.server.models.chat import (
     ChatRequest,
@@ -67,6 +68,7 @@ from .request_prep import (
     apply_fetch_override,
     build_graph_config,
     build_turn_context,
+    read_disk_notice,
     ensure_thread,
     init_tracking,
     inject_inline_reminders,
@@ -272,7 +274,10 @@ async def astream_ptc_workflow(
             msg_type="ptc",
             initial_query=user_input,
         )
-        turn_context = build_turn_context(request, prior_thread)
+        disk_free_mb, disk_known = await read_disk_notice(workspace_id)
+        turn_context = build_turn_context(
+            request, prior_thread, disk_free_mb=disk_free_mb, disk_known=disk_known
+        )
 
         query_type, fork = _resolve_fork(request=request)
         is_checkpoint_replay = bool(request.checkpoint_id and not request.messages)
@@ -862,10 +867,21 @@ async def astream_ptc_workflow(
                     project=project,
                 )
             try:
-                await ws_manager.backup_project_files(request.workspace_id)
+                # Any project on the machine may have changed, not only this
+                # one: the sweep finds which, and mirrors those.
+                await ws_manager.backup_changed_projects(
+                    request.workspace_id, session=session
+                )
             except Exception as e:
                 logger.warning(
                     f"[PTC_COMPLETE] file backup failed for {thread_id}: {e}"
+                )
+            # A turn is what fills the shared disk, so its end is when the
+            # reading the warning and the next turn's context rely on moves.
+            if session and session.computer_id:
+                await ws_manager.refresh_computer_disk(
+                    session.computer_id,
+                    min_age_s=TURN_MEASURE_MIN_INTERVAL_SECONDS,
                 )
 
         # Start workflow in background with event buffering

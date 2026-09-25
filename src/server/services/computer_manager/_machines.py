@@ -48,6 +48,7 @@ from src.server.services.workspace_status_pubsub import (
 
 from src.server.services.computer_manager._types import (
     _MACHINE_DECISION_LOCK_TIMEOUT_MS,
+    ComputerBinding,
 )
 
 logger = logging.getLogger(__name__)
@@ -624,13 +625,7 @@ class MachineLifecycleMixin:
                     f"Computer {computer_id} lost its tier entitlement; "
                     f"replacing sandbox {previous_ref} at tier {tier!r}"
                 )
-                try:
-                    await self._destroy_sandbox(previous_ref, binding=binding)
-                except SandboxGoneError as e:
-                    logger.warning(
-                        f"Lapsed-tier sandbox {previous_ref} for computer "
-                        f"{computer_id} is already gone ({e}); building a fresh one"
-                    )
+                await self._destroy_sandbox(previous_ref, binding=binding)
                 reconnected = False
             if reconnected:
                 try:
@@ -667,9 +662,11 @@ class MachineLifecycleMixin:
                 origin_workspace_id=computer.get("origin_workspace_id"),
             )
 
+            restored_projects: list[ComputerBinding] = []
             if not reconnected:
                 for workspace_id in await get_live_workspace_ids_for_computer(computer_id):
                     project_binding = await self.resolve_binding(workspace_id)
+                    restored_projects.append(project_binding)
                     await self._ensure_workspace_dirs(
                         workspace_id, session.sandbox, project_binding.dir_name,
                     )
@@ -733,6 +730,20 @@ class MachineLifecycleMixin:
                 )
 
             self._put_session(computer_id, session)
+            # Each restore above cleared its completeness flag for a sandbox
+            # no row named yet, so the clear matched nothing. Repeat it now
+            # the bind has landed, as the single-project path does, or a
+            # project nobody opens on this sandbox keeps the flag and none of
+            # its deletions ever prune. A failure leaves the flag up, which
+            # is the safe side; it is no reason to unwind a bound machine.
+            for project_binding in restored_projects:
+                try:
+                    await self._maybe_restore_files(project_binding, session.sandbox)
+                except Exception as e:
+                    logger.warning(
+                        f"Could not settle the restore flag for "
+                        f"{project_binding.workspace_id} after binding: {e}"
+                    )
             self._record_sync(computer_id)
             await update_computer_activity(computer_id)
             logger.info(

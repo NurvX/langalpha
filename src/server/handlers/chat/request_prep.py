@@ -488,7 +488,13 @@ async def ensure_thread(
     return prior
 
 
-def build_turn_context(request: ChatRequest, prior: PriorThread) -> TurnContext:
+def build_turn_context(
+    request: ChatRequest,
+    prior: PriorThread,
+    *,
+    disk_free_mb: int | None = None,
+    disk_known: bool = False,
+) -> TurnContext:
     """What this turn knows about itself: the request's surface plus the prior row.
 
     Origin, surface and rules all come from the request alone, because they
@@ -496,13 +502,35 @@ def build_turn_context(request: ChatRequest, prior: PriorThread) -> TurnContext:
     thread can take a manual follow-up: that turn has a person waiting on it,
     and the automation line in the rules would tell the model otherwise. An
     automation stamps the origin on every request it sends, so nothing is lost.
+    ``disk_free_mb`` and ``disk_known`` come from :func:`read_disk_notice`.
     """
     return TurnContext(
         last_turn_at=prior.last_turn_at,
         platform=request.platform,
         origin=request.origin.type if request.origin else None,
         surface_rules=request.surface_rules,
+        disk_free_mb=disk_free_mb,
+        disk_known=disk_known,
     )
+
+
+async def read_disk_notice(workspace_id: str) -> tuple[int | None, bool]:
+    """The shared disk's free megabytes once low enough to tell the agent, and
+    whether a current reading backs the answer.
+
+    Read off the stored reading, never measured here: a turn does not wait on
+    the sandbox for context. A failed read is unknown, never "not low", so it
+    cannot take back an earlier low-disk line.
+    """
+    from src.server.database.computer import get_computer_for_workspace
+    from src.server.services.computer_disk import disk_is_known, low_disk_free_mb
+
+    try:
+        computer = await get_computer_for_workspace(workspace_id)
+    except Exception as e:  # noqa: BLE001 - context is never worth failing a turn for
+        logger.debug(f"Low-disk notice skipped for {workspace_id}: {e}")
+        return None, False
+    return low_disk_free_mb(computer), disk_is_known(computer)
 
 
 def _slash_text_target(content: Any) -> tuple[str, dict | None]:

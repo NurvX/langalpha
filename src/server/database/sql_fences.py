@@ -22,13 +22,55 @@ FENCE_NOT_DELETED = "status <> 'deleted'"
 # it and overwrite the 'flash' marker with the machine's own status.
 FENCE_LIVE_WORKSPACE = "status NOT IN ('deleted', 'flash')"
 
-# One literal column list keeps every dict_row result shape consistent.
-COMPUTER_COLS = (
-    "computer_id, user_id, kind, provider_ref, name, is_primary, status, "
-    "resource_tier, is_always_on, platform_secret_version, mcp_config_version, "
-    "root_dir, layout_version, origin_workspace_id, provider_config, artifacts, "
-    "last_activity_at, stopped_at, created_at, updated_at, config"
+# The worker running a spec change stamps heartbeat_at on its record every
+# SPEC_CHANGE_HEARTBEAT_SECONDS. A record still in progress with no stamp for
+# SPEC_CHANGE_STALE_SECONDS has lost its worker (a crash never runs the
+# settle), so readers report it interrupted and a new request may take the
+# row over. The window is a few missed heartbeats, not the length of a change:
+# a multi-GB backup and restore runs for as long as it needs while its worker
+# keeps reporting in.
+SPEC_CHANGE_HEARTBEAT_SECONDS = 30
+SPEC_CHANGE_STALE_SECONDS = 3 * 60
+
+
+def spec_change_stale(qualifier: str = "") -> str:
+    """Whether the row's spec change is in progress past the stale window.
+
+    Evaluated on the database clock so the API's reading and the claim's
+    takeover decision can never disagree about which side of it a row is on.
+    A record written before heartbeats existed is aged from its start.
+    """
+    col = f"{qualifier}spec_change"
+    return (
+        f"COALESCE({col}->>'state' = 'in_progress'"
+        f" AND COALESCE({col}->>'heartbeat_at', {col}->>'started_at')::timestamptz"
+        f" < NOW() - make_interval(secs => {SPEC_CHANGE_STALE_SECONDS}), FALSE)"
+    )
+
+
+_COMPUTER_COLUMNS = (
+    "computer_id", "user_id", "kind", "provider_ref", "name", "is_primary",
+    "status", "resource_tier", "is_always_on", "platform_secret_version",
+    "mcp_config_version", "root_dir", "layout_version", "origin_workspace_id",
+    "provider_config", "artifacts", "last_activity_at", "stopped_at",
+    "created_at", "updated_at", "config", "disk_total_bytes", "disk_used_bytes",
+    "disk_free_bytes", "disk_measured_at", "disk_sandbox_ref", "spec_change",
 )
+
+
+def computer_cols(alias: str = "") -> str:
+    """The computers select list, optionally qualified for a join.
+
+    Ends with the derived ``spec_change_stale``, so every reader of a row gets
+    staleness from the same clock without asking for it.
+    """
+    prefix = f"{alias}." if alias else ""
+    cols = ", ".join(f"{prefix}{col}" for col in _COMPUTER_COLUMNS)
+    return f"{cols}, {spec_change_stale(prefix)} AS spec_change_stale"
+
+
+# One column list keeps every dict_row result shape consistent.
+COMPUTER_COLS = computer_cols()
 
 # migration 046's dir_name column width. The separator and the hex suffix come
 # out of the slug's budget, so widening the suffix cannot overflow the column.

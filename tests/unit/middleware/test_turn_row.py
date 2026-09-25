@@ -682,6 +682,73 @@ class TestTheDeliveryRulesRideWhenTheyAreNews:
         assert SLACK_RULES in text
 
 
+class TestTheLowDiskLineIsTakenBack:
+    """The low-disk line is an instruction in a row nothing rewrites, so the
+    first turn after it stops applying has to say so."""
+
+    LOW = "The computer's disk is nearly full"
+    RECOVERED = "no longer reported as nearly full"
+
+    @pytest.mark.asyncio
+    async def test_the_turn_after_a_low_one_states_the_recovery(self):
+        low = await _row(disk_free_mb=180)
+        assert _provenance(low)["disk_low"] is True
+
+        cleared = await _row(disk_known=True, state=_state([low]))
+
+        assert self.RECOVERED in cleared.content
+        assert self.LOW not in cleared.content
+        assert _provenance(cleared)["disk_low"] is False
+
+    @pytest.mark.asyncio
+    async def test_the_recovery_is_stated_once(self):
+        low = await _row(disk_free_mb=180)
+        cleared = await _row(disk_known=True, state=_state([low]))
+
+        again = await _row(disk_known=True, state=_state([low, cleared]))
+
+        assert self.RECOVERED not in again.content
+
+    @pytest.mark.asyncio
+    async def test_a_turn_without_a_reading_takes_nothing_back(self):
+        """A failed read or a reading cleared by a spec change is unknown, not
+        healthy: the recovery waits for a reading that shows it."""
+        low = await _row(disk_free_mb=180)
+
+        unknown = await _row(state=_state([low]))
+        assert self.RECOVERED not in unknown.content
+        assert "disk_low" not in _provenance(unknown)
+
+        known = await _row(disk_known=True, state=_state([low, unknown]))
+        assert self.RECOVERED in known.content
+
+    @pytest.mark.asyncio
+    async def test_a_disk_that_stays_low_is_stated_again(self):
+        low = await _row(disk_free_mb=180)
+
+        still = await _row(disk_free_mb=120, state=_state([low]))
+
+        assert "nearly full: 120 MB free" in still.content
+        assert self.RECOVERED not in still.content
+
+    @pytest.mark.asyncio
+    async def test_a_low_row_behind_the_cutoff_needs_no_recovery(self):
+        low = await _row(disk_free_mb=180)
+
+        cleared = await _row(disk_known=True, state=_state([low], cutoff_index=1))
+
+        assert self.RECOVERED not in cleared.content
+
+    @pytest.mark.asyncio
+    async def test_a_subagent_neither_states_nor_stamps_the_disk(self):
+        low = await _row(disk_free_mb=180)
+
+        sub = await _row(is_subagent=True, disk_known=True, state=_state([low]))
+
+        assert self.RECOVERED not in sub.content
+        assert "disk_low" not in _provenance(sub)
+
+
 class TestTheRowIsRenderedOnce:
     @pytest.mark.asyncio
     async def test_it_renders_identically_at_both_guidance_levels(self):

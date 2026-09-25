@@ -432,6 +432,32 @@ async def test_a_path_too_long_to_record_is_unsaved_and_never_written():
     assert result.oversized == 2 and result.errors == 0
 
 
+@pytest.mark.asyncio
+async def test_a_path_over_the_byte_cutoff_keeps_the_row_it_already_has():
+    """The cutoff counts bytes and the column counts characters, so a
+    multibyte path can have a row from before the cutoff. Dropping it from
+    the listing must not read as a deletion and prune that row."""
+    wide = "文" * 700 + ".txt"
+    listing = _scan(
+        ScanEntry("keep.txt", "file", 10, MTIME_NS, 0o644, "x", None, None),
+        ScanEntry(wide, "file", 10, MTIME_NS, 0o644, "w", None, None),
+    )
+    with (
+        patch("src.server.services.persistence.backup.PACK_CUTOFF", -1),
+        patch("src.server.services.persistence.backup.is_storage_enabled", return_value=False),
+        patch("src.server.services.persistence.backup.scan_workspace", new=AsyncMock(return_value=listing)),
+        patch("src.server.services.persistence.backup.files_restore_incomplete", new=AsyncMock(return_value=False)),
+        patch("src.server.services.persistence.backup.get_file_metadata_for_sync", new=AsyncMock(return_value={})),
+        patch("src.server.services.persistence.backup.get_workspace_total_size", new=AsyncMock(return_value=10)),
+        patch("src.server.services.persistence.backup._persist_inline", new=AsyncMock(return_value=(1, []))),
+        patch("src.server.services.persistence.backup.delete_removed_files", new=AsyncMock(return_value=0)) as prune,
+    ):
+        result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
+
+    assert wide in prune.await_args.args[1]
+    assert [(f.path, f.reason) for f in result.unsaved] == [(wide, "path_too_long")]
+
+
 def test_the_manifest_bound_counts_bytes_as_well_as_characters():
     from src.server.database.workspace_file import path_fits_manifest
 

@@ -137,6 +137,18 @@ class TestThePointerReachesTheModel:
         assert "subagent reporting to a parent agent" not in text
 
 
+class TestTheLowDiskLine:
+    @pytest.mark.asyncio
+    async def test_a_low_disk_is_stated_in_megabytes(self):
+        text = await _rendered_request(disk_free_mb=180)
+
+        assert "The computer's disk is nearly full: 180 MB free" in text
+
+    @pytest.mark.asyncio
+    async def test_no_reading_states_nothing(self):
+        assert "nearly full" not in await _rendered_request()
+
+
 #: What a channel gateway sends for its own surface, since langalpha ships no
 #: wording for one.
 CALLER_RULES = "Surface slack: plain text, a few short paragraphs, no widgets."

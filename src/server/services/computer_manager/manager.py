@@ -13,12 +13,14 @@ from ptc_agent.config import AgentConfig
 from src.server.services.workspace_entitlements import WorkspaceEntitlementsMixin
 
 from src.server.services.computer_manager._types import MachineState
+from src.server.services.computer_manager._machine_backup import MachineBackupMixin
 from src.server.services.computer_manager._lifecycle import SessionLifecycleMixin
 from src.server.services.computer_manager._machines import MachineLifecycleMixin
 from src.server.services.computer_manager._mcp import McpSecretsMixin
 from src.server.services.computer_manager._providers import ProviderMixin
 from src.server.services.computer_manager._provisioning import ProvisioningMixin
 from src.server.services.computer_manager._sessions import SessionCacheMixin
+from src.server.services.computer_manager._spec import ComputerSpecMixin
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +29,11 @@ class ComputerManager(
     SessionCacheMixin,
     ProviderMixin,
     ProvisioningMixin,
+    MachineBackupMixin,
     McpSecretsMixin,
     SessionLifecycleMixin,
     MachineLifecycleMixin,
+    ComputerSpecMixin,
     WorkspaceEntitlementsMixin,
 ):
     _instance: Optional["ComputerManager"] = None

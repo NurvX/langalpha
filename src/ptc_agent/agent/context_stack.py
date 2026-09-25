@@ -86,6 +86,8 @@ def build_context_middleware(
             platform=turn.platform,
             origin=turn.origin,
             surface_rules=turn.surface_rules,
+            disk_free_mb=turn.disk_free_mb,
+            disk_known=turn.disk_known,
         ),
         baseline=BaselineContextMiddleware(
             session=session,

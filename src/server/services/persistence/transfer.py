@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import shlex
@@ -23,6 +24,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from ptc_agent.core.paths import (
@@ -85,6 +87,16 @@ SYNC_MARKER_NAME = ".file_sync_marker"
 # what changed, the sandbox hashes at ~1.5 GB/s, and a tier's writable layer
 # is the most it can ever hold, so even a cold tenth of that rate fits.
 SCAN_TIMEOUT_S = 300
+# A sweep reads metadata only (~185k entries/s on a one-CPU sandbox, measured),
+# so this is a stuck exec, not a big computer.
+SWEEP_TIMEOUT_S = 30
+# How far before a scan's start its mark sits. An inode nobody has stat-ed
+# lately takes its change time from the coarse clock, at most one tick behind
+# the wall (10 ms at HZ=100; 1.6 ms measured on kernel 6.17 overlayfs), so a
+# write just after the mark could read as older. Ten ticks of headroom. Wider
+# is not safer, only costlier: a write inside the margin makes the project
+# sync once more on the next pass, and turns often end with a write.
+SCAN_MARK_MARGIN_NS = 100_000_000
 # Transfer timeouts scale with bytes at a floor bandwidth so a large workspace
 # on a slow link is not cut off, while an idle exchange still ends. The floor
 # is deliberately pessimistic against a measured ~210 ms per PUT, so the
@@ -248,6 +260,22 @@ class ScanResult:
     errors: list[dict[str, Any]]
     hashed: int
     reused: int
+    # The sandbox clock when the walk began, and the boot it belongs to:
+    # the raw material of the project's scan mark.
+    started_ns: int | None = None
+    boot_id: str | None = None
+    # Wall clock minus boot clock at the start: lets a sweep see a clock
+    # stepped back since (see ScanMark).
+    clock_offset_ns: int | None = None
+
+
+@dataclass(slots=True)
+class SweepResult:
+    changed: list[str]
+    unchanged: list[str]
+    missing: list[str]
+    visited: int
+    walk_ms: int
 
 
 def _transfer_roots(layout: WorkspaceLayout) -> dict[str, str]:
@@ -281,6 +309,40 @@ def exclusion_spec(max_file_bytes: int | None) -> dict[str, Any]:
         "exclude_suffixes": sorted(EXCLUDE_SUFFIXES),
         "max_file_bytes": max_file_bytes,
     }
+
+
+@lru_cache(maxsize=1)
+def _runtime_digest() -> str:
+    return hashlib.sha256(_TRANSFER_RUNTIME_SOURCE.read_bytes()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ScanRules:
+    """What a scan could see and store, as one fingerprint a mark can carry.
+
+    A mark vouches that nothing changed since its scan, but only among the
+    files that scan admitted. Narrow an exclusion or raise the cap (object
+    storage switched on, a relay deployment moved to direct) and a file that
+    was skipped becomes eligible with no change time moving, so a sweep
+    would skip it for the sandbox's life. The runtime's own source is the
+    third input: it holds the walk and the sweep's comparison, and hashing
+    it retires every mark on a runtime change without a version constant
+    someone has to remember to bump. Each retired mark costs one full sync,
+    which is what every turn paid before the sweep.
+    """
+
+    max_file_bytes: int | None
+    fingerprint: str
+
+    @classmethod
+    def of(cls, max_file_bytes: int | None) -> ScanRules:
+        """The rules a scan under ``max_file_bytes`` runs under on this build."""
+        canonical = json.dumps(
+            {"exclusions": exclusion_spec(max_file_bytes), "runtime": _runtime_digest()},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return cls(max_file_bytes, hashlib.sha256(canonical.encode()).hexdigest()[:16])
 
 
 def _script_path(sandbox: Any) -> str:
@@ -439,6 +501,132 @@ async def scan_workspace(
         errors=out.get("errors", []),
         hashed=int(out.get("hashed") or 0),
         reused=int(out.get("reused") or 0),
+        started_ns=out.get("started_ns") if isinstance(out.get("started_ns"), int) else None,
+        boot_id=out.get("boot_id") or None,
+        clock_offset_ns=(
+            out.get("clock_offset_ns")
+            if isinstance(out.get("clock_offset_ns"), int)
+            else None
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ScanMark:
+    """What a clean pass vouches for: nothing in the project changed before ``ns``.
+
+    ``boot_id`` and ``sandbox_id`` scope that claim. A change time means
+    nothing across a reboot, and a container shares its host's boot id, so a
+    recreated sandbox holding a restore can share the boot of the one that
+    wrote the mark; only the sandbox id tells them apart. ``rules`` scopes it
+    to the files the scan admitted (see ``ScanRules``). ``offset_ns`` is the
+    wall clock's distance from the boot clock when the mark was taken: a
+    change time is only comparable to ``ns`` while the wall clock has not
+    been stepped back since, and the sweep checks exactly that. The runtime
+    never sees the sandbox id or the rules: both are settled here, so the
+    wire carries only the time, the boot and the offset.
+    """
+
+    ns: int
+    boot_id: str
+    sandbox_id: str
+    rules: str
+    offset_ns: int
+
+    @classmethod
+    def of(cls, scan: ScanResult, sandbox: Any, rules: ScanRules) -> ScanMark | None:
+        """The mark a clean pass over ``scan`` records, or None when it cannot vouch.
+
+        A runtime that predates the sweep reports no start time, and a sandbox
+        without an id could be any sandbox; either way no mark is better than
+        one a later sweep would trust wrongly. ``rules`` are the ones the scan
+        ran under, not the current ones: the two only differ mid-deploy, and
+        the mark must describe the pass that was made.
+        """
+        sandbox_id = getattr(sandbox, "sandbox_id", None)
+        if (
+            scan.started_ns is None
+            or scan.clock_offset_ns is None
+            or not scan.boot_id
+            or not sandbox_id
+        ):
+            return None
+        return cls(
+            scan.started_ns - SCAN_MARK_MARGIN_NS,
+            scan.boot_id,
+            str(sandbox_id),
+            rules.fingerprint,
+            scan.clock_offset_ns,
+        )
+
+    @classmethod
+    def trusted(
+        cls, stored: dict[str, Any] | None, sandbox_id: str | None, rules: ScanRules
+    ) -> ScanMark | None:
+        """The stored mark if it vouches for ``sandbox_id``'s files under ``rules``.
+
+        A mark from other rules, or from before marks carried rules or a
+        clock offset, is not trusted: the project syncs in full once, and the
+        new mark takes over.
+        """
+        if not stored or not sandbox_id or stored.get("sandbox_id") != sandbox_id:
+            return None
+        if stored.get("rules") != rules.fingerprint:
+            return None
+        ns, boot_id = stored.get("ns"), stored.get("boot_id")
+        offset_ns = stored.get("offset_ns")
+        if not isinstance(ns, int) or not boot_id or not isinstance(offset_ns, int):
+            return None
+        return cls(ns, boot_id, sandbox_id, rules.fingerprint, offset_ns)
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "ns": self.ns,
+            "boot_id": self.boot_id,
+            "sandbox_id": self.sandbox_id,
+            "rules": self.rules,
+            "offset_ns": self.offset_ns,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SweepTarget:
+    """One project folder for a sweep; no mark means changed without a walk."""
+
+    key: str
+    root: str
+    mark: ScanMark | None
+
+
+async def sweep_projects(sandbox: Any, targets: list[SweepTarget]) -> SweepResult:
+    """Which of ``targets`` changed since their marks, in one exec.
+
+    List the likeliest-changed first: the walk of a changed project stops at
+    its first newer entry. The walk honours the backup's own exclusions, so an
+    entry the scan would skip never makes a project look changed.
+    """
+    spec = exclusion_spec(None)
+    spec["projects"] = [
+        {
+            "key": t.key,
+            "root": t.root,
+            "mark": (
+                {"ns": t.mark.ns, "boot_id": t.mark.boot_id, "offset_ns": t.mark.offset_ns}
+                if t.mark
+                else None
+            ),
+        }
+        for t in targets
+    ]
+    out = await run_transfer_op(sandbox, "sweep", spec, timeout_s=SWEEP_TIMEOUT_S)
+    if "changed" not in out:
+        raise TransferRuntimeError(f"sweep returned no result: {out.get('error')}")
+    return SweepResult(
+        changed=list(out.get("changed") or ()),
+        unchanged=list(out.get("unchanged") or ()),
+        missing=list(out.get("missing") or ()),
+        visited=int(out.get("visited") or 0),
+        walk_ms=int(out.get("walk_ms") or 0),
     )
 
 

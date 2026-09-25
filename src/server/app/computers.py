@@ -11,8 +11,8 @@ import contextlib
 import logging
 from typing import Any, Callable, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import Response, StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 
 from ptc_agent.core.sandbox.runtime import SandboxGoneError, SandboxTransientError
 from src.server.services.persistence.sync_result import BackupIncomplete
@@ -27,9 +27,13 @@ from src.server.database.computer import (
     get_computer,
     get_computers_for_user,
     observed_layout_version,
+    rename_computer as db_rename_computer,
     update_computer_status,
 )
-from src.server.database.workspace import count_live_workspaces_by_computer
+from src.server.database.workspace import (
+    count_live_workspaces_by_computer,
+    get_live_workspace_folders_for_computer,
+)
 from src.server.dependencies.usage_limits import (
     assert_spec_allowed,
     platform_gating_active,
@@ -40,9 +44,25 @@ from src.server.models.computer import (
     ComputerAlwaysOnRequest,
     ComputerCreate,
     ComputerListResponse,
+    ComputerRenameRequest,
     ComputerResponse,
     ComputerSessionResponse,
     ComputerSpecRequest,
+    ComputerStorageResponse,
+)
+from src.server.services.computer_disk import (
+    STORAGE_BREAKDOWN_MAX_AGE_SECONDS,
+    disk_from_row,
+    storage_breakdown,
+)
+from src.server.services.computer_errors import (
+    ComputerBusyError,
+    MachineBusyError,
+)
+from src.server.services.spec_change import (
+    SPEC_CHANGE_IN_PROGRESS,
+    spec_change_from_row,
+    spec_refusal,
 )
 from src.server.services.workspace_status_pubsub import (
     publish_computer_status_change,
@@ -80,8 +100,13 @@ def _computer_manager() -> Any:
 
 
 @contextlib.asynccontextmanager
-async def _computer_action_errors(action: str, computer_id: str):
-    """Let sandbox failures reach the app-level handler that owns their wording."""
+async def _computer_action_errors(action: str, computer_id: str, *, spec: bool = False):
+    """Let sandbox failures reach the app-level handler that owns their wording.
+
+    A refusal the client can act on is a 409 in the spec change's error shape,
+    the same one an accepted change's outcome carries. ``spec`` also names the
+    unsaved files of an incomplete backup; elsewhere that stays a 400 sentence.
+    """
     try:
         yield
     except HTTPException:
@@ -93,11 +118,22 @@ async def _computer_action_errors(action: str, computer_id: str):
         ) from None
     except (SandboxGoneError, SandboxTransientError):
         raise
+    except MachineBusyError as e:
+        raise HTTPException(
+            status_code=409, detail=spec_refusal("turn_active", str(e))
+        ) from None
+    except ComputerBusyError as e:
+        raise HTTPException(status_code=409, detail=spec_refusal("busy", str(e))) from None
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except BackupIncomplete as e:
         # The ids and causes are the operator's; the person asking gets files.
         logger.warning(f"Refused to {action}: {e}")
+        if spec:
+            raise HTTPException(
+                status_code=409,
+                detail=spec_refusal("backup_incomplete", e.user_message, e.unsaved),
+            ) from None
         raise HTTPException(status_code=400, detail=e.user_message) from None
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -111,6 +147,13 @@ def require_computer_owner(computer: Optional[dict], *, user_id: str) -> None:
         raise HTTPException(status_code=404, detail="Computer not found")
     if computer.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _spec_in_progress() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail=spec_refusal("spec_in_progress", SPEC_CHANGE_IN_PROGRESS),
+    )
 
 
 def computer_to_response(
@@ -135,6 +178,8 @@ def computer_to_response(
         last_activity_at=computer.get("last_activity_at"),
         stopped_at=computer.get("stopped_at"),
         config=computer.get("config"),
+        disk=disk_from_row(computer),
+        spec_change=spec_change_from_row(computer),
     )
 
 
@@ -280,6 +325,53 @@ async def _counted_response(computer: Dict[str, Any]) -> ComputerResponse:
 @router.get("/{computer_id}", response_model=ComputerResponse)
 async def get_computer_details(computer_id: str, x_user_id: CurrentUserId):
     return await _counted_response(await _owned_computer(computer_id, x_user_id))
+
+
+@router.patch("/{computer_id}", response_model=ComputerResponse)
+async def rename_computer(
+    computer_id: str,
+    request: ComputerRenameRequest,
+    x_user_id: CurrentUserId,
+):
+    await _owned_computer(computer_id, x_user_id)
+    updated = await db_rename_computer(computer_id, request.name)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Computer not found")
+    return await _counted_response(updated)
+
+
+@router.get("/{computer_id}/storage", response_model=ComputerStorageResponse)
+async def get_computer_storage(computer_id: str, x_user_id: CurrentUserId):
+    """Measure now when the machine runs; otherwise answer the last reading.
+
+    A stopped machine is never started for this: the stored reading is what
+    the warning already shows, and a folder breakdown is not worth a boot. A
+    breakdown taken in the last minute is answered again: the panel asks on
+    every open, and each measurement is a du over the whole root.
+    """
+    computer = await _owned_computer(computer_id, x_user_id)
+    try:
+        manager = _computer_manager()
+    except ComputerRuntimeUnavailable:
+        return ComputerStorageResponse(disk=disk_from_row(computer), live=False)
+    if not manager.measures_disk(computer):
+        return ComputerStorageResponse(disk=None, live=False)
+
+    computer, sizes = await manager.refresh_computer_disk(
+        computer,
+        breakdown=True,
+        breakdown_max_age_s=STORAGE_BREAKDOWN_MAX_AGE_SECONDS,
+    )
+    if sizes is None:
+        return ComputerStorageResponse(disk=disk_from_row(computer), live=False)
+    folders = await get_live_workspace_folders_for_computer(computer_id)
+    workspaces, other = storage_breakdown(computer, folders, sizes)
+    return ComputerStorageResponse(
+        disk=disk_from_row(computer),
+        workspaces=workspaces,
+        other_bytes=other,
+        live=True,
+    )
 
 
 @router.get("/{computer_id}/session", response_model=ComputerSessionResponse)
@@ -429,27 +521,62 @@ async def archive_computer(computer_id: str, x_user_id: CurrentUserId):
         )
 
 
-@router.post("/{computer_id}/spec", response_model=ComputerResponse)
+@router.post(
+    "/{computer_id}/spec", response_model=ComputerResponse, status_code=202
+)
 async def set_computer_spec(
     computer_id: str,
     request: ComputerSpecRequest,
+    response: Response,
     x_user_id: CurrentUserId,
 ):
-    """Skip the count check for the current tier so retries at quota remain valid.
+    """Accept a spec change and run it after answering; the outcome lands on ``spec_change``.
 
-    Platform gates return 403 off-plan or 429 over quota; OSS gates are no-ops.
+    A recreate takes minutes, longer than an edge proxy holds a request open,
+    so the refusals a client can act on are answered here (403 off-plan, 429
+    over quota, 409 ``turn_active``, ``spec_in_progress`` or ``busy``) and
+    everything after is read back from the row. The current tier skips the
+    count check so retries at quota remain valid, and answers 200 unchanged.
     """
-    async with _computer_action_errors("set spec for", computer_id):
-        await _owned_computer(computer_id, x_user_id)
-        updated = await _computer_manager().set_computer_spec(
-            computer_id, request.tier, user_id=x_user_id
+    async with _computer_action_errors("set spec for", computer_id, spec=True):
+        computer = await _owned_computer(computer_id, x_user_id)
+        running = spec_change_from_row(computer)
+        if running is not None and running.state == "in_progress":
+            # Ahead of the same-tier shortcut: a running change persists its
+            # target tier early, so a repeat would otherwise read as done.
+            raise _spec_in_progress()
+        manager = _computer_manager()
+        if await manager.precheck_computer_spec(computer, request.tier):
+            response.status_code = 200
+            return await _counted_response(computer)
+        if platform_gating_active():
+            await assert_spec_allowed(
+                x_user_id,
+                request.tier,
+                current_tier=computer.get("resource_tier") or "standard",
+            )
+        claimed = await manager.claim_computer_spec(computer_id, request.tier)
+        if claimed is None:
+            if await get_computer(computer_id) is None:
+                raise HTTPException(status_code=404, detail="Computer not found")
+            raise _spec_in_progress()
+        claim_id = claimed["spec_change"]["claim_id"]
+        # Keyed by the claim, not the machine: the row already refuses a second
+        # fresh change, and a stale takeover must get a runner of its own
+        # rather than be deduplicated onto the one it replaced.
+        schedule_start(
+            f"computer-spec:{computer_id}:{claim_id}",
+            lambda: manager.run_accepted_spec_change(
+                computer_id, request.tier, user_id=x_user_id, claim_id=claim_id
+            ),
         )
-        if updated is None:
-            raise HTTPException(status_code=404, detail="Computer not found")
         logger.info(
-            f"Set computer {computer_id} spec to {request.tier!r} for user {x_user_id}"
+            "Accepted spec change of computer %s to %r for user %s",
+            computer_id,
+            request.tier,
+            x_user_id,
         )
-        return await _counted_response(updated)
+        return await _counted_response(claimed)
 
 
 @router.post("/{computer_id}/always-on", response_model=ComputerResponse)

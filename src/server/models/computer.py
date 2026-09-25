@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.server.services.persistence.sync_result import UnsavedReason
+
 
 class ComputerStatus(StrEnum):
     """Computer lifecycle states: the workspace set minus ``flash``.
@@ -65,6 +67,119 @@ class ComputerAlwaysOnRequest(BaseModel):
     """Request model for toggling a computer's always-on flag."""
 
     enabled: bool = Field(description="Whether to keep the computer always-on")
+
+
+class ComputerRenameRequest(BaseModel):
+    """Request model for renaming a computer."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(
+        min_length=1, max_length=255, description="New user-facing computer name"
+    )
+
+
+DiskLevel = Literal["healthy", "notice", "warning", "critical"]
+
+
+class ComputerDisk(BaseModel):
+    """The last disk reading taken on a computer, shared by every workspace on it."""
+
+    used_bytes: int = Field(description="Bytes in use on the computer's disk")
+    total_bytes: int = Field(description="Size of the computer's disk in bytes")
+    free_bytes: int = Field(description="Bytes still free on the computer's disk")
+    measured_at: datetime = Field(description="When the reading was taken")
+    level: DiskLevel = Field(
+        description="How close the disk is to full, from free space alone"
+    )
+
+
+SpecChangeState = Literal["in_progress", "succeeded", "failed"]
+
+# Why an accepted change failed, read back from the row.
+SpecChangeErrorCode = Literal[
+    "turn_active",
+    "backup_incomplete",
+    "busy",
+    "interrupted",
+    "disk_too_small",
+    "not_allowed",
+    "unknown",
+]
+
+# Why POST /computers/{id}/spec refused to accept a change (409).
+SpecRefusalCode = Literal[
+    "turn_active", "spec_in_progress", "busy", "backup_incomplete"
+]
+
+
+class UnsavedFileOut(BaseModel):
+    """A file a strict backup could not save, so its only copy is on the machine."""
+
+    path: str
+    reason: UnsavedReason
+    size: Optional[int] = None
+
+
+class SpecChangeError(BaseModel):
+    """Why a spec change failed, in a shape a client can map to copy."""
+
+    code: SpecChangeErrorCode
+    message: str = Field(description="A sentence the user can be shown as is")
+    files: List[UnsavedFileOut] = Field(
+        default_factory=list,
+        description="For backup_incomplete: the files the backup could not save",
+    )
+
+
+class SpecChangeRefusal(BaseModel):
+    """The 409 detail of a spec change refused before it was accepted.
+
+    Same shape as :class:`SpecChangeError`, so a client renders a refusal and
+    a failed outcome with one piece of code.
+    """
+
+    code: SpecRefusalCode
+    message: str
+    files: List[UnsavedFileOut] = Field(default_factory=list)
+
+
+class ComputerSpecChange(BaseModel):
+    """The last spec change requested on a computer and how it went.
+
+    The change runs after the request that asked for it has returned, so this
+    is how a client learns the outcome. Stored as this shape in
+    ``computers.spec_change``.
+    """
+
+    target_tier: str = Field(description="Tier the change moves to")
+    from_tier: str = Field(description="Tier the computer was at when it began")
+    state: SpecChangeState
+    error: Optional[SpecChangeError] = None
+    started_at: datetime
+    heartbeat_at: Optional[datetime] = Field(
+        None,
+        description=(
+            "When the worker running this change last reported in. Null on "
+            "changes recorded before it existed."
+        ),
+    )
+    finished_at: Optional[datetime] = None
+    claim_id: Optional[str] = Field(
+        None,
+        description=(
+            "Identifies this change; a new request gets a new one. Null on "
+            "changes recorded before it existed."
+        ),
+    )
+    took_over: bool = Field(
+        False,
+        description=(
+            "This change took over one whose worker stopped reporting, so the "
+            "machine's real size is unknown and it is rebuilt even at the "
+            "tier the row reads."
+        ),
+    )
 
 
 class ComputerResponse(BaseModel):
@@ -125,8 +240,49 @@ class ComputerResponse(BaseModel):
         None,
         description="Configuration settings",
     )
+    disk: Optional[ComputerDisk] = Field(
+        None,
+        description=(
+            "Last disk reading. Null when never measured, or when the disk has "
+            "no size of its own (a local computer without a storage quota)."
+        ),
+    )
+    spec_change: Optional[ComputerSpecChange] = Field(
+        None,
+        description="The last spec change and its outcome; null when none was requested",
+    )
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class WorkspaceStorage(BaseModel):
+    """One workspace folder's share of its computer's disk."""
+
+    workspace_id: str
+    name: str
+    dir_name: Optional[str] = None
+    bytes: int
+
+
+class ComputerStorageResponse(BaseModel):
+    """A computer's disk with each workspace folder's size."""
+
+    disk: Optional[ComputerDisk] = None
+    workspaces: List[WorkspaceStorage] = Field(
+        default_factory=list,
+        description="Workspace folders by size, largest first",
+    )
+    other_bytes: int = Field(
+        0,
+        description="Used bytes outside any workspace folder (packages, caches)",
+    )
+    live: bool = Field(
+        False,
+        description=(
+            "Whether this was measured on the running machine (now, or within "
+            "the last minute) rather than read from the stored reading"
+        ),
+    )
 
 
 class ComputerListResponse(BaseModel):
