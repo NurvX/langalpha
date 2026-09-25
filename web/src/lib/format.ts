@@ -61,6 +61,32 @@ export function createDateFormatter(opts: Intl.DateTimeFormatOptions): (d: Date 
   };
 }
 
+const zoneNames = new Map<string, string>();
+
+/** A zone's name in the reader's language ("Eastern Time", "中国标准时间"),
+ *  or in `locale`. UTC stays "UTC", which Intl would call "GMT". The short
+ *  style names the country where a zone is a whole one ("Germany Time"). */
+export function formatTimezoneName(
+  tz: string,
+  locale: string = i18n.language,
+  style: 'longGeneric' | 'shortGeneric' = 'longGeneric',
+): string {
+  if (tz === 'UTC' || tz === 'Etc/UTC') return 'UTC';
+  const key = `${locale}|${style}|${tz}`;
+  let name = zoneNames.get(key);
+  if (name === undefined) {
+    try {
+      name = safeDateFormat(locale, { timeZone: tz, timeZoneName: style })
+        .formatToParts(new Date())
+        .find((p) => p.type === 'timeZoneName')?.value ?? tz;
+    } catch {
+      name = tz;
+    }
+    zoneNames.set(key, name);
+  }
+  return name;
+}
+
 // Compact short-form integer formatter — `1234 → "1.2K"`, `5_142 → "5.1K"`,
 // `1_500_000 → "1.5M"`. Locale-aware via Intl. Numbers under 1000 render in
 // full; suffix style follows the active locale (en `K`, zh `万`, etc).
@@ -98,11 +124,11 @@ export function formatBytes(bytes: number): string {
   return `${byteAmount(shown)} ${BYTE_UNITS[unit]}`;
 }
 
-function safeRelativeFormat(lang: string): Intl.RelativeTimeFormat {
+function safeRelativeFormat(lang: string, style: Intl.RelativeTimeFormatStyle): Intl.RelativeTimeFormat {
   try {
-    return new Intl.RelativeTimeFormat(lang, { numeric: 'auto', style: 'narrow' });
+    return new Intl.RelativeTimeFormat(lang, { numeric: 'auto', style });
   } catch {
-    return new Intl.RelativeTimeFormat(undefined, { numeric: 'auto', style: 'narrow' });
+    return new Intl.RelativeTimeFormat(undefined, { numeric: 'auto', style });
   }
 }
 
@@ -116,10 +142,15 @@ const _RELATIVE_STEPS: Array<[Intl.RelativeTimeFormatUnit, number]> = [
 ];
 
 /**
- * Locale-aware relative time — `"5m ago"`, `"yesterday"`, `"in 3d"`, `"昨天"`.
+ * Locale-aware relative time — `"5m ago"`, `"yesterday"`, `"in 3d"`,
+ * `"next month"`, `"昨天"`.
  * Same memoization + `useTranslation()` contract as the factories above.
  * Signed, so future timestamps read as future; sub-minute deltas collapse to
  * the locale's "now" phrasing.
+ *
+ * A count is compact (`"in 3mo"`), but a phrase is spelled out: `numeric:
+ * 'auto'` words a step of one as a phrase, and the narrow style would clip
+ * its words to `"next mo."`.
  *
  * Missing and unparseable inputs return `''` rather than a plausible-looking
  * "now" — every call site renders this straight into the DOM, so a bad
@@ -127,21 +158,26 @@ const _RELATIVE_STEPS: Array<[Intl.RelativeTimeFormatUnit, number]> = [
  */
 export const relativeTime = (() => {
   let lastLocale: string | null = null;
-  let fmt: Intl.RelativeTimeFormat | null = null;
+  let counts: Intl.RelativeTimeFormat | null = null;
+  let phrases: Intl.RelativeTimeFormat | null = null;
   return (d: Date | number | string | null | undefined): string => {
     if (d === null || d === undefined || d === '') return '';
     const ms = new Date(d).getTime();
     if (Number.isNaN(ms)) return '';
     const lang = i18n.language;
-    if (lang !== lastLocale || !fmt) {
-      fmt = safeRelativeFormat(lang);
+    if (lang !== lastLocale || !counts || !phrases) {
+      counts = safeRelativeFormat(lang, 'narrow');
+      phrases = safeRelativeFormat(lang, 'long');
       lastLocale = lang;
     }
     const seconds = (ms - Date.now()) / 1000;
     const abs = Math.abs(seconds);
     for (const [unit, unitSeconds] of _RELATIVE_STEPS) {
-      if (abs >= unitSeconds) return fmt.format(Math.round(seconds / unitSeconds), unit);
+      if (abs < unitSeconds) continue;
+      const n = Math.round(seconds / unitSeconds);
+      const isCount = counts.formatToParts(n, unit).some((p) => p.type === 'integer');
+      return (isCount ? counts : phrases).format(n, unit);
     }
-    return fmt.format(0, 'second');
+    return counts.format(0, 'second');
   };
 })();

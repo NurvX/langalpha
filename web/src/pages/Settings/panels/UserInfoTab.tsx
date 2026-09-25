@@ -27,19 +27,9 @@ import { useToast } from '@/components/ui/use-toast';
 import ConfirmDialog from '@/pages/Dashboard/components/ConfirmDialog';
 import { useDebouncedSave } from '@/hooks/useDebouncedSave';
 import { isSupported, setLocaleCookie } from '@/lib/locale';
+import TimezonePicker from '@/components/TimezonePicker';
+import { deviceTimezone } from '@/lib/deviceTimezone';
 import type { Preferences } from './types';
-
-interface TimezoneOption {
-  value: string;
-  label: string;
-}
-
-interface TimezoneGroup {
-  group: string;
-  options: TimezoneOption[];
-}
-
-type TimezoneEntry = TimezoneOption | TimezoneGroup;
 
 /** User-info tab: avatar, name/timezone/locale with debounced auto-save,
  * theme preference, voice-input toggle, and logout. */
@@ -68,45 +58,6 @@ export function UserInfoTab() {
   const [error, setError] = useState<string | null>(null);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
-  const timezones: TimezoneEntry[] = [
-    { value: '', label: t('settings.selectTimezone') },
-    {
-      group: 'Americas', options: [
-        { value: 'America/New_York', label: 'Eastern Time (America/New_York)' },
-        { value: 'America/Chicago', label: 'Central Time (America/Chicago)' },
-        { value: 'America/Denver', label: 'Mountain Time (America/Denver)' },
-        { value: 'America/Los_Angeles', label: 'Pacific Time (America/Los_Angeles)' },
-        { value: 'America/Toronto', label: 'Eastern - Canada (America/Toronto)' },
-        { value: 'America/Sao_Paulo', label: 'Brasília Time (America/Sao_Paulo)' },
-      ]
-    },
-    {
-      group: 'Europe', options: [
-        { value: 'Europe/London', label: 'GMT (Europe/London)' },
-        { value: 'Europe/Paris', label: 'CET (Europe/Paris)' },
-        { value: 'Europe/Berlin', label: 'CET (Europe/Berlin)' },
-      ]
-    },
-    {
-      group: 'Asia', options: [
-        { value: 'Asia/Shanghai', label: 'China Standard Time (Asia/Shanghai)' },
-        { value: 'Asia/Tokyo', label: 'Japan Standard Time (Asia/Tokyo)' },
-        { value: 'Asia/Hong_Kong', label: 'Hong Kong Time (Asia/Hong_Kong)' },
-        { value: 'Asia/Singapore', label: 'Singapore Time (Asia/Singapore)' },
-        { value: 'Asia/Kolkata', label: 'India Standard Time (Asia/Kolkata)' },
-      ]
-    },
-    {
-      group: 'Oceania', options: [
-        { value: 'Australia/Sydney', label: 'Australian Eastern (Australia/Sydney)' },
-      ]
-    },
-    {
-      group: 'Other', options: [
-        { value: 'UTC', label: 'UTC' },
-      ]
-    },
-  ];
 
   const locales = [
     { value: '', label: t('settings.selectLocale') },
@@ -325,22 +276,16 @@ export function UserInfoTab() {
 
       <div>
         <label className="block text-[0.8125rem] font-medium mb-1.5" style={{ color: 'var(--color-text-primary)' }}>{t('settings.timezone')}</label>
-        <Select
+        <TimezonePicker
           value={timezone}
-          onChange={(e) => handleTimezoneChange(e.target.value)}
-        >
-          {timezones.map((item, i) => (
-            'value' in item ? (
-              <option key={i} value={item.value}>{item.label}</option>
-            ) : (
-              <optgroup key={i} label={item.group}>
-                {item.options.map((opt, j) => (
-                  <option key={`${i}-${j}`} value={opt.value}>{opt.label}</option>
-                ))}
-              </optgroup>
-            )
-          ))}
-        </Select>
+          onChange={handleTimezoneChange}
+          home={deviceTimezone()}
+          homeLabel={t('timezone.thisDevice')}
+          placeholder={t('settings.selectTimezone')}
+          className="w-full"
+          // The card fill the name and language fields beside it take.
+          triggerClassName="bg-[color:var(--color-bg-card)]"
+        />
       </div>
 
       <div>

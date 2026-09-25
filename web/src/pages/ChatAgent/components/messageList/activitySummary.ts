@@ -5,7 +5,7 @@ import {
   getCompletedSummary,
   type ToolCategory,
 } from '../toolDisplayConfig';
-import { formatThoughtFor } from './turnTiming';
+import { formatThoughtFor } from '@/lib/elapsed';
 
 /** Translation function signature compatible with i18next's t(). */
 type TFn = (key: string, opts?: Record<string, unknown>) => string;

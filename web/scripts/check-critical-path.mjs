@@ -56,7 +56,15 @@ const EXPECTED = ['index', 'vendor-dnd', 'vendor-motion', 'vendor-react']
 // the share-link query keys, formatBytes and retryUnlessClientError add 0.5 kB.
 // CI read 475.2 against 473.8 on main. Nothing moved chunks; the eager set is
 // unchanged.
-const MAX_EAGER_KB = 480
+//
+// Raised 480 -> 485 for the automations run feed. The feed, the manage view,
+// the attention rail and the timezone picker carry copy in both locales, and
+// i18n.ts still bundles every locale into the entry, so about 3.8 kB gz of
+// strings ride the critical path; the entry stylesheet grows 0.5 kB, and the
+// device-zone read in lib/deviceTimezone, the automations query keys and the
+// lifecycle feed's invalidation add about 0.7 kB. A local build read +4.8 kB
+// against main. Nothing moved chunks; the eager set is unchanged.
+const MAX_EAGER_KB = 485
 
 const outDir = process.argv[2] || 'dist'
 const indexPath = join(outDir, 'index.html')
