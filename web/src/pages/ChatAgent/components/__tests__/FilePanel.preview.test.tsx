@@ -42,7 +42,7 @@ const panel = (props: Record<string, unknown> = {}) => (
 
 /** Whether the running app's pane is behind another tab rather than unmounted. */
 const hiddenPane = () =>
-  screen.getByTitle('Preview on port 8050').closest('.file-panel-preview-pane')!.hasAttribute('hidden');
+  screen.getByTitle('App on port 8050').closest('.file-panel-preview-pane')!.hasAttribute('hidden');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -59,7 +59,7 @@ describe('FilePanel running apps', () => {
     renderWithProviders(panel({ target: DASHBOARD }));
 
     await waitFor(() => expect(previewUrl()).toHaveBeenCalledWith('ws', 8050, 'python app.py', false));
-    const frame = await screen.findByTitle('Preview on port 8050');
+    const frame = await screen.findByTitle('App on port 8050');
     expect(frame.getAttribute('src')).toBe('https://8050-sandbox.example.com/');
     expect(within(screen.getByRole('tablist')).getByText('Dashboard')).toBeTruthy();
     // The app's own actions live in the crumb row, not in a second header.
@@ -69,13 +69,13 @@ describe('FilePanel running apps', () => {
   it('hangs a path suffix off the signed URL', async () => {
     renderWithProviders(panel({ target: { ...DASHBOARD, path: '/timeline.html' } }));
 
-    const frame = await screen.findByTitle('Preview on port 8050');
+    const frame = await screen.findByTitle('App on port 8050');
     expect(frame.getAttribute('src')).toBe('https://8050-sandbox.example.com/timeline.html');
   });
 
   it('lists every running app in the tree, and a click brings its tab forward', async () => {
     const { container, rerender } = renderWithProviders(panel({ target: DASHBOARD }));
-    await screen.findByTitle('Preview on port 8050');
+    await screen.findByTitle('App on port 8050');
 
     // Open a file over it, then come back through the tree.
     rerender(panel({ target: { kind: 'file', path: 'notes.md' } }));
@@ -93,7 +93,7 @@ describe('FilePanel running apps', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-09-18T10:00:00Z'));
     const { rerender } = renderWithProviders(panel({ target: DASHBOARD }));
-    await screen.findByTitle('Preview on port 8050');
+    await screen.findByTitle('App on port 8050');
     expect(previewUrl()).toHaveBeenCalledTimes(1);
 
     rerender(panel({ target: { kind: 'file', path: 'notes.md' } }));
@@ -117,13 +117,13 @@ describe('FilePanel running apps', () => {
 
   it('keeps a running app loaded while another tab is in front', async () => {
     const { rerender } = renderWithProviders(panel({ target: DASHBOARD }));
-    const frame = await screen.findByTitle('Preview on port 8050');
+    const frame = await screen.findByTitle('App on port 8050');
 
     rerender(panel({ target: { kind: 'file', path: 'notes.md' } }));
     await waitFor(() => expect(hiddenPane()).toBe(true));
 
     // Same element, still in the tree — a tab switch must not reload the server.
-    expect(screen.getByTitle('Preview on port 8050')).toBe(frame);
+    expect(screen.getByTitle('App on port 8050')).toBe(frame);
   });
 
   it('re-mints the URL for a tab restored from storage, which stored none', async () => {
@@ -136,12 +136,12 @@ describe('FilePanel running apps', () => {
     renderWithProviders(panel());
 
     await waitFor(() => expect(previewUrl()).toHaveBeenCalledWith('ws', 8050, undefined, false));
-    expect(await screen.findByTitle('Preview on port 8050')).toBeTruthy();
+    expect(await screen.findByTitle('App on port 8050')).toBeTruthy();
   });
 
   it('restarts the server behind the port on Refresh', async () => {
     renderWithProviders(panel({ target: DASHBOARD }));
-    await screen.findByTitle('Preview on port 8050');
+    await screen.findByTitle('App on port 8050');
 
     fireEvent.click(screen.getByTitle('Reload app'));
     await waitFor(() => expect(previewUrl()).toHaveBeenCalledWith('ws', 8050, 'python app.py', true));
@@ -151,11 +151,11 @@ describe('FilePanel running apps', () => {
     previewUrl().mockRejectedValue(new Error('no listener'));
     const { rerender } = renderWithProviders(panel({ target: DASHBOARD }));
 
-    expect(await screen.findByText('Server offline')).toBeTruthy();
+    expect(await screen.findByText('App not running')).toBeTruthy();
     expect(previewUrl()).toHaveBeenCalledTimes(1);
 
     // A dead port is not retried on every visit: leave for a file and come back.
-    const pane = () => screen.getByText('Server offline').closest('.file-panel-preview-pane')!;
+    const pane = () => screen.getByText('App not running').closest('.file-panel-preview-pane')!;
     rerender(panel({ target: { kind: 'file', path: 'notes.md' } }));
     await waitFor(() => expect(pane().hasAttribute('hidden')).toBe(true));
     fireEvent.click(within(screen.getByRole('tablist')).getByText('Dashboard'));

@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import {
-  ArrowUpDown, BookMarked, CheckSquare, Globe, HardDrive, RefreshCw, ScrollText, Search, Settings, Trash2, Upload, X,
+  ArrowUpDown, BookMarked, CheckSquare, HardDrive, LayoutDashboard, RefreshCw, ScrollText, Search, Settings, Trash2, Upload, X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
@@ -340,7 +340,7 @@ export function TreeColumn(props: TreeColumnProps): React.ReactElement {
         {props.previews.length > 0 && (
           <div className="file-panel-preview-group">
             <div className="file-panel-preview-group-header">
-              <Globe className="h-3.5 w-3.5 flex-shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+              <LayoutDashboard className="h-3.5 w-3.5 flex-shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
               <span className="text-xs font-medium truncate" style={{ color: 'var(--color-text-tertiary)' }}>
                 {t('filePanel.runningApps')}
               </span>
@@ -354,7 +354,7 @@ export function TreeColumn(props: TreeColumnProps): React.ReactElement {
                 onClick={() => props.onOpenPreview(app.port)}
                 title={app.title ? `${app.title} :${app.port}` : `:${app.port}`}
               >
-                <Globe className="h-3.5 w-3.5 flex-shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+                <LayoutDashboard className="h-3.5 w-3.5 flex-shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
                 <span className="flex-1 min-w-0 truncate text-xs" style={{ color: 'var(--color-text-primary)' }}>
                   {app.title || `:${app.port}`}
                 </span>
