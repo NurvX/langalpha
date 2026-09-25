@@ -212,6 +212,16 @@ export const queryKeys = {
     list:   (filters: Record<string, string | string[]>) => [...queryKeys.orders.lists(), filters],
     detail: (attemptId: string) => [...queryKeys.orders.all, 'detail', attemptId],
   },
+  // One family so a mutation invalidates the list, every run history and the
+  // run feed together: pausing or triggering an automation changes all three.
+  automations: {
+    all:        ['automations'],
+    lists:      () => [...queryKeys.automations.all, 'list'],
+    list:       (params: Record<string, unknown>) => [...queryKeys.automations.lists(), params],
+    executions: (automationId: string) => [...queryKeys.automations.all, 'executions', automationId],
+    runs:       () => [...queryKeys.automations.all, 'runs'],
+    waiting:    (threadId: string) => [...queryKeys.automations.all, 'waiting', threadId],
+  },
   // Workspace-tier vault. Scoped under the workspace id so a mutation
   // invalidates that workspace's secrets AND blueprints (the recommended-
   // credentials list is derived from them) without touching a sibling's cache.
