@@ -21,6 +21,7 @@ from src.server.database.workspace_file import (
     manifest_clock,
     get_file_metadata_for_sync,
     get_workspace_total_size,
+    path_fits_manifest,
     workspace_sync_lock,
 )
 from src.server.database.workspace import files_restore_incomplete, workspace_owner
@@ -130,6 +131,11 @@ async def sync_to_db(
         raise
 
 
+# The scan's errno is the sandbox's, which is always Linux; the server's own
+# ``errno.ENAMETOOLONG`` differs on macOS. ENOENT is 2 everywhere.
+_SANDBOX_ENAMETOOLONG = 36
+
+
 async def _sync_locked(
     workspace_id: str, sandbox: Any, conn: Any, layout: WorkspaceLayout
 ) -> SyncResult:
@@ -169,6 +175,24 @@ async def _sync_locked(
             f"{scan_cap} byte limit. Its existing manifest row is kept; the "
             f"file itself is not backed up."
         )
+    # A path the manifest cannot key would fail the batch insert and take
+    # every other file in the pass down with it. No row can exist for one,
+    # so there is nothing for the prune to protect either.
+    unkeyable = [e for e in scan.entries if not path_fits_manifest(e.path)]
+    if unkeyable:
+        scan.entries = [e for e in scan.entries if path_fits_manifest(e.path)]
+        for entry in unkeyable:
+            result.unsaved.append(
+                UnsavedFile(
+                    entry.path,
+                    "path_too_long",
+                    entry.size if entry.kind == "file" else None,
+                )
+            )
+        logger.warning(
+            f"Workspace {workspace_id} has {len(unkeyable)} path(s) too long "
+            f"to record, not backed up: {unkeyable[0].path[:200]}..."
+        )
     read_errors = 0
     for item in scan.errors:
         # ENOENT on the root is a folder this sandbox generation never
@@ -192,6 +216,14 @@ async def _sync_locked(
             logger.info(
                 f"{item.get('path')} in workspace {workspace_id} vanished "
                 f"during the scan; treating it as deleted"
+            )
+            continue
+        # Past PATH_MAX the sandbox cannot open the entry at all. Everything
+        # under it is longer still, so no manifest row can exist there and
+        # the prune loses nothing by going ahead.
+        if item.get("errno") == _SANDBOX_ENAMETOOLONG:
+            result.unsaved.append(
+                UnsavedFile(str(item.get("path")), "path_too_long")
             )
             continue
         logger.warning(

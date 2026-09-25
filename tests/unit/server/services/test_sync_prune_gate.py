@@ -394,3 +394,76 @@ async def test_children_with_no_parent_row_are_still_dropped_under_a_new_symlink
     deleter.assert_not_awaited()
     assert sorted(rows_deleter.await_args.args[1]) == ["a/child", "a/sub/deep"]
     assert result.deleted == 2
+
+
+# --- paths the manifest cannot key -----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_path_too_long_to_record_is_unsaved_and_never_written():
+    """One such path used to fail the batch insert with "value too long for
+    type character varying(1024)", taking every other file in the pass down
+    and leaving a strict backup with no file to name."""
+    deep = "d/" * 600
+    listing = _scan(
+        ScanEntry("reports", "dir", 4096, MTIME_NS, 0o755, None, None, None),
+        ScanEntry(deep.rstrip("/"), "dir", 4096, MTIME_NS, 0o755, None, None, None),
+        ScanEntry(deep + "f.txt", "file", 3, MTIME_NS, 0o644, "f", None, None),
+    )
+    with (
+        patch("src.server.services.persistence.backup.PACK_CUTOFF", -1),
+        patch("src.server.services.persistence.backup.is_storage_enabled", return_value=False),
+        patch("src.server.services.persistence.backup.scan_workspace", new=AsyncMock(return_value=listing)),
+        patch("src.server.services.persistence.backup.files_restore_incomplete", new=AsyncMock(return_value=False)),
+        patch("src.server.services.persistence.backup.get_file_metadata_for_sync", new=AsyncMock(return_value={})),
+        patch("src.server.services.persistence.backup.get_workspace_total_size", new=AsyncMock(return_value=3)),
+        patch("src.server.services.persistence.backup.delete_removed_files", new=AsyncMock(return_value=0)),
+        patch("src.server.services.persistence.backup.bulk_upsert_files", new=AsyncMock(return_value=1)) as upsert,
+        patch("src.server.services.persistence.blobs.bulk_upsert_files", new=AsyncMock(return_value=0)),
+    ):
+        result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
+
+    written = [row["file_path"] for call in upsert.await_args_list for row in call.args[1]]
+    assert written == ["reports"]
+    assert sorted((f.path, f.reason, f.size) for f in result.unsaved) == [
+        (deep.rstrip("/"), "path_too_long", None),
+        (deep + "f.txt", "path_too_long", 3),
+    ]
+    assert result.oversized == 2 and result.errors == 0
+
+
+def test_the_manifest_bound_counts_bytes_as_well_as_characters():
+    from src.server.database.workspace_file import path_fits_manifest
+
+    assert path_fits_manifest("a" * 1024)
+    assert not path_fits_manifest("a" * 1025)
+    # 700 CJK characters are well under 1024 but 2100 bytes of key.
+    assert not path_fits_manifest("文" * 700)
+
+
+@pytest.mark.asyncio
+async def test_a_directory_past_path_max_is_path_too_long_and_does_not_stop_the_prune():
+    """The sandbox cannot even open it (Linux ENAMETOOLONG). Reported as
+    unreadable, it told the user to check permissions and held every
+    deletion back, though nothing under it could ever have had a row."""
+    listing = _scan(
+        ScanEntry("keep.txt", "file", 10, MTIME_NS, 0o644, "x", None, None),
+        errors=[{"path": "deep/" + "a" * 4200, "error": "File name too long", "errno": 36}],
+    )
+    existing = {
+        "keep.txt": {"kind": "file", "file_size": 10, "mtime_ns": MTIME_NS, "content_hash": "x", "permissions": "0644"},
+        PATH: {"kind": "file", "file_size": 5, "mtime_ns": MTIME_NS, "content_hash": "y"},
+    }
+    with (
+        patch("src.server.services.persistence.backup.PACK_CUTOFF", -1),
+        patch("src.server.services.persistence.backup.scan_workspace", new=AsyncMock(return_value=listing)),
+        patch("src.server.services.persistence.backup.files_restore_incomplete", new=AsyncMock(return_value=False)),
+        patch("src.server.services.persistence.backup.workspace_owner", new=AsyncMock(return_value="user-prune")),
+        patch("src.server.services.persistence.backup.get_file_metadata_for_sync", new=AsyncMock(return_value=existing)),
+        patch("src.server.services.persistence.backup.get_workspace_total_size", new=AsyncMock(return_value=10)),
+        patch("src.server.services.persistence.backup.delete_removed_files", new=AsyncMock(return_value=1)) as deleter,
+    ):
+        result = await backup.sync_to_db(WS, _sandbox(), layout=LAYOUT)
+
+    assert [f.reason for f in result.unsaved] == ["path_too_long"]
+    deleter.assert_awaited_once()

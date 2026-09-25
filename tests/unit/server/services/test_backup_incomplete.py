@@ -26,3 +26,10 @@ def test_without_a_file_list_says_so_plainly():
         "Nothing was changed: this computer's files could not be backed up "
         "first. Try again in a moment."
     )
+
+
+def test_a_path_too_long_to_back_up_is_shortened_in_the_sentence():
+    deep = "nest/" * 900 + "leaf.txt"
+    message = BackupIncomplete("x", [UnsavedFile(deep, "path_too_long")]).user_message
+    assert "(path too long to back up)" in message
+    assert "leaf.txt" in message and len(message) < 300

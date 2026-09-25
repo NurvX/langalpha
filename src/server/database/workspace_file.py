@@ -30,6 +30,23 @@ _SYNC_LOCK_NS = "WSFILES_SYNC"
 SYNC_LOCK_WAIT = "120s"
 
 
+# ``file_path`` is VARCHAR(1024), and the unique (workspace_id, file_path) index
+# refuses a key past roughly 2.7 KB whatever the column allows. A sandbox has no
+# such bound (a tree can nest past PATH_MAX through relative paths), and one
+# path over either limit fails the whole batch insert, so the sync has to set
+# such a path aside before it writes. The byte bound only bites on multibyte
+# names: 1024 ASCII characters are 1024 bytes.
+MAX_FILE_PATH_CHARS = 1024
+_MAX_FILE_PATH_BYTES = 2048
+
+
+def path_fits_manifest(path: str) -> bool:
+    return (
+        len(path) <= MAX_FILE_PATH_CHARS
+        and len(path.encode("utf-8", "surrogatepass")) <= _MAX_FILE_PATH_BYTES
+    )
+
+
 class WorkspaceSyncBusy(Exception):
     """Another sync held the workspace lock for the whole wait."""
 
