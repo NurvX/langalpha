@@ -494,12 +494,13 @@ async def lifespan(app: FastAPI):
     # slots leaking).
     from src.server.services.report_back import subagent
     from src.server.services.report_back.flash import core as flash_core
-    from src.server.services import thread_lifecycle_feed
+    from src.server.services import automation_settlement, thread_lifecycle_feed
     from src.server.services.hook_outbox import HookOutboxDrainer
 
     flash_core.register_outbox_executors()
     subagent.register_outbox_executors()
     thread_lifecycle_feed.register_outbox_executors()
+    automation_settlement.register_outbox_executors()
     try:
         HookOutboxDrainer.get_instance().start()
         logger.info("HookOutboxDrainer started")
@@ -837,6 +838,16 @@ async def lifespan(app: FastAPI):
         logger.info("HookOutboxDrainer stopped")
     except Exception as e:
         logger.warning(f"Error stopping HookOutboxDrainer: {e}")
+
+    # Then the automation settlements still sending their webhooks, now that
+    # every settler (scheduler, price monitor, drainer) has stopped and before
+    # the pools they write to close: a settled row is never found again.
+    try:
+        from src.server.services.automation_settlement import drain_tails
+
+        await drain_tails()
+    except Exception as e:
+        logger.warning(f"Error draining automation settlements: {e}")
 
     # 6c. Close the writer-guard pool AFTER BTM shutdown: the final
     # finalizes run on pinned guard sessions checked out of this pool.

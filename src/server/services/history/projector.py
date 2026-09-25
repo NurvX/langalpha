@@ -334,7 +334,7 @@ def _project_ai_message(
 ) -> list[HistoryEvent]:
     events: list[HistoryEvent] = []
     message_id = message.id or "unknown"
-    text, reasoning, phase = _split_content_blocks(message.content)
+    text, reasoning, phase = split_content_blocks(message.content)
     tool_calls = _filter_tool_calls(message.tool_calls or [])
 
     if reasoning:
@@ -513,7 +513,7 @@ def _derive_artifact(
     return None
 
 
-def _split_content_blocks(content: Any) -> tuple[str | None, str | None, str | None]:
+def split_content_blocks(content: Any) -> tuple[str | None, str | None, str | None]:
     """Split final-message content into (text, reasoning, phase) parts.
 
     Unlike ``extract_content_with_type`` on a whole list (which merges every
