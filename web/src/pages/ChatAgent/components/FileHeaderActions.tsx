@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Download, FileDown, Pencil, Save, Settings2, X, Undo2, Redo2, FileDiff, FileText, Check, Clipboard } from 'lucide-react';
+import { Download, FileDown, Link2, Pencil, Save, Settings2, X, Undo2, Redo2, FileDiff, FileText, Check, Clipboard } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,6 +17,8 @@ import { cn } from '@/lib/utils';
 import { fileExtension } from '../utils/filePaths';
 import { useDownloadState, workspaceDownloadKey } from '../utils/downloadNotice';
 import { exportServedPdf } from './viewers/html/useHtmlActions';
+import { useServedHtml } from './viewers/html/useServedHtml';
+import ShareLinkDialog from './ShareLinkDialog';
 
 const PDF_SCALE_CHOICES = [0.8, 1, 1.25];
 
@@ -61,9 +63,10 @@ interface FileHeaderActionsProps {
    *  text it is reading. */
   canDownload?: boolean;
   readFileFullFn: (workspaceId: string, filePath: string) => Promise<{ content: string }>;
-  /** Byte-faithful served URL for the selected HTML file (e.g. the public
-   *  share serve URL). Defaults to the wsfiles route when omitted. */
-  htmlServedUrl?: string;
+  /** The serve prefix a share was handed; omitted, the owner's grant serves HTML. */
+  servePrefix?: string;
+  /** Offer the selected file's share dialog: the owner's own panel only. */
+  canShare?: boolean;
   // Edit mode callbacks
   editorRef: React.RefObject<any>;
   canUndo: boolean;
@@ -91,7 +94,8 @@ function FileHeaderActions({
   triggerDownloadFn,
   canDownload = true,
   readFileFullFn,
-  htmlServedUrl,
+  servePrefix,
+  canShare = false,
   editorRef,
   canUndo,
   canRedo,
@@ -113,15 +117,26 @@ function FileHeaderActions({
   const [pdfScale, setPdfScale] = useState(1);
   const [pdfPageNumbers, setPdfPageNumbers] = useState(false);
   const [pdfBranding, setPdfBranding] = useState(true);
+  const [shareOpen, setShareOpen] = useState(false);
+
+  const served = useServedHtml(
+    workspaceId,
+    selectedFile && isHtmlFile(selectedFile) ? selectedFile : null,
+    servePrefix,
+  );
 
   const handleExportHtmlPdf = async () => {
     if (!selectedFile || pdfInFlight.current) return;
+    if (!served.plainUrl) {
+      toast({ description: t('filePanel.pdfFailed') });
+      return;
+    }
     pdfInFlight.current = true;
     try {
       await exportServedPdf({
-        workspaceId,
         filePath: selectedFile,
-        servedUrl: htmlServedUrl,
+        servedUrl: served.plainUrl,
+        openUrl: served.openUrl,
         printHint: t('filePanel.pdfPrintHint'),
         generatingHint: t('filePanel.pdfGenerating'),
         scale: pdfScale,
@@ -327,6 +342,27 @@ function FileHeaderActions({
 
   return (
     <>
+      {canShare && (
+        <>
+          <button
+            onClick={() => setShareOpen(true)}
+            className="file-panel-icon-btn"
+            title={t('filePanel.copyShareLink')}
+            aria-label={t('filePanel.copyShareLink')}
+          >
+            <Link2 className="h-4 w-4" />
+          </button>
+          {/* Keyed by file so each file's dialog starts fresh, while staying
+              mounted through its own close so the exit animation plays. */}
+          <ShareLinkDialog
+            key={selectedFile}
+            open={shareOpen}
+            workspaceId={workspaceId}
+            filePath={selectedFile}
+            onClose={() => setShareOpen(false)}
+          />
+        </>
+      )}
       {canDownload && (
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>

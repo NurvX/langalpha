@@ -1,7 +1,9 @@
 """What a share token authorizes: a thread, a workspace folder, and a subtree.
 
 The file routes and the replay routes both start here, and neither of them
-decides any of it for itself.
+decides any of it for itself. A file share link resolves here too, for the
+one route it may use: it opens a workspace folder and a fixed list of files
+rather than a subtree.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ from src.server.app.workspace_files._shared import (
     work_dir_for,
 )
 from src.server.database.conversation import get_thread_by_share_token
+from src.server.database.share_codes import is_share_code
+from src.server.database.share_links import KIND_FILE, ShareLink, get_link
 from src.server.database.workspace import get_workspace as db_get_workspace
 from src.server.services.workspace_layout import WorkspaceLayoutUnavailable
 from src.server.utils.error_sanitization import single_line
@@ -96,19 +100,54 @@ def shared_path_visible(scope: ShareScope, client_path: str) -> bool:
 
 @dataclass(frozen=True)
 class SharedFileTarget:
-    """One resolution of a token for the file routes, read once per request."""
+    """One resolution of a token for the file routes, read once per request.
 
-    thread: dict[str, Any]
+    ``files`` is set for a file share link: the list the owner confirmed, and
+    the only paths that leave. It is judged on the canonical path a read
+    resolved to, like the scope, so a symlink is not a way around it.
+    """
+
     workspace: dict[str, Any]
     scope: ShareScope
     work_dir: str
+    files: frozenset[str] | None = None
 
     @property
     def workspace_id(self) -> str:
         return self.scope.workspace_id
 
     def visible(self, client_path: str) -> bool:
+        if self.files is not None and client_path not in self.files:
+            return False
         return shared_path_visible(self.scope, client_path)
+
+
+async def _serving_workspace(workspace_id: str) -> tuple[dict[str, Any], str]:
+    """The workspace row and its serve root, or this route's uniform 404.
+
+    A workspace whose folder cannot be established answers like a missing
+    file: the caller holds no credential but the URL, and the computer root
+    is not a fallback for a folder nobody could read.
+    """
+    try:
+        workspace = await db_get_workspace(workspace_id)
+    except Exception as e:
+        logger.warning(
+            f"Workspace read failed for shared workspace {workspace_id}: "
+            f"{single_line(str(e))}"
+        )
+        raise HTTPException(status_code=404, detail="File not found") from None
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    try:
+        work_dir = work_dir_for(workspace)
+    except WorkspaceLayoutUnavailable as e:
+        logger.warning(
+            f"Refusing file access to shared workspace {workspace_id}: "
+            f"{single_line(str(e))}"
+        )
+        raise HTTPException(status_code=404, detail="File not found") from None
+    return workspace, work_dir
 
 
 async def resolve_shared_files(
@@ -138,29 +177,11 @@ async def resolve_shared_files(
         require_permission(perms, "allow_download")
 
     workspace_id = str(thread["workspace_id"])
-    try:
-        workspace = await db_get_workspace(workspace_id)
-    except Exception as e:
-        logger.warning(
-            f"Workspace read failed for shared workspace {workspace_id}: "
-            f"{single_line(str(e))}"
-        )
-        raise HTTPException(status_code=404, detail="File not found") from None
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-
-    try:
-        work_dir = work_dir_for(workspace)
-    except WorkspaceLayoutUnavailable as e:
-        logger.warning(
-            f"Refusing file access to shared workspace {workspace_id}: "
-            f"{single_line(str(e))}"
-        )
-        raise HTTPException(status_code=404, detail="File not found") from None
+    workspace, work_dir = await _serving_workspace(workspace_id)
 
     raw_root = perms.get(SHARE_ROOT_PATH_KEY) or ""
     if not raw_root:
-        return SharedFileTarget(thread, workspace, ShareScope(workspace_id, ""), work_dir)
+        return SharedFileTarget(workspace, ShareScope(workspace_id, ""), work_dir)
     root_path = contained_relative_path(str(raw_root), work_dir)
     if root_path is None:
         logger.warning(
@@ -168,6 +189,66 @@ async def resolve_shared_files(
             f"{SHARE_ROOT_PATH_KEY}; refusing file access"
         )
         raise HTTPException(status_code=404, detail="File not found")
+    return SharedFileTarget(workspace, ShareScope(workspace_id, root_path), work_dir)
+
+
+# One answer for everything a caller may not learn about a link: an unknown
+# code, a private link seen by anyone but its owner, an app seen by anyone else.
+LINK_NOT_FOUND = "Shared thread not found"
+
+
+@dataclass(frozen=True)
+class LinkAccess:
+    """A link this viewer may open, with the workspace it opens."""
+
+    link: ShareLink
+    workspace: dict[str, Any]
+    work_dir: str
+    owner: bool
+
+
+async def resolve_link(token: str, *, user_id: str | None = None) -> LinkAccess | None:
+    """The one rule for who may open a file or app link.
+
+    None when the token is not a link at all, so the caller falls through to
+    the thread rules. A private link, which an app link always is, opens for
+    the workspace's owner alone; everyone else gets ``LINK_NOT_FOUND``.
+    Ownership is judged on the workspace row, never on the link.
+    """
+    if not is_share_code(token):
+        return None
+    link = await get_link(token)
+    if link is None:
+        return None
+    if user_id is None and not link.shared:
+        # No viewer whose ownership could open it, so no workspace read.
+        raise HTTPException(status_code=404, detail=LINK_NOT_FOUND)
+    try:
+        workspace, work_dir = await _serving_workspace(link.workspace_id)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail=LINK_NOT_FOUND) from None
+    owner = user_id is not None and workspace.get("user_id") == user_id
+    if not owner and not link.shared:
+        raise HTTPException(status_code=404, detail=LINK_NOT_FOUND)
+    return LinkAccess(link, workspace, work_dir, owner)
+
+
+async def resolve_serve_target(code: str) -> SharedFileTarget:
+    """What the serve route may answer for a token of either kind.
+
+    Always resolved as a visitor, so only a shared file link opens anything
+    here, and only for the files its owner confirmed. A token that is not a
+    link falls through to the thread rules, files permission and all.
+    """
+    access = await resolve_link(code)
+    if access is None:
+        return await resolve_shared_files(code, require_files=True)
+    link = access.link
+    if link.kind != KIND_FILE:
+        raise HTTPException(status_code=404, detail=LINK_NOT_FOUND)
     return SharedFileTarget(
-        thread, workspace, ShareScope(workspace_id, root_path), work_dir
+        access.workspace,
+        ShareScope(link.workspace_id, ""),
+        access.work_dir,
+        files=frozenset(link.files or ()),
     )

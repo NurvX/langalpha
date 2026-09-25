@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { RefreshCw, ExternalLink, X, Globe, AlertCircle } from 'lucide-react';
+import { RefreshCw, ExternalLink, X, LayoutDashboard, AlertCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Loader } from '@/components/ui/loader';
+import { APP_PREVIEW_SANDBOX } from './html/sandbox';
 import './PreviewViewer.css';
 import type { PreviewData } from '../../hooks/utils/types';
 
@@ -134,7 +135,7 @@ export default function PreviewViewer({ url, port, title, loading: externalLoadi
           {showDragOverlay && (
             <div className="preview-viewer-resize-overlay">
               <div className="preview-viewer-resize-card">
-                <Globe size={28} style={{ color: 'var(--color-accent-primary)' }} />
+                <LayoutDashboard size={28} style={{ color: 'var(--color-accent-primary)' }} />
                 <div className="preview-viewer-resize-info">
                   <span className="preview-viewer-resize-title">{displayTitle}</span>
                   {hostname && <span className="preview-viewer-resize-url">{hostname}:{port}</span>}
@@ -148,7 +149,7 @@ export default function PreviewViewer({ url, port, title, loading: externalLoadi
             src={url}
             className="preview-viewer-frame"
             title={t('filePanel.previewFrameTitle', { port })}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+            sandbox={APP_PREVIEW_SANDBOX}
             onLoad={handleIframeLoad}
             style={isDragging ? { pointerEvents: 'none' } : undefined}
           />

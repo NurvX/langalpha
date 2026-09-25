@@ -35,6 +35,22 @@
     background 140ms ease,
     border-color 140ms ease;
 }
+/* One card in the flow of a message rather than in a deck: the running app
+   an agent published wears the same card as the files it wrote. A static one
+   (a shared chat, where the app cannot be opened) keeps its rest state. */
+.turn-file-card.is-inline {
+  position: relative;
+  height: 68px;
+}
+@media (hover: hover) {
+  .turn-file-card.is-static:hover {
+    background: var(--color-bg-card);
+    border-color: var(--color-border-muted);
+  }
+  .turn-file-card.is-static:hover .turn-file-sheet {
+    transform: translate(-3px, 3px) rotate(-5deg);
+  }
+}
 /* Promoted only while the deck is about to move. Every card of every deck stays
    mounted so that opening is one continuous transition, so an unconditional
    hint leaves a long thread holding an idle compositor layer per deliverable.

@@ -1148,6 +1148,7 @@ from src.server.app.insights import router as insights_router
 from src.server.app.oauth import router as oauth_router
 from src.server.app.orders import router as orders_router
 from src.server.app.public import router as public_router
+from src.server.app.share_links import router as share_links_router
 from src.server.app.skills import router as skills_router
 from src.server.app.skills import workspace_router as workspace_skills_router
 from src.server.app.vault import router as vault_router
@@ -1235,6 +1236,9 @@ app.include_router(
 app.include_router(
     public_router
 )  # /api/v1/public/* - Public shared thread access (no auth)
+app.include_router(
+    share_links_router
+)  # /api/v1/workspaces/{id}/share-links, file-grant - Owner share links
 app.include_router(skills_router)  # /api/v1/skills - Available agent skills
 app.include_router(
     workspace_skills_router
@@ -1279,10 +1283,10 @@ app.include_router(
 app.include_router(health_router)  # /health - Health check
 app.include_router(
     preview_redirect_router
-)  # /api/v1/preview/{workspace_id}/{port} - Unauthenticated preview URL redirect
+)  # /api/v1/preview/{workspace_id}/{port} - Old preview URLs, redirected to /a/<code>
 app.include_router(
     wsfiles_router
-)  # /api/v1/wsfiles/{workspace_id}/{path} - Unauthenticated path-style file serving
+)  # /api/v1/wsfiles/g/{grant}/{path} - Grant-gated path-style file serving
 
 app.include_router(
     market_data_ws_router

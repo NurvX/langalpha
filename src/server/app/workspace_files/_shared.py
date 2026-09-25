@@ -386,7 +386,7 @@ def _is_serve_blocked_path(client_path: str) -> bool:
     """True if a path must never be served by the file-serving core.
 
     Mirrors the hidden/system/always-hidden gate the read/download/list
-    endpoints apply, so the unauthenticated wsfiles route and the share-token
+    endpoints apply, so the grant-gated wsfiles route and the public share
     serve route never expose agent-infrastructure dirs (``.agents``, ``tools``,
     ``mcp_servers``, ``_internal``, ...) that those endpoints deliberately hide.
     The user-profile carve-out lives inside ``_is_system_path``.

@@ -13,7 +13,6 @@ import type { MessageActions } from '../../ChatAgent/components/messageList/Mess
 let captured: MessageActions | null = null;
 
 vi.mock('react-router-dom', () => ({
-  useParams: () => ({ shareToken: 'tok' }),
   Link: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
 }));
 
@@ -39,21 +38,16 @@ vi.mock('../../ChatAgent/contexts/WorkspaceContext', () => ({
 
 // Hoisted with the `vi.mock` factory below, which runs before this module's
 // own top-level statements.
-const { resolveSharedFile, downloadSharedFileAs } = vi.hoisted(() => ({
+const { resolveSharedFile, downloadSharedFile } = vi.hoisted(() => ({
   resolveSharedFile: vi.fn(async () => ({
     status: 'resolved',
     path: 'results/report.md',
     matches: ['results/report.md'],
   })),
-  downloadSharedFileAs: vi.fn(async () => undefined),
+  downloadSharedFile: vi.fn(async () => undefined),
 }));
 
 vi.mock('../api', () => ({
-  getSharedThread: vi.fn(async () => ({
-    title: 'Shared',
-    workspace_name: null,
-    permissions: { allow_files: true, allow_download: true },
-  })),
   replaySharedThread: vi.fn(async (_token: string, onEvent: (e: unknown) => void) => {
     onEvent({ event: 'user_message', turn_index: 0, role: 'user', content: 'build it' });
     onEvent({ event: 'replay_done' });
@@ -61,15 +55,19 @@ vi.mock('../api', () => ({
   getSharedFiles: vi.fn(async () => ({ files: [] })),
   readSharedFile: vi.fn(async () => ''),
   resolveSharedFile,
-  downloadSharedFileAs,
-  fetchSharedServeObjectUrl: vi.fn(async () => ''),
-  fetchSharedServeArrayBuffer: vi.fn(async () => new ArrayBuffer(0)),
+  downloadSharedFile,
+  servedObjectUrl: vi.fn(async () => ''),
+  servedBytes: vi.fn(async () => new ArrayBuffer(0)),
+  sharedServePrefix: (token: string) => `/api/v1/public/shared/${token}/files/serve/`,
 }));
 
 import SharedChatView from '../SharedChatView';
+import type { SharedThreadMetadata } from '../api';
+
+const metadata = { kind: 'thread', thread_id: 't1', title: 'Shared', workspace_name: '', msg_type: 'chat', created_at: '', updated_at: '', permissions: { allow_files: true, allow_download: true } } as SharedThreadMetadata;
 
 async function actions(): Promise<MessageActions> {
-  render(<SharedChatView />);
+  render(<SharedChatView shareToken="tok" metadata={metadata} />);
   await waitFor(() => expect(captured).not.toBeNull());
   return captured!;
 }
@@ -78,14 +76,14 @@ describe('SharedChatView deliverable download', () => {
   beforeEach(() => {
     captured = null;
     resolveSharedFile.mockClear();
-    downloadSharedFileAs.mockClear();
+    downloadSharedFile.mockClear();
   });
 
   it('does not resolve or save a card that names another workspace', async () => {
     const { onDownloadFile } = await actions();
     await onDownloadFile!('results/report.md', 'other-workspace-id');
     expect(resolveSharedFile).not.toHaveBeenCalled();
-    expect(downloadSharedFileAs).not.toHaveBeenCalled();
+    expect(downloadSharedFile).not.toHaveBeenCalled();
   });
 
   it('saves a card from this thread s own workspace', async () => {
@@ -94,6 +92,6 @@ describe('SharedChatView deliverable download', () => {
     const { onDownloadFile } = await actions();
     await onDownloadFile!('results/report.md');
     expect(resolveSharedFile).toHaveBeenCalledWith('tok', ['results/report.md'], []);
-    expect(downloadSharedFileAs).toHaveBeenCalledWith('tok', 'results/report.md', 'download');
+    expect(downloadSharedFile).toHaveBeenCalledWith('tok', 'results/report.md');
   });
 });

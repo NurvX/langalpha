@@ -66,9 +66,9 @@ export interface ApiAdapter {
   downloadFileAsArrayBuffer?: (path: string) => Promise<ArrayBuffer>;
   triggerDownload?: (path: string) => Promise<void>;
   resolveFile?: (candidates: string[], recentWrites: string[]) => Promise<FileRefResolution>;
-  /** Override the served URL for HTML preview (e.g. the public share serve URL,
-   *  used on /s/:shareToken where the workspace UUID isn't available). */
-  buildServedUrl?: (path: string, opts?: { injectTheme?: boolean }) => string;
+  /** The serve prefix, ending in `/`, a share's HTML is served under (the served
+   *  URL is this plus the encoded path). Omitted, the owner's grant serves it. */
+  servePrefix?: string;
 }
 
 export type { UnsavedFile, UnsavedReason } from '@/types/api';

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { ArrowLeft, FolderOpen } from 'lucide-react';
 import { motion, type PanInfo } from 'framer-motion';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -15,12 +15,9 @@ import { dirTarget, fileTarget, stampTarget, type ChartTabSpec } from '../ChatAg
 import type { FileTab } from '../ChatAgent/components/filePanel/useFileTabs';
 import { CHART_SURFACE_MIN_WIDTH } from '@/pages/MarketView/components/chartSurfaceLayout';
 import { WorkspaceProvider } from '../ChatAgent/contexts/WorkspaceContext';
-import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/components/ui/use-toast';
-import logoLight from '../../assets/img/logo.svg';
-import logoDark from '../../assets/img/logo-dark.svg';
 import {
   handleHistoryUserMessage,
   handleHistoryReasoningSignal,
@@ -33,18 +30,18 @@ import {
 } from '../ChatAgent/hooks/utils/historyEventHandlers';
 import type { PairState } from '../ChatAgent/hooks/utils/historyEventHandlers';
 import {
-  getSharedThread,
   replaySharedThread,
   getSharedFiles,
   readSharedFile,
   resolveSharedFile,
-  downloadSharedFileAs,
-  fetchSharedServeObjectUrl,
-  fetchSharedServeArrayBuffer,
+  downloadSharedFile,
+  servedBytes,
+  servedObjectUrl,
+  sharedServePrefix,
 } from './api';
 import type { SharedThreadMetadata, SSEEvent } from './api';
+import ShareUnavailable from './ShareUnavailable';
 import type { TextSegment } from '@/types/chat';
-import { buildSharedServeUrl } from '../ChatAgent/components/viewers/html/wsfilesUrl';
 import { isTaskAgentId } from '../ChatAgent/utils/agentId';
 import type { FileLocation } from '../ChatAgent/utils/fileLocation';
 import { computeAgentArtifactRouting } from '../ChatAgent/utils/agentPaths';
@@ -74,13 +71,15 @@ const CHART_MAX_RATIO = 0.92;
  * Mirrors ChatView layout exactly, with interactive operations disabled.
  * Accessible at /s/:shareToken without authentication.
  */
-export default function SharedChatView() {
-  const { shareToken } = useParams<{ shareToken: string }>();
-  const { t } = useTranslation();
-  const { theme } = useTheme();
-  const logo = theme === 'dark' ? logoDark : logoLight;
+interface SharedChatViewProps {
+  shareToken: string;
+  /** Resolved by `SharePage`; the replay starts from it. */
+  metadata: SharedThreadMetadata;
+}
 
-  const [metadata, setMetadata] = useState<SharedThreadMetadata | null>(null);
+export default function SharedChatView({ shareToken, metadata }: SharedChatViewProps) {
+  const { t } = useTranslation();
+
   const [messages, setMessages] = useState<MessageRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -114,23 +113,8 @@ export default function SharedChatView() {
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
-  // Fetch metadata
+  // Replay the conversation
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const meta = await getSharedThread(shareToken!);
-        if (!cancelled) setMetadata(meta);
-      } catch (e: unknown) {
-        if (!cancelled) setError((e as Error).message);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [shareToken]);
-
-  // Replay conversation once metadata is loaded
-  useEffect(() => {
-    if (!metadata) return;
     let cancelled = false;
 
     const assistantMessagesByPair = new Map<number, string>();
@@ -168,7 +152,7 @@ export default function SharedChatView() {
 
     (async () => {
       try {
-        await replaySharedThread(shareToken!, (event: SSEEvent) => {
+        await replaySharedThread(shareToken, (event: SSEEvent) => {
           if (cancelled) return;
           const eventType = event.event as string | undefined;
           const contentType = event.content_type as string | undefined;
@@ -391,7 +375,7 @@ export default function SharedChatView() {
     })();
 
     return () => { cancelled = true; };
-  }, [metadata, shareToken]);
+  }, [shareToken]);
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -402,7 +386,7 @@ export default function SharedChatView() {
   }, [messages]);
 
   // Permissions
-  const permissions = (metadata?.permissions || {}) as Record<string, unknown>;
+  const permissions = (metadata.permissions || {}) as Record<string, unknown>;
   const canBrowseFiles = permissions.allow_files === true;
   const canDownload = permissions.allow_download === true;
 
@@ -426,7 +410,7 @@ export default function SharedChatView() {
     setFilesLoading(true);
     (async () => {
       try {
-        const result = await getSharedFiles(shareToken!);
+        const result = await getSharedFiles(shareToken);
         if (cancelled) return;
         const listed = result.files || [];
         setFiles(listed);
@@ -451,31 +435,25 @@ export default function SharedChatView() {
     setShowFilePanel((prev) => !prev);
   }, [canBrowseFiles]);
 
-  // Build API adapter for FilePanel — wraps public endpoints. buildServedUrl
-  // points the HTML preview iframe at the public serve URL (no workspace UUID).
+  // The panel's adapter over the public endpoints. The serve prefix stands in
+  // for the workspace, which a share never names.
+  const servePrefix = sharedServePrefix(shareToken);
   const fileApiAdapter = useMemo(() => ({
-    readFile: (path: string) => readSharedFile(shareToken!, path),
+    readFile: (path: string) => readSharedFile(shareToken, path),
     // HTML files read their full source here; the public read endpoint caps at
     // its own line limit, and the preview renders via the served URL regardless.
-    readFileFull: (path: string) => readSharedFile(shareToken!, path),
-    // Byte-access previews go through the serve endpoint (allow_files), matching
-    // the rendered report. Only the explicit save affordance uses the download
-    // endpoint (allow_download) — see fetchSharedServeObjectUrl docs.
-    downloadFile: (path: string) => fetchSharedServeObjectUrl(shareToken!, path),
-    downloadFileAsArrayBuffer: (path: string) => fetchSharedServeArrayBuffer(shareToken!, path),
-    triggerDownload: (path: string) => downloadSharedFileAs(shareToken!, path, 'download'),
-    buildServedUrl: (path: string, opts?: { injectTheme?: boolean }) =>
-      buildSharedServeUrl(shareToken!, path, opts),
+    readFileFull: (path: string) => readSharedFile(shareToken, path),
+    // Previews read under the serve prefix (allow_files), matching the rendered
+    // report; only the explicit save uses the download endpoint (allow_download).
+    downloadFile: (path: string) => servedObjectUrl(servePrefix, path),
+    downloadFileAsArrayBuffer: (path: string) => servedBytes(servePrefix, path),
+    triggerDownload: (path: string) => downloadSharedFile(shareToken, path),
+    servePrefix,
     resolveFile: (candidates: string[], recentWrites: string[]) =>
-      resolveSharedFile(shareToken!, candidates, recentWrites),
-  }), [shareToken]);
+      resolveSharedFile(shareToken, candidates, recentWrites),
+  }), [shareToken, servePrefix]);
 
-  // Inline markdown images render via the serve endpoint (allow_files) so they
-  // load on a copy-link share, which grants allow_files but not allow_download.
-  const imageDownloader = useCallback(
-    (path: string) => fetchSharedServeObjectUrl(shareToken!, path),
-    [shareToken],
-  );
+  const imageDownloader = useCallback((path: string) => servedObjectUrl(servePrefix, path), [servePrefix]);
 
   // Open file from chat (tool call artifacts, file mention cards)
   const handleOpenFile = useCallback((filePath: string, _workspaceId?: string, location?: FileLocation, opts?: { pin?: boolean }) => {
@@ -539,14 +517,14 @@ export default function SharedChatView() {
             // a report and then fail to save it.
             const target = await downloadTarget(
               path,
-              (candidates, recentWrites) => resolveSharedFile(shareToken!, candidates, recentWrites),
+              (candidates, recentWrites) => resolveSharedFile(shareToken, candidates, recentWrites),
               getRecentWritePaths(),
             );
             // Namesakes the lookup could not pick between leave nothing to
             // save, so the click lands on the panel that asks, exactly as Open
             // does with the same answer.
             if (!target.placed) return void handleOpenFile(path, fileWorkspaceId);
-            await downloadSharedFileAs(shareToken!, target.path, 'download');
+            await downloadSharedFile(shareToken, target.path);
           } catch (err: unknown) {
             console.error('[SharedChatView] Download failed:', err);
             // A reader on a shared link has no other way to learn the save did
@@ -561,7 +539,7 @@ export default function SharedChatView() {
   // permission are known. One-shot — the share-link target from §1.3b.
   const fileDeepLinkConsumedRef = useRef(false);
   useEffect(() => {
-    if (fileDeepLinkConsumedRef.current || !metadata || !canBrowseFiles) return;
+    if (fileDeepLinkConsumedRef.current || !canBrowseFiles) return;
     const fileParam = new URLSearchParams(window.location.search).get('file');
     if (!fileParam) return;
     fileDeepLinkConsumedRef.current = true;
@@ -621,28 +599,9 @@ export default function SharedChatView() {
     />
   );
 
-  // Error state
+  // The metadata resolved, so a failure here is the replay's, not the link's.
   if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen gap-4" style={{ backgroundColor: 'var(--color-bg-page)' }}>
-        <img src={logo} alt="LangAlpha" className="h-8 opacity-60" />
-        <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-          {error.includes('404') ? 'This shared conversation is no longer available.' : error}
-        </p>
-        <Link to="/" className="text-sm underline" style={{ color: 'var(--color-accent-primary)' }}>
-          Go to LangAlpha
-        </Link>
-      </div>
-    );
-  }
-
-  // Loading state
-  if (!metadata) {
-    return (
-      <div className="flex items-center justify-center min-h-screen" style={{ backgroundColor: 'var(--color-bg-page)' }}>
-        <Loader size={24} className="text-[color:var(--color-text-tertiary)]" />
-      </div>
-    );
+    return <ShareUnavailable variant="failed" onRetry={() => window.location.reload()} />;
   }
 
   return (

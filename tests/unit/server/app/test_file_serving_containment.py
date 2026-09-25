@@ -374,6 +374,28 @@ async def test_contained_sandbox_paths_denies_the_batch_on_a_mangled_probe(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply",
+    [
+        SimpleNamespace(stdout="", stderr="", exit_code=0),
+        SimpleNamespace(stdout="", stderr="killed", exit_code=137),
+    ],
+)
+async def test_a_strict_batch_raises_where_a_denial_would_read_as_missing(
+    tree, reply
+) -> None:
+    """A share's file list would otherwise drop every asset without a word."""
+    tree.sandbox.runtime.exec = AsyncMock(return_value=reply)
+    with pytest.raises(SandboxTransientError):
+        await contained_sandbox_paths(
+            tree.sandbox,
+            [f"{tree.root}/work/report.html", f"{tree.root}/work/chart.png"],
+            work_dir=tree.root,
+            strict=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_resolve_in_sandbox_reports_a_broken_probe_as_transient(tree) -> None:
     """A provider error has to arrive as a sandbox error, not as "no such file"."""
     tree.sandbox.runtime.exec = AsyncMock(side_effect=ValueError("sdk blew up"))

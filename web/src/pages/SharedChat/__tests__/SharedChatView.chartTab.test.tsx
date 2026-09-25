@@ -18,7 +18,6 @@ let captured: MessageActions | null = null;
 let panelProps: Record<string, unknown> | null = null;
 
 vi.mock('react-router-dom', () => ({
-  useParams: () => ({ shareToken: 'tok' }),
   Link: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
 }));
 
@@ -60,7 +59,6 @@ const { permissions, getSharedFiles } = vi.hoisted(() => ({
 }));
 
 vi.mock('../api', () => ({
-  getSharedThread: vi.fn(async () => ({ title: 'Shared', workspace_name: null, permissions })),
   replaySharedThread: vi.fn(async (_token: string, onEvent: (e: unknown) => void) => {
     onEvent({ event: 'user_message', turn_index: 0, role: 'user', content: 'chart it' });
     onEvent({ event: 'replay_done' });
@@ -68,15 +66,19 @@ vi.mock('../api', () => ({
   getSharedFiles,
   readSharedFile: vi.fn(async () => ''),
   resolveSharedFile: vi.fn(),
-  downloadSharedFileAs: vi.fn(),
-  fetchSharedServeObjectUrl: vi.fn(async () => ''),
-  fetchSharedServeArrayBuffer: vi.fn(async () => new ArrayBuffer(0)),
+  downloadSharedFile: vi.fn(),
+  servedObjectUrl: vi.fn(async () => ''),
+  servedBytes: vi.fn(async () => new ArrayBuffer(0)),
+  sharedServePrefix: (token: string) => `/api/v1/public/shared/${token}/files/serve/`,
 }));
 
 import SharedChatView from '../SharedChatView';
+import type { SharedThreadMetadata } from '../api';
+
+const metadata = { kind: 'thread', thread_id: 't1', title: 'Shared', workspace_name: '', msg_type: 'chat', created_at: '', updated_at: '', permissions } as SharedThreadMetadata;
 
 async function mount(): Promise<MessageActions> {
-  render(<SharedChatView />);
+  render(<SharedChatView shareToken="tok" metadata={metadata} />);
   await waitFor(() => expect(captured).not.toBeNull());
   return captured!;
 }

@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { AlertCircle } from 'lucide-react';
 import { useTheme } from '@/contexts/ThemeContext';
+import { Button } from '@/components/ui/button';
+import { Loader } from '@/components/ui/loader';
 import SyntaxHighlighter, { oneDark, oneLight } from '../SyntaxHighlighter';
 import { useHtmlSandbox } from './html/useHtmlSandbox';
 import { useHtmlActions } from './html/useHtmlActions';
-import { useDirectLinkGuard } from './html/useDirectLinkGuard';
+import { useServedHtml } from './html/useServedHtml';
+import { SERVED_HTML_SANDBOX } from './html/sandbox';
 import HtmlActionBar from './html/HtmlActionBar';
 import HtmlFullscreenModal from './html/HtmlFullscreenModal';
-import { buildWsfilesUrl } from './html/wsfilesUrl';
 import './HtmlViewer.css';
 
 interface HtmlViewerProps {
@@ -21,18 +24,15 @@ interface HtmlViewerProps {
   /** Omitted where the viewer may not save the bytes, which drops the save
    *  affordances in the fullscreen toolbar along with it. */
   onTriggerDownload?: () => void;
-  /** Override the served URL (e.g. the public share serve URL). When set, the
-   *  preview iframe and HTML actions point here instead of the wsfiles route. */
-  servedUrlOverride?: string;
+  /** The serve prefix a share's page was handed. Omitted, the owner's grant
+   *  serves the file. */
+  servePrefix?: string;
   /** Element id a reference pointed at; the iframe scrolls to it. */
   anchor?: string | null;
   /** Bumped by the panel on every reference open, so the same anchor asked for
    *  twice is two requests rather than one unchanged prop. Read only alongside
    *  `anchor`. */
   anchorSeq?: number | null;
-  /** Copy a shareable link to this report (authenticated app only). When set,
-   *  a link button appears in the toolbar. */
-  onCopyShareLink?: (filePath: string) => void;
 }
 
 export default function HtmlViewer({
@@ -41,10 +41,9 @@ export default function HtmlViewer({
   workspaceId,
   filePath,
   onTriggerDownload,
-  servedUrlOverride,
+  servePrefix,
   anchor = null,
   anchorSeq = null,
-  onCopyShareLink,
 }: HtmlViewerProps) {
   const { t } = useTranslation();
   const { theme } = useTheme();
@@ -74,33 +73,54 @@ export default function HtmlViewer({
     if (anchor) scrollToAnchor(anchor);
   }, [request, anchor, scrollToAnchor]);
 
-  const servedUrl = useMemo(
-    () => servedUrlOverride ?? buildWsfilesUrl(workspaceId, filePath, { injectTheme: true }),
-    [servedUrlOverride, workspaceId, filePath],
-  );
-
-  // Byte-faithful served URL (no ?inject=theme) for open-in-new-tab / PDF.
-  const servedUrlPlain = useMemo(
-    () => (servedUrlOverride ? servedUrlOverride.split('?')[0] : undefined),
-    [servedUrlOverride],
-  );
+  const served = useServedHtml(workspaceId, filePath, servePrefix);
+  const servedUrl = served.themedUrl;
 
   const actions = useHtmlActions({
     mode: 'file',
-    workspaceId,
     filePath,
     triggerDownload: onTriggerDownload && (() => Promise.resolve(onTriggerDownload())),
-    servedUrl: servedUrlPlain,
+    servedUrl: served.plainUrl,
+    openUrl: served.openUrl,
   });
 
-  // Owner view (no servedUrl override) opens the raw, non-revocable wsfiles URL
-  // — confirm before exposing it. The public share serve URL is revocable.
-  const { request: openInNewTab, dialog: directLinkDialog } = useDirectLinkGuard(
-    actions.openInNewTab,
-    !servedUrlOverride,
-  );
-
   const isLight = theme === 'light';
+
+  const renderPreview = () => {
+    if (servedUrl) {
+      // src= loads: the served response's CSP `sandbox` header intersects
+      // with this attribute, and serve.py owns the effective policy and the
+      // link-click rationale (both must carry the popup tokens).
+      return (
+        <iframe
+          ref={iframeRef}
+          src={anchor ? `${servedUrl}#${encodeURIComponent(anchor)}` : servedUrl}
+          sandbox={SERVED_HTML_SANDBOX}
+          className="html-viewer-frame"
+          title={fileName || 'HTML Preview'}
+          onLoad={pushTheme}
+        />
+      );
+    }
+    if (served.error) {
+      return (
+        <div className="flex flex-col items-center justify-center gap-3 py-12 text-sm" role="alert">
+          <span className="flex items-center gap-2" style={{ color: 'var(--color-text-secondary)' }}>
+            <AlertCircle className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--color-icon-danger)' }} />
+            {t('filePanel.htmlPreviewFailed')}
+          </span>
+          <Button variant="outline" size="sm" onClick={served.retry}>
+            {t('common.retry')}
+          </Button>
+        </div>
+      );
+    }
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader size={20} className="text-[color:var(--color-text-tertiary)]" />
+      </div>
+    );
+  };
 
   return (
     <div className="html-viewer">
@@ -119,26 +139,14 @@ export default function HtmlViewer({
             {t('filePanel.htmlSource')}
           </button>
         </div>
-        {/* Download/Save-as-PDF live in the file panel header's download menu. */}
+        {/* Download/Save-as-PDF and the share link live in the file panel header. */}
         <HtmlActionBar
           onFullscreen={() => setFullscreen(true)}
-          onOpenInNewTab={openInNewTab}
-          onCopyLink={onCopyShareLink ? () => onCopyShareLink(filePath) : undefined}
+          fullscreenDisabled={!servedUrl}
+          onOpenInNewTab={actions.openInNewTab}
         />
       </div>
-      {mode === 'preview' ? (
-        // src= loads: the served response's CSP `sandbox` header intersects
-        // with this attribute — serve.py owns the effective policy and the
-        // link-click rationale (both must carry the popup tokens).
-        <iframe
-          ref={iframeRef}
-          src={anchor ? `${servedUrl}#${encodeURIComponent(anchor)}` : servedUrl}
-          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-          className="html-viewer-frame"
-          title={fileName || 'HTML Preview'}
-          onLoad={pushTheme}
-        />
-      ) : (
+      {mode === 'preview' ? renderPreview() : (
         <div className="html-viewer-source">
           <SyntaxHighlighter
             language="markup"
@@ -151,20 +159,17 @@ export default function HtmlViewer({
           </SyntaxHighlighter>
         </div>
       )}
-      {fullscreen && (
+      {fullscreen && servedUrl && (
         <HtmlFullscreenModal
           variant="file"
           open={fullscreen}
           onOpenChange={setFullscreen}
           title={fileName}
-          workspaceId={workspaceId}
-          filePath={filePath}
-          servedUrl={servedUrlOverride}
+          servedUrl={servedUrl}
           actions={actions}
           canDownload={!!onTriggerDownload}
         />
       )}
-      {directLinkDialog}
     </div>
   );
 }

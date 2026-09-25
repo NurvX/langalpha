@@ -63,6 +63,9 @@ services:
       # Override in .env to connect to external services or for host dev.
       DB_HOST: ${DB_HOST:-postgres}
       REDIS_URL: "${REDIS_URL:-redis://:${REDIS_PASSWORD:-redis}@redis:6379/0}"
+      # The web app is served from its own port here, and /a/<code> links the
+      # agent writes into a reply must open there, not on the API port.
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:${FRONTEND_PORT:-5173}}
     volumes:
       # Mount source for hot-reload
       - ./src:/app/src

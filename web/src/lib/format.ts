@@ -75,6 +75,23 @@ export const fixed2 = createFormatter({ minimumFractionDigits: 2, maximumFractio
 export const signedFixed2 = createFormatter({ minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false, signDisplay: 'exceptZero' });
 export const compactNumberFixed2 = createFormatter({ notation: 'compact', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+const byteAmount = createFormatter({ maximumFractionDigits: 1 });
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
+
+// A byte count in the largest binary unit it reaches, one decimal under ten
+// (`40960 → "40 KB"`, `1536 → "1.5 KB"`). The number follows the locale; the
+// unit symbols are the same everywhere, spaced so zh-CN reads `256 MB` too.
+export function formatBytes(bytes: number): string {
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const shown = unit === 0 || value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${byteAmount(shown)} ${BYTE_UNITS[unit]}`;
+}
+
 function safeRelativeFormat(lang: string): Intl.RelativeTimeFormat {
   try {
     return new Intl.RelativeTimeFormat(lang, { numeric: 'auto', style: 'narrow' });

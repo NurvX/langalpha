@@ -1,7 +1,6 @@
 """Public thread sharing: toggle share state and read share status."""
 
 import json
-import secrets
 from datetime import datetime, timezone
 
 
@@ -49,10 +48,6 @@ async def update_thread_share(
 
     # Build update kwargs
     kwargs: dict = {"is_shared": request.is_shared}
-
-    # Generate share_token on first enable (reuse existing on re-enable)
-    if request.is_shared and not thread.get("share_token"):
-        kwargs["share_token"] = secrets.token_urlsafe(16)
 
     if request.is_shared:
         kwargs["shared_at"] = datetime.now(timezone.utc)

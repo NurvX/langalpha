@@ -124,8 +124,8 @@ interface FilePanelProps {
    *  The host that sizes the panel reads this, since a chart has a floor of
    *  its own. */
   onActiveTabKindChange?: ((kind: FileTab['kind'] | null) => void) | null;
-  /** Copy a shareable link to an HTML report (authenticated app only). */
-  onCopyShareLink?: ((filePath: string) => void) | null;
+  /** Offer the open file's share dialog in its header: the owner's own panel only. */
+  canShare?: boolean;
 }
 
 function FilePanel({
@@ -160,7 +160,7 @@ function FilePanel({
   onToggleSystemFiles = null,
   onDirtyChange = null,
   onActiveTabKindChange = null,
-  onCopyShareLink = null,
+  canShare = false,
 }: FilePanelProps): React.ReactElement {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
@@ -596,6 +596,7 @@ function FilePanel({
         <PreviewCrumbs
           entry={previews.byPort.get(activeTab.port) ?? { port: activeTab.port, url: '', loading: true, error: false, reloadToken: 0 }}
           onRefresh={() => previews.refresh(activeTab.port)}
+          workspaceId={readOnly ? null : workspaceId}
         />
       )}
 
@@ -621,7 +622,8 @@ function FilePanel({
               triggerDownloadFn={triggerDownloadFn}
               canDownload={canDownload}
               readFileFullFn={readFileFullFn}
-              htmlServedUrl={apiAdapter?.buildServedUrl?.(selectedFile)}
+              servePrefix={apiAdapter?.servePrefix}
+              canShare={canShare}
               editorRef={edit.editorRef}
               canUndo={edit.canUndo}
               canRedo={edit.canRedo}
@@ -743,7 +745,6 @@ function FilePanel({
                   onContentMouseUp: handleContentMouseUp,
                   onViewerLink: handleViewerLink,
                   onAnchorLink: handleAnchorLink,
-                  onCopyShareLink,
                 }}
                 onPageCount={onPageCount}
                 canUpload={!readOnly}

@@ -49,7 +49,14 @@ const EXPECTED = ['index', 'vendor-dnd', 'vendor-motion', 'vendor-react']
 // reads about 1.8 kB above a local build of the same tree, so the margin
 // here is read against CI, not a laptop. Nothing moved chunks; the eager set
 // is unchanged.
-const MAX_EAGER_KB = 475
+//
+// Raised 475 -> 480 for short share links. The share dialog, the link page and
+// the app card carry copy in both locales, and i18n.ts still bundles every
+// locale into the entry, so about 0.9 kB gz of strings ride the critical path;
+// the share-link query keys, formatBytes and retryUnlessClientError add 0.5 kB.
+// CI read 475.2 against 473.8 on main. Nothing moved chunks; the eager set is
+// unchanged.
+const MAX_EAGER_KB = 480
 
 const outDir = process.argv[2] || 'dist'
 const indexPath = join(outDir, 'index.html')

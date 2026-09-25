@@ -251,8 +251,8 @@ test.describe('Thread Gallery', () => {
     await page.goto('/chat/a0000001-0000-4000-8000-000000000001');
 
     // Thread titles should be visible
-    await expect(page.locator('h3.text-sm.font-normal.truncate', { hasText: 'Test conversation' })).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('h3.text-sm.font-normal.truncate', { hasText: 'Second thread' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Test conversation', exact: true })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('heading', { name: 'Second thread', exact: true })).toBeVisible();
   });
 
   test('click thread navigates to chat', async ({ page }) => {
@@ -266,7 +266,7 @@ test.describe('Thread Gallery', () => {
     await page.goto('/chat/a0000001-0000-4000-8000-000000000001');
 
     // Click on first thread
-    const threadCard = page.locator('h3.text-sm.font-normal.truncate', { hasText: 'Test conversation' });
+    const threadCard = page.getByRole('heading', { name: 'Test conversation', exact: true });
     await expect(threadCard).toBeVisible({ timeout: 10000 });
     await threadCard.click();
 
@@ -295,7 +295,7 @@ test.describe('Thread Gallery', () => {
     await page.goto('/chat/a0000001-0000-4000-8000-000000000001');
 
     // Wait for thread to appear
-    const threadTitle = page.locator('h3.text-sm.font-normal.truncate', { hasText: 'Test conversation' });
+    const threadTitle = page.getByRole('heading', { name: 'Test conversation', exact: true });
     await expect(threadTitle).toBeVisible({ timeout: 10000 });
 
     // Hover on the thread card to reveal the delete button
@@ -313,7 +313,7 @@ test.describe('Thread Gallery', () => {
 
     // Thread should be removed (only "Second thread" remains)
     await expect(threadTitle).not.toBeVisible({ timeout: 10000 });
-    await expect(page.locator('h3.text-sm.font-normal.truncate', { hasText: 'Second thread' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Second thread', exact: true })).toBeVisible();
   });
 });
 
