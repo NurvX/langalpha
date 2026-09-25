@@ -1,36 +1,22 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
-import { Pin, Pencil, Cpu, Copy, Trash2, Infinity as InfinityIcon } from 'lucide-react';
+import { Pin, Pencil, Copy, Trash2 } from 'lucide-react';
 import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/use-toast';
-import { isPlatformMode } from '@/config/hostMode';
-import type { ResourceTier } from '@/types/api';
 import { queryKeys } from '@/lib/queryKeys';
-import {
-  deleteWorkspace,
-  setWorkspaceSpec,
-  setWorkspaceAlwaysOn,
-  duplicateWorkspace,
-  formatApiErrorDetail,
-  apiErrorDetailMessage,
-  apiErrorStatus,
-} from '../utils/api';
-import { useWorkspaceMutation } from '../hooks/useWorkspaceMutation';
+import { deleteWorkspace, duplicateWorkspace } from '../utils/api';
+import { entitlementErrorMessage } from '../utils/entitlementErrors';
 import { invalidateWorkspaceMembership } from '../hooks/workspaceRowActions';
-import { useTierQuota } from '../hooks/useTierQuota';
 import { forgetStableNavOrder } from '../hooks/useNavigationData';
 import { forgetSharedWorkspaceThreads } from '@/lib/navThreadsStore';
-import { removeStoredThreadId } from '../hooks/useChatMessages';
+import { removeStoredThreadId } from '../hooks/utils/threadStorage';
 import { clearAllMarketThreadsForWorkspace } from '../../MarketView/utils/threadPersistence';
 import { forgetNavPanelExpansion } from './navExpansionStore';
 import { scrollMemory } from '@/lib/scrollMemory';
-import ChangeSpecDialog from './ChangeSpecDialog';
-import { tierLabel } from './tierUi';
 import DeleteConfirmModal from './DeleteConfirmModal';
 import DuplicateWorkspaceDialog from './DuplicateWorkspaceDialog';
-import AlwaysOnConfirmDialog from './AlwaysOnConfirmDialog';
 
 /** Minimal workspace shape the menu + actions need — both the gallery's richer
  *  record and the nav tree's loose entry satisfy it. */
@@ -39,48 +25,13 @@ export interface MenuWorkspace {
   name?: string;
   status?: string;
   is_pinned?: boolean;
-  is_always_on?: boolean;
-  /** Preselects the change-spec dialog's current tier. */
-  resource_tier?: ResourceTier;
   [key: string]: unknown;
-}
-
-/** Map entitlement failures (403 plan-gate / 429 quota) to actionable copy in
- *  platform mode; generic API detail otherwise. Single source — the gallery
- *  imports this too. */
-export function entitlementErrorMessage(
-  err: unknown,
-  t: ReturnType<typeof useTranslation>['t'],
-  tier?: ResourceTier,
-): string {
-  if (isPlatformMode) {
-    const status = apiErrorStatus(err);
-    if (status === 403) {
-      return t('workspace.notOnPlan', 'Not available on your plan — upgrade to unlock.');
-    }
-    if (status === 429) {
-      // Prefer the platform's structured quota message when it forwards one
-      // (detail: { message, type, current, limit, remaining }); fall back to
-      // the localized generic copy otherwise.
-      const platformMessage = apiErrorDetailMessage(err);
-      if (platformMessage) return platformMessage;
-      if (tier) {
-        return t('workspace.tierLimitReached', "You've reached your {{tier}} workspace limit.", {
-          tier: tierLabel(t, tier),
-        });
-      }
-      return t('workspace.workspaceLimitReached', "You've reached your workspace limit.");
-    }
-  }
-  return formatApiErrorDetail(err);
 }
 
 interface WorkspaceMenuItemsProps<W extends MenuWorkspace> {
   workspace: W;
   onTogglePin?: (workspace: W) => void;
   onRename?: (workspace: W) => void;
-  onUpgrade: (workspace: W) => void;
-  onToggleAlwaysOn: (workspace: W) => void;
   onDuplicate: (workspace: W) => void;
   onDelete: (workspace: W) => void;
 }
@@ -88,19 +39,17 @@ interface WorkspaceMenuItemsProps<W extends MenuWorkspace> {
 /**
  * The canonical workspace options menu — identical everywhere a workspace can
  * be managed (gallery card, sidebar tree, mobile drawer). Render inside a
- * DropdownMenuContent.
+ * DropdownMenuContent. Spec and always-on are the computer's, so they live in
+ * the Computers dialog, not here.
  */
 export function WorkspaceMenuItems<W extends MenuWorkspace>({
   workspace,
   onTogglePin,
   onRename,
-  onUpgrade,
-  onToggleAlwaysOn,
   onDuplicate,
   onDelete,
 }: WorkspaceMenuItemsProps<W>) {
   const { t } = useTranslation();
-  const isAlwaysOn = workspace.is_always_on === true;
 
   return (
     <>
@@ -117,16 +66,6 @@ export function WorkspaceMenuItems<W extends MenuWorkspace>({
         </DropdownMenuItem>
       )}
       {(onTogglePin || onRename) && <DropdownMenuSeparator />}
-      <DropdownMenuItem onSelect={() => onUpgrade(workspace)}>
-        <Cpu className="h-4 w-4" />
-        {t('workspace.changeSpec', 'Change spec')}
-      </DropdownMenuItem>
-      <DropdownMenuItem onSelect={() => onToggleAlwaysOn(workspace)}>
-        <InfinityIcon className="h-4 w-4" />
-        {isAlwaysOn
-          ? t('workspace.alwaysOnDisable', 'Turn off always-on')
-          : t('workspace.alwaysOnEnable', 'Turn on always-on')}
-      </DropdownMenuItem>
       <DropdownMenuItem onSelect={() => onDuplicate(workspace)}>
         <Copy className="h-4 w-4" />
         {t('workspace.duplicate', 'Duplicate')}
@@ -141,8 +80,6 @@ export function WorkspaceMenuItems<W extends MenuWorkspace>({
 }
 
 export interface WorkspaceActions {
-  openUpgrade: (workspace: MenuWorkspace) => void;
-  toggleAlwaysOn: (workspace: MenuWorkspace) => void;
   openDuplicate: (workspace: MenuWorkspace) => void;
   openDelete: (workspace: MenuWorkspace) => void;
   /** Render once at the host's root — the confirm/config dialogs. */
@@ -150,7 +87,7 @@ export interface WorkspaceActions {
 }
 
 /** Which flow just succeeded, so a host reacts to only the ones it cares about. */
-export type WorkspaceMutationOp = 'spec' | 'always-on' | 'duplicate';
+export type WorkspaceMutationOp = 'duplicate';
 
 export interface UseWorkspaceActionsOptions {
   currentWorkspaceId?: string | null;
@@ -161,8 +98,7 @@ export interface UseWorkspaceActionsOptions {
 }
 
 /**
- * Self-contained change-spec / always-on / duplicate / delete actions with
- * their dialogs. The canonical implementation for every host (gallery card,
+ * Self-contained duplicate / delete actions with their dialogs. The canonical implementation for every host (gallery card,
  * sidebar tree, mobile drawer): same mutations, entitlement mapping, toasts,
  * and delete cleanup; deleting the currently-open workspace navigates back to
  * the gallery. Host-specific presentation lands in the two callbacks.
@@ -176,60 +112,11 @@ export function useWorkspaceActions({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const [upgradeTarget, setUpgradeTarget] = useState<MenuWorkspace | null>(null);
-  const [alwaysOnTarget, setAlwaysOnTarget] = useState<MenuWorkspace | null>(null);
   const [duplicateTarget, setDuplicateTarget] = useState<MenuWorkspace | null>(null);
   const [duplicateBusy, setDuplicateBusy] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<MenuWorkspace | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-
-  const upgradeMutation = useWorkspaceMutation<ResourceTier>({
-    mutationFn: (wsId, tier) => setWorkspaceSpec(wsId, tier),
-    optimisticPatch: (tier) => ({ resource_tier: tier }),
-    invalidateQuota: true,
-    affectsComputer: true,
-    errorTitleKey: 'workspace.specFailed',
-    mapError: (err, tier) => entitlementErrorMessage(err, t, tier),
-  });
-  const alwaysOnMutation = useWorkspaceMutation<boolean>({
-    mutationFn: (wsId, next) => setWorkspaceAlwaysOn(wsId, next),
-    optimisticPatch: (next) => ({ is_always_on: next }),
-    invalidateQuota: true,
-    affectsComputer: true,
-    errorTitleKey: 'workspace.alwaysOnFailed',
-    mapError: (err) => entitlementErrorMessage(err, t),
-  });
-
-  // The "N left" hint beside each tier in the change-spec dialog.
-  const { data: workspaceQuota } = useTierQuota({ enabled: !!upgradeTarget });
-
-  const handleUpgradeSubmit = async (tier: ResourceTier) => {
-    if (!upgradeTarget) return;
-    const ok = await upgradeMutation.run(upgradeTarget.workspace_id, tier);
-    if (ok) {
-      setUpgradeTarget(null);
-      toast({ title: t('workspace.specUpdated', 'Computer spec updated'), description: tierLabel(t, tier) });
-      onAfterMutate?.('spec');
-    }
-  };
-
-  const applyAlwaysOn = async (workspace: MenuWorkspace, next: boolean) => {
-    const ok = await alwaysOnMutation.run(workspace.workspace_id, next);
-    if (ok) {
-      setAlwaysOnTarget((cur) => (cur?.workspace_id === workspace.workspace_id ? null : cur));
-      onAfterMutate?.('always-on');
-    }
-  };
-
-  const toggleAlwaysOn = (workspace: MenuWorkspace) => {
-    if (alwaysOnMutation.busyIds.has(workspace.workspace_id)) return;
-    if (workspace.is_always_on === true) {
-      void applyAlwaysOn(workspace, false);
-    } else {
-      setAlwaysOnTarget(workspace);
-    }
-  };
 
   const handleDuplicateConfirm = async () => {
     if (!duplicateTarget || duplicateBusy) return;
@@ -267,6 +154,10 @@ export function useWorkspaceActions({
       scrollMemory.forget(`threads:${wsId}:active`);
       scrollMemory.forget(`threads:${wsId}:archived`);
       invalidateWorkspaceMembership(queryClient);
+      // The breakdown drops a deleted project's folder; only an open one refetches.
+      if (typeof deleteTarget.computer_id === 'string') {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.computers.storage(deleteTarget.computer_id) });
+      }
       onAfterDelete?.(wsId);
       if (currentWorkspaceId === wsId) {
         navigate('/chat');
@@ -282,19 +173,6 @@ export function useWorkspaceActions({
 
   const dialogs = (
     <>
-      <ChangeSpecDialog
-        target={upgradeTarget}
-        onClose={() => setUpgradeTarget(null)}
-        onSubmit={(tier) => void handleUpgradeSubmit(tier)}
-        busy={!!upgradeTarget && upgradeMutation.busyIds.has(upgradeTarget.workspace_id)}
-        quota={workspaceQuota}
-      />
-      <AlwaysOnConfirmDialog
-        target={alwaysOnTarget}
-        onClose={() => setAlwaysOnTarget(null)}
-        onConfirm={() => { if (alwaysOnTarget) void applyAlwaysOn(alwaysOnTarget, true); }}
-        busy={!!alwaysOnTarget && alwaysOnMutation.busyIds.has(alwaysOnTarget.workspace_id)}
-      />
       <DuplicateWorkspaceDialog
         target={duplicateTarget}
         onClose={() => setDuplicateTarget(null)}
@@ -312,14 +190,9 @@ export function useWorkspaceActions({
     </>
   );
 
-  // The handlers close over this render's mutation state, but the sidebar
-  // rows that receive them are memoized on identity: hand out one stable set
-  // that reads the latest implementation through a ref.
-  const latest = useRef({ toggleAlwaysOn });
-  latest.current = { toggleAlwaysOn };
+  // The sidebar rows that receive these are memoized on identity: hand out
+  // one stable set.
   const actions = useMemo<Omit<WorkspaceActions, 'dialogs'>>(() => ({
-    openUpgrade: setUpgradeTarget,
-    toggleAlwaysOn: (ws) => latest.current.toggleAlwaysOn(ws),
     openDuplicate: setDuplicateTarget,
     openDelete: (ws) => { setDeleteTarget(ws); setDeleteError(null); },
   }), []);

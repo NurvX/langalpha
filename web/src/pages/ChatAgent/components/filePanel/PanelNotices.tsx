@@ -2,26 +2,14 @@ import React from 'react';
 import { Pencil, RefreshCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { BackupResult, UnsavedFile } from './types';
+import { unsavedReasonLabel } from './unsavedReason';
 
 /** How many skipped files the notice names before it summarises the rest. */
 const UNSAVED_NAMED = 5;
 
-function formatBytes(n: number): string {
-  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
-  if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(n / 1024))} KB`;
-}
-
 function UnsavedReasonText({ file }: { file: UnsavedFile }): React.ReactElement {
   const { t } = useTranslation();
-  const size = file.size ? formatBytes(file.size) : null;
-  return (
-    <span className="file-panel-unsaved-reason">
-      {file.reason === 'too_large' && size
-        ? t('filePanel.unsavedReason.too_large_sized', { size })
-        : t(`filePanel.unsavedReason.${file.reason}`, { defaultValue: t('filePanel.unsavedReason.failed') })}
-    </span>
-  );
+  return <span className="file-panel-unsaved-reason">{unsavedReasonLabel(t, file)}</span>;
 }
 
 interface PanelNoticesProps {

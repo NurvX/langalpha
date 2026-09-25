@@ -26,6 +26,30 @@ export function tierLabel(t: Translate, tier: ResourceTier): string {
   return t(`workspace.tier.${tier}`);
 }
 
+/** A tier's count quota. Only elevated tiers carry one, and only in platform mode. */
+export function tierCapacity(
+  quota: WorkspaceQuota | null | undefined,
+  tier: ResourceTier,
+): WorkspaceCapacity | null {
+  if (tier === 'performance') return quota?.performance ?? null;
+  if (tier === 'max') return quota?.max ?? null;
+  return null;
+}
+
+/**
+ * Why a tier cannot be picked: the plan excludes it, or its quota is spent.
+ * Null when it can. A negative limit is unlimited.
+ */
+export function tierBlockReason(capacity: WorkspaceCapacity | null | undefined): 'not_on_plan' | 'used_up' | null {
+  if (!isPlatformMode || !capacity) return null;
+  if (capacity.limit === 0) return 'not_on_plan';
+  return capacity.limit > 0 && capacity.used >= capacity.limit ? 'used_up' : null;
+}
+
+export function isTierBlocked(capacity: WorkspaceCapacity | null | undefined): boolean {
+  return tierBlockReason(capacity) !== null;
+}
+
 interface TierRadioGroupProps {
   value: ResourceTier;
   onChange: (tier: ResourceTier) => void;
@@ -57,17 +81,8 @@ export function TierRadioGroup({
 
   const tierRows: Array<{ id: ResourceTier; capacity: WorkspaceCapacity | null; disabled: boolean }> =
     TIER_ORDER.map((id) => {
-      // Elevated tiers carry a count quota in platform mode; standard never does.
-      const capacity =
-        id === 'performance' ? quota?.performance ?? null
-        : id === 'max' ? quota?.max ?? null
-        : null;
-      let disabled = false;
-      if (isPlatformMode && capacity && id !== exemptTier) {
-        const remaining = capacity.limit - capacity.used;
-        disabled = capacity.limit === 0 || (capacity.limit > 0 && remaining <= 0);
-      }
-      return { id, capacity, disabled };
+      const capacity = tierCapacity(quota, id);
+      return { id, capacity, disabled: id !== exemptTier && isTierBlocked(capacity) };
     });
 
   // Arrows move selection + focus, skipping disabled tiers and wrapping around.

@@ -82,9 +82,15 @@ const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
 // (`40960 → "40 KB"`, `1536 → "1.5 KB"`). The number follows the locale; the
 // unit symbols are the same everywhere, spaced so zh-CN reads `256 MB` too.
 export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return `${byteAmount(0)} B`;
   let value = bytes;
   let unit = 0;
   while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  // 1023.7 KB would print as "1,024 KB"; carry it into the next unit instead.
+  if (unit > 0 && unit < BYTE_UNITS.length - 1 && Math.round(value) >= 1024) {
     value /= 1024;
     unit += 1;
   }

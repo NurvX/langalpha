@@ -3,38 +3,24 @@ import { useTranslation } from 'react-i18next';
 import { X, Upload, FileText, CheckCircle2, Circle, AlertCircle } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
 import { Input } from '../../../components/ui/input';
+import { formatBytes } from '@/lib/format';
+import type { Workspace } from '@/types/api';
 import { startWorkspace, uploadWorkspaceFile } from '../utils/api';
 import { denialMessage } from '../utils/denialMessage';
+import type { NewWorkspace } from '../hooks/useCreateWorkspace';
 import './CreateWorkspaceModal.css';
-
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-interface WorkspaceData {
-  name: string;
-  description: string;
-}
-
-interface CreatedWorkspace {
-  workspace_id: string;
-  [key: string]: unknown;
-}
 
 interface CreateWorkspaceModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreate: (data: WorkspaceData) => Promise<CreatedWorkspace>;
-  onComplete?: (workspaceId: string) => void;
+  onCreate: (data: NewWorkspace) => Promise<Workspace>;
+  /** Called with the created workspace once the modal is done with it. */
+  onComplete?: (workspace: Workspace) => void;
 }
 
 type Phase = 'form' | 'progress';
 type CreationStep = 'uploading' | 'done' | 'error';
 type FileUploadStatus = 'pending' | 'uploading' | 'done' | 'failed';
-type DescMode = 'agent' | 'manual';
 
 /**
  * CreateWorkspaceModal.
@@ -56,7 +42,6 @@ function CreateWorkspaceModal({ isOpen, onClose, onCreate, onComplete }: CreateW
   // Form state
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [descMode, setDescMode] = useState<DescMode>('agent');
   const [queuedFiles, setQueuedFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,7 +52,7 @@ function CreateWorkspaceModal({ isOpen, onClose, onCreate, onComplete }: CreateW
   const [fileStatuses, setFileStatuses] = useState<Record<string, FileUploadStatus>>({});
   const [currentUploadProgress, setCurrentUploadProgress] = useState(0);
   const [currentUploadName, setCurrentUploadName] = useState('');
-  const [createdWorkspace, setCreatedWorkspace] = useState<CreatedWorkspace | null>(null);
+  const [createdWorkspace, setCreatedWorkspace] = useState<Workspace | null>(null);
   const [progressError, setProgressError] = useState<string | null>(null);
 
   // Drag state
@@ -125,7 +110,7 @@ function CreateWorkspaceModal({ isOpen, onClose, onCreate, onComplete }: CreateW
 
   // ---- Submit ----
 
-  const runUploads = async (workspace: CreatedWorkspace) => {
+  const runUploads = async (workspace: Workspace) => {
     setCreationStep('uploading');
     setProgressError(null);
 
@@ -182,11 +167,11 @@ function CreateWorkspaceModal({ isOpen, onClose, onCreate, onComplete }: CreateW
     setSubmitting(true);
     setError(null);
 
-    let workspace: CreatedWorkspace;
+    let workspace: Workspace;
     try {
       workspace = await onCreate({
         name: name.trim(),
-        description: descMode === 'manual' ? description.trim() : '',
+        description: description.trim(),
       });
     } catch (err: unknown) {
       // A refusal keeps the user on the form with their input intact. On a 429
@@ -202,9 +187,8 @@ function CreateWorkspaceModal({ isOpen, onClose, onCreate, onComplete }: CreateW
     // Nothing to provision and nothing to upload: the workspace exists, so
     // open it rather than showing a progress screen with nothing on it.
     if (queuedFiles.length === 0) {
-      const wsId = workspace.workspace_id;
       resetAndClose();
-      if (onComplete) onComplete(wsId);
+      onComplete?.(workspace);
       return;
     }
 
@@ -223,7 +207,6 @@ function CreateWorkspaceModal({ isOpen, onClose, onCreate, onComplete }: CreateW
   const resetAndClose = () => {
     setName('');
     setDescription('');
-    setDescMode('agent');
     setQueuedFiles([]);
     setError(null);
     setPhase('form');
@@ -238,9 +221,9 @@ function CreateWorkspaceModal({ isOpen, onClose, onCreate, onComplete }: CreateW
   };
 
   const handleOpenWorkspace = () => {
-    const wsId = createdWorkspace?.workspace_id;
+    const workspace = createdWorkspace;
     resetAndClose();
-    if (wsId && onComplete) onComplete(wsId);
+    if (workspace) onComplete?.(workspace);
   };
 
   // ---- Computed ----
@@ -382,39 +365,17 @@ function CreateWorkspaceModal({ isOpen, onClose, onCreate, onComplete }: CreateW
             />
           </div>
 
-          {/* Description mode toggle */}
           <div className="cwm-field">
             <label className="cwm-label">
               {t('common.description')} <span className="cwm-label-optional">{t('common.optional')}</span>
             </label>
-            <div className="cwm-toggle-group">
-              <button
-                type="button"
-                className={`cwm-toggle-btn ${descMode === 'agent' ? 'cwm-toggle-btn--active' : ''}`}
-                onClick={() => { setDescMode('agent'); setDescription(''); }}
-              >
-                {t('workspace.descModeAgent')}
-              </button>
-              <button
-                type="button"
-                className={`cwm-toggle-btn ${descMode === 'manual' ? 'cwm-toggle-btn--active' : ''}`}
-                onClick={() => setDescMode('manual')}
-              >
-                {t('workspace.descModeManual')}
-              </button>
-            </div>
-            {descMode === 'manual' ? (
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder={t('workspace.enterWorkspaceDesc')}
-                rows={3}
-                className="cwm-textarea"
-                style={{ marginTop: 8 }}
-              />
-            ) : (
-              <div className="cwm-toggle-hint">{t('workspace.descModeAgentHint')}</div>
-            )}
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder={t('workspace.enterWorkspaceDesc')}
+              rows={3}
+              className="cwm-textarea"
+            />
           </div>
 
           {/* File dropzone */}
@@ -452,7 +413,7 @@ function CreateWorkspaceModal({ isOpen, onClose, onCreate, onComplete }: CreateW
                   <div key={file.name} className="cwm-file-item">
                     <FileText className="h-4 w-4 cwm-file-icon" />
                     <span className="cwm-file-name">{file.name}</span>
-                    <span className="cwm-file-size">{formatFileSize(file.size)}</span>
+                    <span className="cwm-file-size">{formatBytes(file.size)}</span>
                     <button
                       type="button"
                       className="cwm-file-remove"

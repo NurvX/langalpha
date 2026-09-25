@@ -38,6 +38,7 @@ import { createRecentlySentTracker } from './utils/recentlySentTracker';
 import { createRequestKeyTracker } from './utils/requestKey';
 import { handleReasoningSignal, handleTextContent } from './utils/streamEventHandlers';
 import { useMarketWatch } from './useMarketWatch';
+import { refreshComputersAfterTurn } from './useComputers';
 // Chart-annotation live bridge: writes agent-drawn annotations into the
 // shared MarketView store so the desktop MarketView chat panel (which uses
 // this engine for both flash and PTC) renders them live. Harmless on the
@@ -2685,6 +2686,7 @@ export function useChatMessages(
     markTranscriptPersisted,
     clearModelStatus,
     finalizePendingTodos,
+    refreshComputerAfterTurn: agentMode === 'ptc' ? () => refreshComputersAfterTurn(queryClient) : null,
     reportBackWatch,
   };
 

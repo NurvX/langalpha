@@ -38,6 +38,7 @@ import {
 import { useWorkspaces } from '../../../hooks/useWorkspaces';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
+import { formatBytes } from '@/lib/format';
 import {
   deleteUserMemo,
   triggerUserMemoDownload,
@@ -73,13 +74,6 @@ const ACCEPTED_EXTENSIONS = new Set<string>([
 const ACCEPT_ATTR = '.md,.txt,.csv,.json,.pdf,text/markdown,text/plain,text/csv,application/json,application/pdf';
 
 // --- Helpers ---------------------------------------------------------------
-
-function formatBytes(n: number): string {
-  if (!n) return '0 B';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(2)} MB`;
-}
 
 function formatDate(iso: string | null): string {
   if (!iso) return '';

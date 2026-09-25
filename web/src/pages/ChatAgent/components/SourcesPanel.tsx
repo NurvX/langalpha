@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/dialog';
 import { provenanceDisplayKey, countDedupedSources, type ProvenanceRecord } from '@/types/chat';
 import type { ProvenanceSourceType } from '@/types/sse';
+import { formatBytes } from '@/lib/format';
 import { AnimatedTabs } from '@/components/ui/animated-tabs';
 import { workspaceRelativePath } from '@/pages/ChatAgent/utils/agentPaths';
 import { isTaskAgentId } from '@/pages/ChatAgent/utils/agentId';
@@ -143,13 +144,6 @@ function urlPath(url: string): string {
 function shortSha(sha?: string): string {
   if (!sha) return '';
   return sha.length > 12 ? sha.slice(0, 12) : sha;
-}
-
-function formatSize(bytes?: number): string {
-  if (bytes == null) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatTimestamp(ts?: string): string {
@@ -942,7 +936,7 @@ function FingerprintRows({ record }: { record: ProvenanceRecord }): React.ReactE
       mono: true,
       icon: <Fingerprint className="h-3 w-3 flex-shrink-0" style={TERTIARY} />,
     });
-  if (record.result_size != null) meta.push({ label: t('chat.sources.fingerprint.size'), value: formatSize(record.result_size), mono: true });
+  if (record.result_size != null) meta.push({ label: t('chat.sources.fingerprint.size'), value: formatBytes(record.result_size), mono: true });
 
   const argEntries = record.args ? Object.entries(record.args) : [];
 

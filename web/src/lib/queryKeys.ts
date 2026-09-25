@@ -75,6 +75,9 @@ export const queryKeys = {
   computers: {
     all:   ['computers'],
     lists: () => [...queryKeys.computers.all, 'list'],
+    // The per-folder breakdown is a separate, expensive reading (a `du` on
+    // the machine), not a projection of the row, so it keys apart from it.
+    storage: (computerId: string) => [...queryKeys.computers.all, 'storage', computerId],
   },
   threads: {
     all:         ['threads'],

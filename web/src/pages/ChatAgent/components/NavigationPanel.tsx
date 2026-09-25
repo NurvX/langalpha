@@ -110,16 +110,16 @@ function NavigationPanel({
 }: NavigationPanelProps) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
-  // Change-spec / always-on / duplicate / delete are self-contained (mutations +
-  // dialogs) so every host — sidebar tree, mobile drawer — gets the same menu
-  // as the gallery card without extra wiring.
+  // Duplicate / delete are self-contained (mutations + dialogs) so every host
+  // (sidebar tree, mobile drawer) gets the same menu as the gallery card
+  // without extra wiring.
   const wsActions = useWorkspaceActions({ currentWorkspaceId });
   // The rows get the handlers without the dialogs node, which is new JSX on
   // every render and would defeat their memo.
-  const { openUpgrade, toggleAlwaysOn, openDuplicate, openDelete } = wsActions;
+  const { openDuplicate, openDelete } = wsActions;
   const rowActions = useMemo(
-    () => ({ openUpgrade, toggleAlwaysOn, openDuplicate, openDelete }),
-    [openUpgrade, toggleAlwaysOn, openDuplicate, openDelete],
+    () => ({ openDuplicate, openDelete }),
+    [openDuplicate, openDelete],
   );
   // Same reasoning for the thread archive confirm: this panel is the one tree
   // both hosts render, so gating here covers the sidebar and the mobile drawer

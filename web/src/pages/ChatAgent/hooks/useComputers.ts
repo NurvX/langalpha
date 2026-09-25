@@ -10,10 +10,12 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 
 import { QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { registerAuthReset } from '@/lib/authResets';
 import { queryKeys } from '@/lib/queryKeys';
-import type { ComputersResponse } from '@/types/api';
+import type { Computer, ComputerStorage, ComputersResponse } from '@/types/api';
 
 import {
+  getComputerStorage,
   getComputers,
   streamComputerEvents,
   streamWorkspaceEvents,
@@ -27,6 +29,10 @@ import {
   isComputerStatusTerminal,
   isComputerStatusTransitional,
 } from '../components/computerStatusUi';
+import { activeSpecChange } from '../components/specChangeUi';
+
+/** How often the list is re-read while a spec change runs. */
+export const SPEC_CHANGE_POLL_MS = 3000;
 
 /**
  * Reconnect pacing for a status stream that closed mid-transition. The first
@@ -60,14 +66,166 @@ function cachedComputerStatus(queryClient: QueryClient, computerId: string): str
   return undefined;
 }
 
-/** Shared computer list. Every consumer with this key reads one cached entry. */
+/**
+ * Shared computer list. Every consumer with this key reads one cached entry.
+ *
+ * A spec change runs on the server after its request has answered and no
+ * status frame names its outcome, so the list re-reads itself while any row
+ * has one in progress. Observers share the timer: every fetch resets them all.
+ */
 export function useComputers(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.computers.lists(),
     queryFn: getComputers,
     enabled: options.enabled ?? true,
     staleTime: 30_000,
+    refetchInterval: (query) =>
+      query.state.data?.computers.some((c) => activeSpecChange(c)) ? SPEC_CHANGE_POLL_MS : false,
   });
+}
+
+/**
+ * Merge `patch` into one machine's row in every cached computer list, where
+ * `when` (if given) accepts the row as it stands.
+ */
+export function patchComputerRow(
+  queryClient: QueryClient,
+  computerId: string,
+  patch: Partial<Computer>,
+  when?: (row: Computer) => boolean,
+) {
+  queryClient.setQueriesData<ComputersResponse | undefined>(
+    { queryKey: queryKeys.computers.lists() },
+    (prev) => !prev?.computers ? prev : {
+      ...prev,
+      computers: prev.computers.map((c) =>
+        c.computer_id === computerId && (!when || when(c)) ? { ...c, ...patch } : c),
+    },
+  );
+}
+
+/**
+ * Refresh everything that repeats a machine's values: its row, its workspaces,
+ * the tier quota. Deliberately the list key and not the `computers` prefix:
+ * the storage breakdown sits under that prefix too, and refetching it runs
+ * `du` over the whole machine, which a rename or an always-on toggle has no
+ * reason to pay for. A change that does move bytes calls
+ * {@link invalidateMachineStorage} alongside.
+ */
+export function invalidateMachine(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.computers.lists() });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.all });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.quota() });
+}
+
+/** Re-read the per-folder breakdown, if anyone is looking at it. */
+export function invalidateMachineStorage(queryClient: QueryClient, computerId: string) {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.computers.storage(computerId) });
+}
+
+/**
+ * When, counted from a turn's end, the machine rows are re-read. The server
+ * measures only after its post-turn housekeeping (the skill reconcile, then
+ * the backup of every changed project), which takes a second on a quiet turn
+ * and most of a minute after a large write, so the reads back off.
+ */
+export const TURN_END_REFRESH_MS: readonly number[] = [3_000, 15_000, 45_000];
+
+let turnEndRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+// Bumped by every new series and by sign-out, so a read already in flight
+// cannot schedule the next step of a series that was replaced.
+let turnEndRefreshGeneration = 0;
+
+function cancelTurnEndRefresh() {
+  if (turnEndRefreshTimer) clearTimeout(turnEndRefreshTimer);
+  turnEndRefreshTimer = null;
+  turnEndRefreshGeneration += 1;
+}
+
+registerAuthReset(cancelTurnEndRefresh);
+
+/** Each cached machine's reading time, by id. */
+function diskReadings(queryClient: QueryClient): Map<string, string | undefined> {
+  const readings = new Map<string, string | undefined>();
+  for (const [, data] of queryClient.getQueriesData<ComputersResponse | undefined>({
+    queryKey: queryKeys.computers.lists(),
+  })) {
+    for (const c of data?.computers ?? []) readings.set(c.computer_id, c.disk?.measured_at);
+  }
+  return readings;
+}
+
+/**
+ * Re-read the machine rows once a turn has ended, so the disk reading the
+ * server takes at turn end reaches the warning and the gallery.
+ *
+ * Delayed, because the server measures after it has sent the stream's end,
+ * and repeated on {@link TURN_END_REFRESH_MS} until a row shows a reading it
+ * did not have when the turn ended. The server skips a machine measured in
+ * the last minute and never measures a local one without a quota, so the
+ * series can run out without a new reading; that is what bounds it. A newer
+ * turn end restarts the series, since one list read serves every machine.
+ * Only the rows: the storage breakdown is not touched here.
+ */
+export function refreshComputersAfterTurn(
+  queryClient: QueryClient,
+  delaysMs: readonly number[] = TURN_END_REFRESH_MS,
+) {
+  cancelTurnEndRefresh();
+  const generation = turnEndRefreshGeneration;
+  const before = diskReadings(queryClient);
+  const moved = () => {
+    for (const [id, measuredAt] of diskReadings(queryClient)) {
+      if (measuredAt && measuredAt !== before.get(id)) return true;
+    }
+    return false;
+  };
+  const step = (i: number) => {
+    if (i >= delaysMs.length) return;
+    turnEndRefreshTimer = setTimeout(() => {
+      turnEndRefreshTimer = null;
+      void queryClient.invalidateQueries({ queryKey: queryKeys.computers.lists() }).then(() => {
+        if (generation === turnEndRefreshGeneration && !moved()) step(i + 1);
+      });
+    }, Math.max(0, delaysMs[i] - (delaysMs[i - 1] ?? 0)));
+  };
+  step(0);
+}
+
+/**
+ * Put a live storage reading on the machine's row, which the server has just
+ * stored too, unless the row already holds a newer one.
+ */
+function applyStorageReading(queryClient: QueryClient, computerId: string, storage: ComputerStorage) {
+  const disk = storage.disk;
+  if (!storage.live || !disk) return;
+  patchComputerRow(queryClient, computerId, { disk }, (c) =>
+    !c.disk || Date.parse(c.disk.measured_at) < Date.parse(disk.measured_at));
+}
+
+/**
+ * A machine's disk with a per-workspace breakdown. It runs `du` over every
+ * folder on the machine, so it is fetched only while someone is looking.
+ */
+export function useComputerStorage(computerId: string, options: { enabled: boolean }) {
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: queryKeys.computers.storage(computerId),
+    queryFn: () => getComputerStorage(computerId),
+    enabled: options.enabled,
+    // Each read is a `du` on the machine, up to tens of seconds on a small
+    // one, and the server reuses a reading younger than about a minute anyway.
+    // So: no refetch on focus, no retry of a read that already cost that much,
+    // and a spec change or an explicit re-open is what asks again.
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const storage = query.data;
+  useEffect(() => {
+    if (storage) applyStorageReading(queryClient, computerId, storage);
+  }, [storage, computerId, queryClient]);
+  return query;
 }
 
 /**
@@ -141,6 +299,8 @@ export function useComputerStatusFanout(): void {
             (status) => {
               lastStatus = status;
               patchComputerStatusInCaches(queryClient, computerId, status);
+              // A breakdown read while the machine was down only says to start it.
+              if (status === 'running') invalidateMachineStorage(queryClient, computerId);
             },
             controller.signal,
           );
