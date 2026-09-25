@@ -47,7 +47,6 @@ def build_context_middleware(
     now: datetime,
     guidance: str | None,
     model_name: str | None,
-    timezone: str | None = None,
     turn_context: TurnContext | None = None,
     user_profile: dict | None = None,
     sandbox_enabled: bool,
@@ -71,7 +70,9 @@ def build_context_middleware(
     # derived from a failed read is the product default rather than this
     # user's. None here, for the zone as for the market, lets the turn row
     # take what the frozen identity block states and the baseline carry the
-    # previous identity forward.
+    # previous identity forward. ``turn.timezone`` keeps a zone the request
+    # names, which is this user's whatever the profile read did; the locale
+    # default its tools fall back to is ``tool_timezone`` and never comes here.
     preferred_market = (
         resolve_preferred_market(user_profile, user_data_counts)
         if user_profile is not None and user_data_counts is not None
@@ -80,7 +81,7 @@ def build_context_middleware(
     return ContextMiddleware(
         turn=TurnContextMiddleware(
             now=now,
-            timezone=timezone,
+            timezone=turn.timezone,
             preferred_market=preferred_market,
             last_turn_at=turn.last_turn_at,
             platform=turn.platform,
@@ -99,6 +100,7 @@ def build_context_middleware(
             user_data_counts=user_data_counts,
             sandbox_enabled=sandbox_enabled,
             preferred_market=preferred_market,
+            timezone=turn.timezone,
             guidance=guidance,
             model_name=model_name,
         ),

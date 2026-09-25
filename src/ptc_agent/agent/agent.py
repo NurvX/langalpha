@@ -249,8 +249,8 @@ class PTCAgent:
                 and records the write's last-writer stamp.
             turn_context: What this turn knows about itself (when the previous
                 one ran, the surface it arrived on and that surface's delivery
-                rules), for the turn anchor row. None for a context-free build
-                such as thread maintenance.
+                rules, the zone its clock is stamped in), for the turn anchor
+                row. None for a context-free build such as thread maintenance.
             project: The workspace folder this turn runs in. Passed rather
                 than read from the ambient context because the build happens
                 before the run's own task binds it.
@@ -262,7 +262,7 @@ class PTCAgent:
 
         # Freeze current time for this request (refreshes on each new query)
         request_time = datetime.now(tz=UTC)
-        timezone_str = (user_profile or {}).get("timezone")
+        timezone_str = turn_context.timezone if turn_context else None
         current_time = format_current_time(request_time, timezone_str)
 
         # Compute short thread ID for thread-scoped storage
@@ -693,7 +693,6 @@ class PTCAgent:
             now=request_time,
             guidance=turn.guidance,
             model_name=turn.name or None,
-            timezone=timezone_str,
             turn_context=turn_context,
             user_profile=user_profile,
             sandbox_enabled=True,

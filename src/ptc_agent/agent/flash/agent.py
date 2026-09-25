@@ -222,7 +222,8 @@ class FlashAgent:
                 When set, the agent is forced to return structured data matching this schema.
             turn_context: What this turn knows about itself (when the previous
                 one ran, the surface it arrived on and that surface's delivery
-                rules), for the turn anchor row. None for a context-free build.
+                rules, the zone its clock is stamped in), for the turn anchor
+                row. None for a context-free build.
 
         Returns:
             Configured LangGraph agent
@@ -231,7 +232,6 @@ class FlashAgent:
 
         # Freeze current time for this request (refreshes on each new query)
         request_time = datetime.now(tz=UTC)
-        timezone_str = (user_profile or {}).get("timezone")
 
         # Build tools
         tools = self._build_tools()
@@ -382,7 +382,6 @@ class FlashAgent:
             now=request_time,
             guidance=turn.guidance,
             model_name=turn.name or None,
-            timezone=timezone_str,
             turn_context=turn_context,
             user_profile=user_profile,
             user_data_counts=user_data_counts,

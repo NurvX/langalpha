@@ -196,6 +196,8 @@ class BaselineContextMiddleware(AgentMiddleware):
             or a build with no workspace.
         preferred_market: Market the identity block reports, from
             ``resolve_preferred_market``.
+        timezone: The turn's zone, which the identity block states ahead of
+            the profile's own, so it agrees with the stamp.
         guidance: Resolved prompt guidance level; None resolves it lazily.
         model_name: Model the turn resolved to, used only for guidance.
         rebuild_after_updates: Durable rows since the last epoch that force a
@@ -215,6 +217,7 @@ class BaselineContextMiddleware(AgentMiddleware):
         user_data_counts: dict[str, Any] | None = None,
         sandbox_enabled: bool = False,
         preferred_market: str | None = None,
+        timezone: str | None = None,
         guidance: str | None = None,
         model_name: str | None = None,
         rebuild_after_updates: int = DEFAULT_REBUILD_AFTER_UPDATES,
@@ -256,6 +259,7 @@ class BaselineContextMiddleware(AgentMiddleware):
         self._user_data_counts = user_data_counts
         self._sandbox_enabled = sandbox_enabled
         self._preferred_market = preferred_market
+        self._timezone = timezone
         self._guidance_value = guidance
         # Set once the turn-boundary read has run on this instance; see
         # ``abefore_model``.
@@ -281,7 +285,7 @@ class BaselineContextMiddleware(AgentMiddleware):
         profile = self._user_profile
         return Identity(
             name=profile.get("name") or "User",
-            timezone=profile.get("timezone") or "UTC",
+            timezone=self._timezone or profile.get("timezone") or "UTC",
             locale=profile.get("locale") or "en-US",
             preferred_market=self._preferred_market or "US",
         )

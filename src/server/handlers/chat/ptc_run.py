@@ -56,7 +56,10 @@ from src.server.utils.multimodal_context import (
     parse_multimodal_contexts,
 )
 
-from ptc_agent.agent.graph import build_ptc_graph_with_session
+from ptc_agent.agent.graph import (
+    build_ptc_graph_with_session,
+    get_user_profile_for_prompt,
+)
 from ptc_agent.agent.middleware.credit_gate import run_with_credit_gate
 
 from .request_prep import (
@@ -64,7 +67,6 @@ from .request_prep import (
     _append_to_last_user_message,
     _is_plan_interrupt_pending,
     _resolve_fork,
-    _resolve_timezone,
     apply_fetch_override,
     build_graph_config,
     build_turn_context,
@@ -89,7 +91,7 @@ from src.server.services.runs.admission import (
 )
 from src.config.settings import get_ptc_recursion_limit
 
-from .admission_gate import wait_or_steer
+from .admission_gate import steer_allowed, wait_or_steer
 from .attachments import attach_request_files
 from .error_handling import handle_workflow_error
 from src.server.services.llm.clients import is_own_key_turn
@@ -161,6 +163,8 @@ async def astream_ptc_workflow(
     is_byok: bool = False,
     config=None,
     dispatched: bool = False,
+    steerable: bool = True,
+    run_metadata: dict | None = None,
 ):
     """Async generator that streams PTC agent workflow events.
 
@@ -170,8 +174,10 @@ async def astream_ptc_workflow(
     on the same thread share no cross-turn state by construction.
 
     ``dispatched`` marks the call as an X-Dispatch=background invocation
-    whose BTM placeholder was created upstream in ``threads.py``. The
-    handler skips ``wait_or_steer`` in that case.
+    whose BTM placeholder was created upstream in ``threads.py``. It, a retry
+    and ``steerable=False`` all make a running turn a 409 instead of a
+    steer; see ``steer_allowed``. ``run_metadata`` is the caller's own START
+    stamp on the run row, which the run's finalize hooks read.
     """
     start_time = time.time()
     handler = None
@@ -179,7 +185,7 @@ async def astream_ptc_workflow(
     token_callback = None
     tool_tracker = None
     ptc_graph = None
-    timezone_str = None
+    turn_context = None
 
     # Phase timing — collects wall-clock durations for each hot-path phase.
     # Emits a single structured summary line when the workflow starts.
@@ -239,18 +245,16 @@ async def astream_ptc_workflow(
         if needs_startup:
             await manager.cancel_stale_workflow(thread_id)
         # Admit a fresh turn, steer the running one, or 409 — see
-        # ``wait_or_steer``. Dispatched flows pass ``can_steer=False``: any
-        # in-flight run is a hard conflict, never a steer. Foreground turns
-        # steer. Retries are never steerable either: a /retry that finds
-        # another live run is a hard conflict, not an (empty) steering
-        # message into that run.
+        # ``wait_or_steer``; who may steer at all is ``steer_allowed``.
         ready, steering_event = await wait_or_steer(
             manager,
             thread_id,
             user_input,
             user_id,
             steer_only=request.steer_only,
-            can_steer=not dispatched and request.retry_of_run_id is None,
+            can_steer=steer_allowed(
+                request, dispatched=dispatched, steerable=steerable
+            ),
         )
         if not ready:
             await scope.release_slot()
@@ -275,8 +279,13 @@ async def astream_ptc_workflow(
             initial_query=user_input,
         )
         disk_free_mb, disk_known = await read_disk_notice(workspace_id)
+        user_profile = await get_user_profile_for_prompt(user_id) if user_id else None
         turn_context = build_turn_context(
-            request, prior_thread, disk_free_mb=disk_free_mb, disk_known=disk_known
+            request,
+            prior_thread,
+            user_profile=user_profile,
+            disk_free_mb=disk_free_mb,
+            disk_known=disk_known,
         )
 
         query_type, fork = _resolve_fork(request=request)
@@ -386,7 +395,7 @@ async def astream_ptc_workflow(
             query_metadata=query_metadata,
             fork=fork,
             is_checkpoint_replay=is_checkpoint_replay,
-            extra_run_metadata=origin_meta,
+            extra_run_metadata={**origin_meta, **(run_metadata or {})},
         )
         scope.attach_run(run_handle)
         if not is_checkpoint_replay:
@@ -401,12 +410,6 @@ async def astream_ptc_workflow(
             # generator and returns its 200 response only once the START txn
             # above has committed. The marker never reaches the SSE stream.
             yield DISPATCH_STARTED_MARKER
-
-        # =====================================================================
-        # Timezone and Locale Validation
-        # =====================================================================
-
-        timezone_str = _resolve_timezone(request.timezone, request.locale)
 
         # =====================================================================
         # Token and Tool Tracking
@@ -625,6 +628,7 @@ async def astream_ptc_workflow(
             # the run's pinned session before it may write.
             namespace_owner=run_handle.guard,
             user_id=user_id,
+            user_profile=user_profile,
             plan_mode=effective_plan_mode,
             thread_id=thread_id,
             store=setup.store,
@@ -788,7 +792,7 @@ async def astream_ptc_workflow(
             user_id=user_id,
             workspace_id=workspace_id,
             mode="ptc",
-            timezone_str=timezone_str,
+            timezone_str=turn_context.tool_timezone,
             token_callback=token_callback,
             request=request,
             effective_model=effective_model,
@@ -917,7 +921,7 @@ async def astream_ptc_workflow(
                 "is_byok": is_byok,
                 "burst_slot_id": request.burst_slot_id,
                 "locale": request.locale,
-                "timezone": timezone_str,
+                "timezone": turn_context.tool_timezone,
                 "handler": handler,
                 "token_callback": token_callback,
                 "run_handle": run_handle,
@@ -1018,7 +1022,7 @@ async def astream_ptc_workflow(
             is_byok=is_byok,
             msg_type="ptc",
             log_prefix="PTC_CHAT",
-            timezone_str=timezone_str,
+            turn_context=turn_context,
         ):
             yield event
 
