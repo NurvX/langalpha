@@ -338,7 +338,7 @@ def _carry_reasoning_durations(
 
     The total is a sum because the two sides count differently. A message
     with interleaved thinking streams one close per block, while
-    ``_split_content_blocks`` joins those blocks into a single reasoning
+    ``split_content_blocks`` joins those blocks into a single reasoning
     row, so one projected close stands for all of them. Taking any one
     block's time would report a fraction of the thinking the row shows.
     """

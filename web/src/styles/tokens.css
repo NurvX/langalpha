@@ -33,11 +33,14 @@ html {
      the reading face for long-form surfaces (conversation, file content).
      Apply via body default + the .font-content utility. */
   /* One shared CJK companion (Noto Sans SC, unicode-range sliced by Google
-     Fonts) sits after the Latin faces in both roles: Latin glyphs never reach
-     it, CJK renders identically on every OS instead of PingFang/YaHei. */
+     Fonts) sits after the Latin faces in every role: Latin glyphs never reach
+     it, CJK renders identically on every OS instead of PingFang/YaHei. Mono
+     needs it too, since kickers and readouts set translated copy in it. In
+     each it goes ahead of the system faces, which can reach the OS's own CJK
+     face through the system's fallback before a later family is tried. */
   --font-ui: 'Sora', 'Geist', 'Noto Sans SC', -apple-system, system-ui, sans-serif;
   --font-content: 'Geist', 'Noto Sans SC', -apple-system, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Menlo', ui-monospace, SFMono-Regular, monospace;
+  --font-mono: 'JetBrains Mono', 'Menlo', 'Noto Sans SC', ui-monospace, SFMono-Regular, monospace;
 
   --sidebar-width: 80px;
   --bottom-tab-height: 78px;

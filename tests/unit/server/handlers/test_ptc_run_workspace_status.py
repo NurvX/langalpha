@@ -23,7 +23,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 PTC = "src.server.handlers.chat.ptc_run"
 
 
@@ -135,7 +134,11 @@ async def _run_to_sentinel(request, workspace_manager, stamps=None):
             new_callable=AsyncMock,
             return_value=(True, None),
         ),
-        patch(f"{PTC}._resolve_timezone", return_value="UTC"),
+        patch(
+            f"{PTC}.get_user_profile_for_prompt",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
         patch(f"{PTC}.init_tracking", return_value=(MagicMock(), MagicMock())),
         patch(f"{PTC}.apply_fetch_override"),
         patch(f"{PTC}.WorkspaceManager") as mock_wm_cls,

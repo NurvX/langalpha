@@ -198,7 +198,7 @@ function Plugins() {
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-opacity hover:opacity-90 flex-shrink-0"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-transparent transition-opacity hover:opacity-90 flex-shrink-0"
                   style={{
                     color: 'var(--color-btn-primary-text)',
                     backgroundColor: 'var(--color-btn-primary-bg)',

@@ -222,3 +222,20 @@ async def test_flash_dispatched_forwards_can_steer_false():
     kwargs = mock_wos.await_args.kwargs
     assert kwargs["steer_only"] is True
     assert kwargs["can_steer"] is False
+
+
+@pytest.mark.parametrize(
+    "steerable, dispatched, retry_of, allowed",
+    [
+        (True, False, None, True),
+        # An automation's instruction is a turn of its own, never a steer.
+        (False, False, None, False),
+        (True, True, None, False),
+        (True, False, "run-1", False),
+    ],
+)
+def test_only_a_steerable_foreground_turn_steers(steerable, dispatched, retry_of, allowed):
+    from src.server.handlers.chat.admission_gate import steer_allowed
+
+    request = MagicMock(retry_of_run_id=retry_of)
+    assert steer_allowed(request, dispatched=dispatched, steerable=steerable) is allowed

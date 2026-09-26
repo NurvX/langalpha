@@ -518,10 +518,10 @@ test.describe('a field left focused while the user is in another app', () => {
  * way.
  */
 test.describe('a native select', () => {
-  // The timezone field, the one select on this tab carrying grouped options.
-  // Named rather than taken positionally so the helpers below stay strict: a
-  // selector matching two controls should fail loudly, not silently pick one.
-  const SELECT = 'select:has(optgroup)';
+  // The language field, the one native select on this tab. Named rather than
+  // taken positionally so the helpers below stay strict: a selector matching
+  // two controls should fail loudly, not silently pick one.
+  const SELECT = 'select:has(option[value="zh-CN"])';
 
   test.beforeEach(async ({ page }) => {
     await page.goto('/settings');

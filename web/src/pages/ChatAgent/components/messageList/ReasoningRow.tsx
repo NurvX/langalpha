@@ -7,7 +7,7 @@ import { useAnimatedText } from '@/components/ui/animated-text';
 import Markdown from '../Markdown';
 import { announceAnchoredToggle } from '../../utils/anchoredToggle';
 import { extractLeadingBoldHeader, extractReasoningHeaders } from '../../utils/reasoningHeaders';
-import { formatThoughtFor } from './turnTiming';
+import { formatThoughtFor } from '@/lib/elapsed';
 import { SPRING_FOLD } from './liveZoneTiming';
 import type { ReasoningActivityItem } from './activityTypes';
 

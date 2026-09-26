@@ -3,7 +3,7 @@ import { SPRING_FOLD } from './liveZoneTiming';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { formatWorkedFor } from './turnTiming';
+import { formatWorkedFor } from '@/lib/elapsed';
 import { announceAnchoredToggle } from '../../utils/anchoredToggle';
 
 export interface TurnFoldProps {

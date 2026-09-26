@@ -249,6 +249,31 @@ def find_resilience_trace(exc: BaseException) -> Optional[Dict[str, Any]]:
     return None
 
 
+def model_call_failure(
+    exc: BaseException, credential_source: Any
+) -> Dict[str, Any]:
+    """Ledger metadata for a run that failed on its model call; ``{}`` when
+    the failure was anything else.
+
+    The resilience trace is the signal, not the provider SDK prefix
+    ``classify_stream_exception`` matches: the middleware attaches it only to
+    a model call's exception, while an httpx 401 from a tool or data API
+    would pass for a rejected model key. The primary's status is the one its
+    credential earned, and that credential is the run's own.
+    """
+    trace = find_resilience_trace(exc)
+    attempted = trace.get("attempted_models") if trace else None
+    if not (isinstance(attempted, list) and attempted and isinstance(attempted[0], dict)):
+        return {}
+    status = attempted[0].get("status_code")
+    if not isinstance(status, int):
+        return {}
+    return {
+        "error_status_code": status,
+        "error_credential_owned": user_owns_credential(credential_source),
+    }
+
+
 def classify_stream_exception(exc: BaseException) -> Dict[str, Any]:
     """Classify a chat-stream exception as ``upstream`` or ``internal``.
 

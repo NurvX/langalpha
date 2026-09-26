@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { Check, Download, MoreVertical, Plus } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
 import { EASE_OUT } from '@/lib/motion';
+import { cn } from '@/lib/utils';
 
 /**
  * Shared building blocks for the list surfaces: the Plugins page, the
@@ -370,14 +371,18 @@ export function ListHeader({
   );
 }
 
-/** Header action button: `primary` (Add), `secondary` (Import), `ghost` (links). */
+/** Header action button: `primary` (Add), `secondary` (Import), `ghost` (links).
+ *  `tone="danger"` turns it the danger color under the pointer. */
 export function HeaderButton({
   variant = 'secondary',
+  tone,
   icon: Icon,
+  className,
   children,
   ...props
 }: {
   variant?: 'primary' | 'secondary' | 'ghost';
+  tone?: 'danger';
   icon?: React.ComponentType<{ className?: string }>;
   children: React.ReactNode;
 } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -387,15 +392,22 @@ export function HeaderButton({
       : variant === 'secondary'
         ? { color: 'var(--color-text-secondary)', border: '1px solid var(--color-border-muted)' }
         : { color: 'var(--color-text-tertiary)' };
+  // The color is inline, which no :hover rule outranks, so a toned button
+  // reads it through a custom property that its hover class sets.
+  const toned = tone === 'danger';
   return (
     <button
       type="button"
-      className={
+      className={cn(
+        // Every variant takes the secondary's 1px edge, unpainted where it
+        // draws none, so mixed variants in one row stand the same height.
         variant === 'ghost'
-          ? 'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-foreground/10'
-          : 'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors disabled:opacity-50'
-      }
-      style={style}
+          ? 'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-transparent transition-colors hover:bg-foreground/10'
+          : 'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-transparent transition-colors disabled:opacity-50',
+        toned && 'hover:[--header-button-tone:var(--color-icon-danger)]',
+        className,
+      )}
+      style={toned ? { ...style, color: `var(--header-button-tone, ${style.color})` } : style}
       {...props}
     >
       {Icon && <Icon className="h-3 w-3" />}

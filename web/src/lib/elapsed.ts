@@ -1,5 +1,6 @@
 /**
- * Elapsed-time copy for the turn fold header.
+ * Elapsed-time copy: the chat's turn and thought headers, and how long an
+ * automation run took, so both read a duration in the same words.
  *
  * Import-free on purpose, like `liveZoneTiming`: the header's duration is the
  * kind of thing a Node-side spec wants to assert, and the render-block module
@@ -12,14 +13,16 @@ type TFn = (key: string, opts?: Record<string, unknown>) => string;
 
 /**
  * Each scale is one key rather than an interpolated unit, because a language
- * decides both the unit and what sits between the two halves: `12m 58s` is
- * `12分58秒`, with no space, and an hour is 小时 rather than a single letter.
+ * decides both the unit and how it sits beside the number: `12m 58s` is
+ * `12 分 58 秒`, and an hour is 小时 rather than a single letter.
  */
 const SCALE_KEYS = {
   subSecond: 'chat.duration.subSecond',
   seconds: 'chat.duration.seconds',
   minutes: 'chat.duration.minutesSeconds',
   hours: 'chat.duration.hoursMinutes',
+  wholeMinutes: 'chat.duration.minutes',
+  wholeHours: 'chat.duration.hours',
 } as const;
 
 /**
@@ -54,4 +57,21 @@ export function formatThoughtFor(ms: number, t: TFn): string {
   if (totalSeconds < 1) return t(SCALE_KEYS.subSecond);
   if (totalSeconds < 60) return t(SCALE_KEYS.seconds, { value: totalSeconds });
   return formatWorkedFor(elapsed, t);
+}
+
+/**
+ * How long something that has finished took: `formatThoughtFor`, without a
+ * zero tail (`15m`, not `15m 0s`). The live headers keep the tail so their
+ * width holds while they tick; a settled figure never ticks.
+ */
+export function formatTook(ms: number, t: TFn): string {
+  const elapsed = Number.isFinite(ms) && ms > 0 ? ms : 0;
+  const totalMinutes = Math.floor(elapsed / 60_000);
+  if (totalMinutes >= 60 && totalMinutes % 60 === 0) {
+    return t(SCALE_KEYS.wholeHours, { hours: totalMinutes / 60 });
+  }
+  if (totalMinutes >= 1 && totalMinutes < 60 && Math.floor(elapsed / 1000) % 60 === 0) {
+    return t(SCALE_KEYS.wholeMinutes, { minutes: totalMinutes });
+  }
+  return formatThoughtFor(elapsed, t);
 }

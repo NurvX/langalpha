@@ -1022,7 +1022,7 @@ class TestEnsureThread:
 
 class TestBuildTurnContext:
     def _request(self, origin=None, platform=None, surface_rules=None):
-        request = MagicMock()
+        request = MagicMock(timezone="UTC", locale="en-US")
         request.origin = origin
         request.platform = platform
         request.surface_rules = surface_rules
@@ -1034,13 +1034,14 @@ class TestBuildTurnContext:
         ctx = build_turn_context(
             self._request(origin=ThreadOrigin(type="agent", id="flash-t-1")),
             PriorThread(),
+            user_profile=None,
         )
 
         assert ctx.origin == "agent"
 
     def test_a_manual_follow_up_carries_no_origin(self):
         """A person replying in an automation's thread is waiting; the thread's origin must not say otherwise."""
-        ctx = build_turn_context(self._request(), PriorThread())
+        ctx = build_turn_context(self._request(), PriorThread(), user_profile=None)
 
         assert ctx.origin is None
 
@@ -1049,6 +1050,7 @@ class TestBuildTurnContext:
         ctx = build_turn_context(
             self._request(platform="slack", surface_rules="reply in one block"),
             PriorThread(last_turn_at=stamp),
+            user_profile=None,
         )
 
         assert (ctx.platform, ctx.surface_rules) == ("slack", "reply in one block")
@@ -2077,50 +2079,69 @@ class TestPrepareSkillContexts:
 
 
 # ---------------------------------------------------------------------------
-# _resolve_timezone
+# build_turn_context: the turn's zones
 # ---------------------------------------------------------------------------
 
 
-class TestResolveTimezone:
-    def test_valid_timezone(self):
-        from src.server.handlers.chat.request_prep import _resolve_timezone
+class TestTurnZones:
+    def _zones(self, request_tz, locale="en-US", profile=None):
+        request = MagicMock(timezone=request_tz, locale=locale)
+        request.origin = None
+        ctx = build_turn_context(request, PriorThread(), user_profile=profile)
+        return ctx.timezone, ctx.tool_timezone
 
-        result = _resolve_timezone("America/New_York", "en-US")
-        assert result == "America/New_York"
+    def test_valid_request_zone(self):
+        assert self._zones("America/New_York") == (
+            "America/New_York",
+            "America/New_York",
+        )
 
-    def test_invalid_timezone_falls_back(self):
-        from src.server.handlers.chat.request_prep import _resolve_timezone
-
+    def test_invalid_zone_falls_back_to_the_locale(self):
         with patch(
             f"{PREP}.get_locale_config",
             return_value={"timezone": "Asia/Shanghai"},
         ):
-            result = _resolve_timezone("Invalid/Zone", "zh-CN")
+            assert self._zones("Invalid/Zone", "zh-CN") == (None, "Asia/Shanghai")
 
-        assert result == "Asia/Shanghai"
-
-    def test_none_timezone_falls_back(self):
-        from src.server.handlers.chat.request_prep import _resolve_timezone
-
-        with patch(
-            f"{PREP}.get_locale_config",
-            return_value={"timezone": "UTC"},
-        ):
-            result = _resolve_timezone(None, "en-US")
-
-        assert result == "UTC"
+    @pytest.mark.parametrize("malformed", ["../etc/passwd", "America", "x" * 300])
+    def test_a_malformed_zone_falls_back_like_an_unknown_one(self, malformed):
+        """ZoneInfo refuses these as ValueError or OSError, not as an unknown
+        name; the turn must still get a clock rather than fail."""
+        with patch(f"{PREP}.get_locale_config", return_value={"timezone": "UTC"}):
+            assert self._zones(malformed) == (None, "UTC")
 
     def test_none_locale_uses_default(self):
-        from src.server.handlers.chat.request_prep import _resolve_timezone
-
         with patch(
             f"{PREP}.get_locale_config",
             return_value={"timezone": "UTC"},
         ) as mock_locale:
-            result = _resolve_timezone(None, None)
+            assert self._zones(None, None) == (None, "UTC")
 
         mock_locale.assert_called_once_with("en-US", "en")
-        assert result == "UTC"
+
+    def test_profile_zone_wins_over_the_request(self):
+        zones = self._zones("America/New_York", profile={"timezone": "Asia/Shanghai"})
+        assert zones == ("Asia/Shanghai", "Asia/Shanghai")
+
+    def test_invalid_profile_zone_falls_to_the_request(self):
+        zones = self._zones("Europe/London", profile={"timezone": "Not/AZone"})
+        assert zones == ("Europe/London", "Europe/London")
+
+    def test_a_channel_turn_with_no_zone_gets_the_profile_zone(self):
+        """The gateway and the automation executor send neither zone nor
+        locale; the agent's clock is on the profile zone, so tools must be."""
+        zones = self._zones(None, None, profile={"timezone": "Asia/Shanghai"})
+        assert zones == ("Asia/Shanghai", "Asia/Shanghai")
+
+    def test_an_unnamed_zone_reaches_tools_but_not_the_stamp(self):
+        """An automation's request names no zone, and a failed profile read
+        answers None: tools read the locale default, but the stamp is given no
+        zone, so it keeps the one the frozen identity states."""
+        with patch(
+            f"{PREP}.get_locale_config",
+            return_value={"timezone": "America/New_York"},
+        ):
+            assert self._zones(None, None, profile=None) == (None, "America/New_York")
 
 
 class TestInjectInlineReminders:

@@ -22,6 +22,9 @@ const STATUS_COLORS: Record<string, string> = {
   running: GREEN,
   paused: YELLOW,
   failed: RED,
+  // A run that ran out of time failed too (isRunFailed in the Automations
+  // page's status rules).
+  timeout: RED,
   completed: BLUE,
   disabled: RED,
 };
@@ -37,6 +40,7 @@ const STATUS_BG: Record<string, string> = {
   running: 'var(--color-profit-soft)',
   paused: 'var(--color-warning-soft)',
   failed: 'var(--color-loss-soft)',
+  timeout: 'var(--color-loss-soft)',
   completed: 'var(--color-info-soft)',
   disabled: 'var(--color-loss-soft)',
 };

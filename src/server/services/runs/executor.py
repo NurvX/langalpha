@@ -42,6 +42,7 @@ from src.server.services.runs import (
     subagent_collection,
     teardown,
 )
+from src.server.services.runs.sse_producer import model_call_failure
 from src.server.services.runs.stream_writer import TransportLostError
 from src.server.dependencies.usage_limits import release_burst_slot
 
@@ -729,7 +730,9 @@ class LocalRunExecutor:
                 f"[LocalRunExecutor] Workflow {key} failed: {e}",
                 exc_info=True
             )
-            await self._finalize_run(thread_id, run_id, kind="failed", error=str(e))
+            await self._finalize_run(
+                thread_id, run_id, kind="failed", error=str(e), exc=e
+            )
 
     async def _flush_checkpoint(self, thread_id: str, run_id: str) -> None:
         """Resolve the run's graph and flush its checkpoint on user stop."""
@@ -961,6 +964,7 @@ class LocalRunExecutor:
         *,
         kind: Literal["stream_end", "cancelled", "failed"],
         error: Optional[str] = None,
+        exc: Optional[BaseException] = None,
     ):
         """Resolve the run's outcome in-band and drive the single finalize CAS.
 
@@ -1009,6 +1013,18 @@ class LocalRunExecutor:
             workspace_id=workspace_id,
             user_id=user_id,
         )
+        if exc is not None:
+            persist_metadata = {
+                **persist_metadata,
+                **model_call_failure(
+                    exc,
+                    getattr(
+                        getattr(handler, "agent_config", None),
+                        "credential_source",
+                        None,
+                    ),
+                ),
+            }
 
         # ---- the single terminal transition ----
         # finalize_applied gates every terminal business effect below: losers

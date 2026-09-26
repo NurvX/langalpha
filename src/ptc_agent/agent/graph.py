@@ -223,6 +223,7 @@ async def build_ptc_graph_with_session(
     checkpointer: Any | None = None,
     background_registry: Any | None = None,
     user_id: str | None = None,
+    user_profile: dict[str, Any] | None = None,
     plan_mode: bool = False,
     thread_id: str | None = None,
     store: Any | None = None,
@@ -239,7 +240,9 @@ async def build_ptc_graph_with_session(
 
     ``turn_context`` is what this turn knows about itself, for the turn anchor
     row. It is optional because this builder also serves context-free callers
-    (thread maintenance) that have no turn.
+    (thread maintenance) that have no turn. ``user_profile`` is the caller's
+    read of the profile, the one its ``turn_context`` zone came from, so the
+    identity block and the stamp never answer from two different reads.
 
     ``project`` is the workspace folder the turn runs in. The build happens
     before the run's task binds it, so it travels as an argument.
@@ -266,27 +269,15 @@ async def build_ptc_graph_with_session(
             f"Session for workspace {workspace_id} is not properly initialized"
         )
 
-    if user_id:
-        (
-            user_profile,
-            user_data_counts,
-            ptc_agent,
-            (workspace_name, workspace_description),
-        ) = await asyncio.gather(
-            get_user_profile_for_prompt(user_id),
-            fetch_user_data_counts(user_id),
-            asyncio.to_thread(PTCAgent, config),
-            _read_workspace_naming(workspace_id),
-        )
-        if user_profile:
-            logger.debug(f"Loaded user profile for {user_id}: {user_profile}")
-    else:
-        user_profile = None
-        user_data_counts = None
-        ptc_agent, (workspace_name, workspace_description) = await asyncio.gather(
-            asyncio.to_thread(PTCAgent, config),
-            _read_workspace_naming(workspace_id),
-        )
+    (
+        user_data_counts,
+        ptc_agent,
+        (workspace_name, workspace_description),
+    ) = await asyncio.gather(
+        fetch_user_data_counts(user_id),
+        asyncio.to_thread(PTCAgent, config),
+        _read_workspace_naming(workspace_id),
+    )
 
     if workspace_id:
         from src.server.database.vault_secrets import get_effective_secrets

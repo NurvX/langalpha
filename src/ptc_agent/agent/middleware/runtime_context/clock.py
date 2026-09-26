@@ -18,7 +18,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Protocol
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from src.tools.market_data.utils import (
     US_AFTER_HOURS_CLOSE,
@@ -26,6 +26,7 @@ from src.tools.market_data.utils import (
     US_MARKET_OPEN,
     US_PRE_MARKET_OPEN,
 )
+from src.utils.timezone_utils import zone_or_none
 
 # Session phase names. The four values are the vocabulary the whole envelope
 # speaks, and they match ``get_market_session`` so the tool output and the
@@ -358,7 +359,7 @@ class MarketClock:
         self,
         market: str | None,
         now: datetime,
-        viewer_tz: str | ZoneInfo | None = None,
+        viewer_tz: str | None = None,
         *,
         relative: bool = True,
     ) -> str | None:
@@ -366,10 +367,11 @@ class MarketClock:
 
         ``viewer_tz`` adds the transition in the user's own clock, which is the
         whole point when they trade a market they do not live in. It is dropped
-        when it would restate the market's own time. ``relative=False`` drops
-        the countdown and names only the instant, which is what a line written
-        once into history needs: a countdown is true for one minute, and the
-        row is read for the rest of the thread.
+        when it would restate the market's own time, or names no zone: a stale
+        preference degrades the line rather than fail the model call.
+        ``relative=False`` drops the countdown and names only the instant,
+        which is what a line written once into history needs: a countdown is
+        true for one minute, and the row is read for the rest of the thread.
         """
         calendar = self.calendar(market)
         if calendar is None:
@@ -388,7 +390,7 @@ class MarketClock:
             target, verb = calendar.next_open(now), "next open"
         if target is not None:
             when = f"{target.strftime('%a %H:%M')} {calendar.tz_label}"
-            viewer = _resolve_tz(viewer_tz)
+            viewer = zone_or_none(viewer_tz)
             local = (
                 target.astimezone(viewer).strftime("%a %H:%M")
                 if viewer is not None and viewer.utcoffset(target) != target.utcoffset()
@@ -409,26 +411,10 @@ class MarketClock:
 MARKET_CLOCK = MarketClock()
 
 
-def _resolve_tz(tz: str | ZoneInfo | None) -> ZoneInfo | None:
-    """A ZoneInfo from a user-supplied name; None when it is missing or unusable.
-
-    User timezones arrive from stored preferences, so a stale or misspelled
-    zone must degrade the line, never fail the model call.
-    """
-    if tz is None:
-        return None
-    if isinstance(tz, ZoneInfo):
-        return tz
-    try:
-        return ZoneInfo(str(tz))
-    except (ZoneInfoNotFoundError, ValueError):
-        return None
-
-
 def market_status_line(
     market: str | None,
     now: datetime,
-    viewer_tz: str | ZoneInfo | None = None,
+    viewer_tz: str | None = None,
     *,
     relative: bool = True,
 ) -> str | None:

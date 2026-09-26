@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import i18n from '@/i18n';
-import { createFormatter, createDateFormatter, compactNumber, compactNumberFixed2, fixed2, formatBytes, signedFixed2 } from '@/lib/format';
+import { createFormatter, createDateFormatter, compactNumber, compactNumberFixed2, fixed2, formatBytes, relativeTime, signedFixed2 } from '@/lib/format';
 
 describe('createFormatter', () => {
   beforeEach(() => {
@@ -96,6 +96,35 @@ describe('quote-strip formatters', () => {
     expect(compactNumberFixed2(1234)).toBe('1.23K');
     expect(compactNumberFixed2(1_500_000)).toBe('1.50M');
     expect(compactNumberFixed2(2_000_000_000)).toBe('2.00B');
+  });
+});
+
+describe('relativeTime', () => {
+  const DAY = 86_400_000;
+  const fromNow = (ms: number) => Date.now() + ms;
+
+  beforeEach(() => {
+    i18n.changeLanguage('en-US');
+  });
+
+  it('keeps a count compact', () => {
+    expect(relativeTime(fromNow(3 * DAY + 60_000))).toBe('in 3d');
+    expect(relativeTime(fromNow(-5 * 60_000 - 1_000))).toBe('5m ago');
+    expect(relativeTime(fromNow(95 * DAY))).toBe('in 3mo');
+  });
+
+  it('spells out a phrase instead of clipping its words', () => {
+    expect(relativeTime(fromNow(35 * DAY))).toBe('next month');
+    expect(relativeTime(fromNow(-8 * DAY))).toBe('last week');
+    expect(relativeTime(fromNow(400 * DAY))).toBe('next year');
+    expect(relativeTime(fromNow(DAY + 60_000))).toBe('tomorrow');
+  });
+
+  it('reads naturally in Chinese', () => {
+    i18n.changeLanguage('zh-CN');
+    expect(relativeTime(fromNow(35 * DAY))).toBe('下个月');
+    expect(relativeTime(fromNow(95 * DAY))).toBe('3个月后');
+    i18n.changeLanguage('en-US');
   });
 });
 

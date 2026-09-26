@@ -32,6 +32,7 @@ from src.server.utils.skill_context import (
     parse_skill_contexts,
 )
 from src.tools.web.fetch import fetch_llm_client_override, fetch_model_override
+from src.utils.timezone_utils import zone_or_none
 from src.utils.tracking import TokenTrackingManager
 from src.tools.decorators import ToolUsageTracker
 
@@ -90,21 +91,15 @@ def inject_inline_reminders(
             _append_to_last_user_message(messages, reminder)
 
 
-def _resolve_timezone(request_timezone: Optional[str], locale: Optional[str]) -> str:
-    """Validate request timezone, falling back to locale-based default."""
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-    if request_timezone:
-        try:
-            ZoneInfo(request_timezone)
-            return request_timezone
-        except ZoneInfoNotFoundError:
-            logger.warning(
-                f"Invalid timezone '{request_timezone}', falling back to locale-based timezone."
-            )
-
-    locale_config = get_locale_config(locale or "en-US", "en")
-    return locale_config.get("timezone", "UTC")
+def _first_zone(*candidates: Optional[str]) -> Optional[str]:
+    """The first candidate that names a zone; one that names none is logged
+    and skipped."""
+    for candidate in candidates:
+        if zone_or_none(candidate) is not None:
+            return candidate
+        if candidate:
+            logger.warning(f"Invalid timezone '{candidate}', trying the next source.")
+    return None
 
 
 def _resolve_fork(*, request: ChatRequest) -> tuple[str, Optional[ForkSpec]]:
@@ -492,6 +487,7 @@ def build_turn_context(
     request: ChatRequest,
     prior: PriorThread,
     *,
+    user_profile: dict[str, Any] | None,
     disk_free_mb: int | None = None,
     disk_known: bool = False,
 ) -> TurnContext:
@@ -503,7 +499,14 @@ def build_turn_context(
     and the automation line in the rules would tell the model otherwise. An
     automation stamps the origin on every request it sends, so nothing is lost.
     ``disk_free_mb`` and ``disk_known`` come from :func:`read_disk_notice`.
+
+    The zone is the profile's before the request's: a channel or an
+    automation's own request names none, and the request alone would put
+    those turns on the locale default. When neither names one, as when the
+    profile read fails on such a turn, only ``tool_timezone`` takes the locale
+    default; the stamp keeps the frozen identity's zone.
     """
+    zone = _first_zone((user_profile or {}).get("timezone"), request.timezone)
     return TurnContext(
         last_turn_at=prior.last_turn_at,
         platform=request.platform,
@@ -511,6 +514,9 @@ def build_turn_context(
         surface_rules=request.surface_rules,
         disk_free_mb=disk_free_mb,
         disk_known=disk_known,
+        timezone=zone,
+        tool_timezone=zone
+        or get_locale_config(request.locale or "en-US", "en").get("timezone", "UTC"),
     )
 
 

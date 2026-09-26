@@ -10,6 +10,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
+import { deviceTimezone } from '@/lib/deviceTimezone';
 import { useUser } from '@/hooks/useUser';
 import { sendChatMessageStream, sendRetryStream, getWorkflowStatus, sendHitlResponse, fetchThreadTurns, cancelWorkflow } from '../utils/api';
 import { useLocalRunPublisher } from '@/lib/threadLifecycle/useLocalRunPublisher';
@@ -94,7 +95,7 @@ export function useChatMessages(
   // User locale/timezone — prefer saved preference, fall back to browser detection
   const { user } = useUser();
   const userLocale = user?.locale || navigator.language || 'en-US';
-  const userTimezone = user?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+  const userTimezone = user?.timezone || deviceTimezone();
 
   // State
   const [messages, setMessages] = useState<MessageRecord[]>([]);
@@ -2708,6 +2709,9 @@ export function useChatMessages(
     fallbackSuggestion,
     clearFallbackSuggestion,
     reconnectIfStaleRun: reportBackWatch.reconnectIfStaleRun,
+    // The run this view is streaming or last streamed, so the host can tell
+    // its own run apart from one the user feed reports starting elsewhere.
+    currentRunIdRef,
     messageError,
     returnedSteering,
     clearReturnedSteering: () => setReturnedSteering(null),
